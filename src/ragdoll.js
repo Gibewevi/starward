@@ -11,6 +11,10 @@ import * as THREE from 'three';
  * A body drives its mesh from the frame of its three particles.
  */
 const STEP = 1 / 120;
+// Contact pushes up to this size (m) become velocity as usual, which keeps
+// resting contacts calm; the excess of a deep overlap is removed without
+// adding speed, so freshly cut, overlapping parts are not launched.
+const SLIP = 0.002;
 
 export class Ragdoll {
   constructor({ gravity = -11, damping = 0.996, friction = 0.18, bounce = 0.15 } = {}) {
@@ -20,6 +24,8 @@ export class Ragdoll {
     this.constraints = [];
     this.adjacent = new Set();
     this.frameMatrix = new THREE.Matrix4();
+    // Muscles: callbacks run every step after integration (an active ragdoll).
+    this.drivers = [];
   }
   addParticle({ position, radius = 0.05, mass = 1, name = '' }) {
     const particle = { name, position: position.clone(), previous: position.clone(), radius, inverseMass: 1 / mass, kinematic: true, bodies: [] };
@@ -135,6 +141,7 @@ export class Ragdoll {
       previous.copy(position);
       position.x += vx; position.y += vy + this.gravity * h * h; position.z += vz;
     }
+    for (const driver of this.drivers) driver(h);
     for (let iteration = 0; iteration < 10; iteration++) {
       for (const constraint of this.constraints) this.solve(constraint);
       this.collideFloor();
@@ -162,7 +169,8 @@ export class Ragdoll {
       // Contact friction and a little bounce.
       previous.x = position.x - (position.x - previous.x) * (1 - this.friction);
       previous.z = position.z - (position.z - previous.z) * (1 - this.friction);
-      if (previous.y < position.y) previous.y = position.y + (position.y - previous.y) * this.bounce;
+      // Only a particle moving into the floor bounces; one already rising keeps its speed.
+      if (previous.y > position.y) previous.y = position.y + (position.y - previous.y) * this.bounce;
     }
   }
   collideBodies() {
@@ -180,10 +188,10 @@ export class Ragdoll {
         const distance = Math.sqrt(squared);
         const wa = a.kinematic ? 0 : a.inverseMass, wb = b.kinematic ? 0 : b.inverseMass;
         const k = (distance - reach) / distance / (wa + wb) * 0.5;
-        // Separate without adding speed: contacts between limbs are inelastic.
         for (const [particle, scale] of [[a, k * wa], [b, -k * wb]]) {
+          const push = Math.abs(scale) * distance, still = push > SLIP ? 1 - SLIP / push : 0;
           particle.position.x += dx * scale; particle.position.y += dy * scale; particle.position.z += dz * scale;
-          particle.previous.x += dx * scale; particle.previous.y += dy * scale; particle.previous.z += dz * scale;
+          particle.previous.x += dx * scale * still; particle.previous.y += dy * scale * still; particle.previous.z += dz * scale * still;
         }
       }
     }

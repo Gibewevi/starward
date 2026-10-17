@@ -270,8 +270,9 @@ function init() {
         if (event.type === 'graze' && event.speed < 1) continue;
         const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
         // The blade meets no resistance: only a felling blow holds the frame.
-        if (event.lethal) hitStop = Math.max(hitStop, 0.045);
-        impactShake = Math.max(impactShake, event.lethal ? 0.5 : heavy ? 0.25 : 0.1);
+        const felling = event.lethal || event.felled;
+        if (felling) hitStop = Math.max(hitStop, 0.045);
+        impactShake = Math.max(impactShake, felling ? 0.5 : heavy ? 0.25 : 0.1);
         audio.impact(heavy ? 1 : 0.35);
       }
       bladeReady = saber.extension > 0.6;
@@ -311,7 +312,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, troopersDown: troopers.filter(trooper => trooper.dead).length, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
