@@ -19,6 +19,11 @@ import * as THREE from 'three';
  */
 const key = (t, hand, blade, options = {}) => ({ t, hand, blade, left: [0.28, 0.93, 0.02], grip: 0, yaw: 0, pitch: 0, crouch: 0.5, ...options });
 const X = [1, 0, 0], Y = [0, 1, 0], Z = [0, 0, 1];
+// Film-style moulinet: the wrist rolls the blade in a near-vertical circle
+// beside the body, the hand held up in front of the right shoulder, so the
+// blade sweeps past the shoulder on every turn. The circle leans slightly
+// forward and opens a little towards the viewer.
+const MOULINET = [1, 0.15, 0.25], SHOULDER = [-0.24, 1.12, 0.14];
 
 // Recurring silhouettes the strikes pass through.
 const COCKED = (t, extra = {}) => key(t, [-0.24, 1.2, 0.05], [-0.15, 0.85, -0.5], { left: [0.24, 1.0, 0.24], yaw: -0.45, pitch: -0.05, crouch: 0.42, ...extra });
@@ -65,7 +70,7 @@ export const MOVES = {
   // Two moulinets at the right side, a pull back, then a straight thrust.
   twirlThrust: {
     role: ['opener', 'link'], from: ['R'], to: 'F', duration: 0.72, buffer: 0.3, chain: 0.78, active: [0.62, 0.82], trail: [0.02, 0.9],
-    drive: [[0.6, 0.85, 3.2]], twirls: [[0.04, 0.5, 2, X]],
+    drive: [[0.6, 0.85, 3.2]], twirls: [[0.04, 0.5, 2, MOULINET, SHOULDER]],
     keys: [
       key(0, [-0.3, 0.98, 0.12], [-0.5, 0.4, 0.75], { left: [0.26, 0.98, 0.2], yaw: -0.25, crouch: 0.5 }),
       key(0.45, [-0.32, 1.0, 0.1], [-0.5, 0.4, 0.75], { left: [0.27, 0.98, 0.2], yaw: -0.35, crouch: 0.6 }),
@@ -191,7 +196,7 @@ export const MOVES = {
   // Finisher: three fast moulinets, then a long lunging thrust.
   lunge: {
     role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.8, buffer: 1, chain: 2, active: [0.52, 0.8], trail: [0.0, 0.85],
-    drive: [[0.5, 0.78, 6]], impact: [0.62, 0.5], twirls: [[0.02, 0.4, 3, X]],
+    drive: [[0.5, 0.78, 6]], impact: [0.62, 0.5], twirls: [[0.02, 0.4, 3, MOULINET, SHOULDER]],
     keys: [
       key(0, [-0.28, 1.0, 0.1], [-0.6, 0.5, 0.6], { yaw: -0.3, crouch: 0.5 }),
       key(0.35, [-0.3, 1.02, 0.06], [-0.6, 0.5, 0.6], { yaw: -0.4, crouch: 0.7 }),
@@ -227,7 +232,7 @@ export const MOVES = {
   // Not a strike: the twirl that accompanies igniting the blade.
   draw: {
     role: ['flourish'], from: ['R', 'L', 'F'], to: 'F', duration: 0.62, buffer: 0, chain: 0, active: [2, 2], trail: [0.02, 0.78], free: true,
-    twirls: [[0.02, 0.74, 2, X]],
+    twirls: [[0.02, 0.74, 2, MOULINET, SHOULDER]],
     keys: [
       key(0, [-0.3, 0.92, 0.18], [-0.45, -0.55, 0.65], { crouch: 0 }),
       key(0.74, [-0.3, 0.92, 0.18], [-0.45, -0.55, 0.65], { crouch: 0 }),
@@ -264,7 +269,8 @@ function poseOf(keyframe) {
   return pose;
 }
 const catmull = (p0, p1, p2, p3, u) => 0.5 * (2 * p1 + (p2 - p0) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u + (3 * p1 - p0 - 3 * p2 + p3) * u * u * u);
-const axisVector = new THREE.Vector3(), sideA = new THREE.Vector3(), sideB = new THREE.Vector3();
+const axisVector = new THREE.Vector3(), sideA = new THREE.Vector3(), sideB = new THREE.Vector3(), flat = new THREE.Vector3(), twirlHand = new THREE.Vector3();
+const smoothRange = (a, b, value) => ease(clamp01((value - a) / (b - a)));
 
 /** Samples a move at normalised time t; twirls spin the blade around an axis. */
 export function sampleMove(move, t, out, variation = 1) {
@@ -277,11 +283,17 @@ export function sampleMove(move, t, out, variation = 1) {
   for (const name of SCALARS) out[name] = catmull(k0[name], k1[name], k2[name], k3[name], u);
   out.yaw *= variation;
   out.blade.normalize();
-  for (const [from, to, turns, axis] of move.twirls ?? []) {
+  for (const [from, to, turns, axis, hand] of move.twirls ?? []) {
     const progress = clamp01((t - from) / (to - from));
     if (progress <= 0) continue;
     const angle = ease(progress) * turns * Math.PI * 2;
-    axisVector.fromArray(axis);
+    axisVector.fromArray(axis).normalize();
+    // While it turns, the blade lies in the circle's plane and the hand may
+    // move to where the twirl is performed; both return for the next key.
+    const hold = smoothRange(0, 0.15, progress) * (1 - smoothRange(0.85, 1, progress));
+    if (hand) out.hand.lerp(twirlHand.fromArray(hand), hold);
+    flat.copy(out.blade).addScaledVector(axisVector, -out.blade.dot(axisVector));
+    if (flat.lengthSq() > 1e-6) out.blade.lerp(flat.normalize(), hold).normalize();
     out.blade.applyAxisAngle(axisVector, angle);
     // The wrist drives the twirl: the hand circles slightly with the blade.
     sideA.set(axisVector.y, axisVector.z, axisVector.x).cross(axisVector).normalize();

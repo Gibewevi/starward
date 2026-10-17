@@ -86,14 +86,18 @@ test('moulinets spin the blade full circles and the wrist circles with it', () =
   for (const name of ['twirlThrust', 'helicopter', 'lunge', 'draw']) {
     const move = MOVES[name];
     const [from, to] = move.twirls[0];
-    let turned = 0, previous = null, wrist = 0;
+    let turned = 0, previous = null;
+    const hands = [];
     for (let i = 0; i <= 200; i++) {
       const t = from + (to - from) * i / 200;
       sampleMove(move, t, pose);
       if (previous) turned += previous.angleTo(pose.blade);
       previous = pose.blade.clone();
-      wrist = Math.max(wrist, pose.hand.distanceTo(sampleMove({ ...move, twirls: [] }, t, { ...pose, hand: new THREE.Vector3(), blade: new THREE.Vector3(), left: new THREE.Vector3() }).hand));
+      if (i > 60 && i < 140) hands.push(pose.hand.clone());
     }
+    // In the middle of the twirl the hand only circles with the wrist.
+    const centre = hands.reduce((sum, hand) => sum.add(hand), new THREE.Vector3()).divideScalar(hands.length);
+    const wrist = Math.max(...hands.map(hand => hand.distanceTo(centre)));
     assert.ok(turned > Math.PI * 2 * 0.8 * Math.abs(move.twirls[0][2]) * 0.5, `${name} turns the blade (${turned.toFixed(1)} rad)`);
     assert.ok(wrist > 0.01 && wrist < 0.06, `${name} wrist circle ${wrist}`);
   }
@@ -205,4 +209,19 @@ test('the blade trail sweeps an arc and fades away', () => {
   for (let frame = 0; frame < 20; frame++) trail.update(1 / 60, base, tip, 0);
   assert.equal(trail.samples, 0);
   assert.equal(trail.mesh.visible, false);
+});
+
+test('moulinets are rolled at shoulder height in a near-vertical circle', () => {
+  const pose = { hand: new THREE.Vector3(), blade: new THREE.Vector3(), left: new THREE.Vector3(), grip: 0, yaw: 0, pitch: 0, crouch: 0 };
+  for (const name of ['draw', 'twirlThrust', 'lunge']) {
+    const [from, to, , axis] = MOVES[name].twirls[0];
+    const normal = new THREE.Vector3(...axis).normalize();
+    assert.ok(Math.abs(normal.y) < 0.2, `${name}: the circle's plane is within about 10° of vertical`);
+    for (let i = 0; i <= 50; i++) {
+      sampleMove(MOVES[name], from + (to - from) * (0.2 + 0.6 * i / 50), pose);
+      assert.ok(pose.hand.y > 1.05 && pose.hand.y < 1.2, `${name}: hand at shoulder height (${pose.hand.y.toFixed(2)})`);
+      assert.ok(pose.hand.x < -0.15, `${name}: on the sword side`);
+      assert.ok(Math.abs(pose.blade.dot(normal)) < 0.02, `${name}: the blade stays in the circle`);
+    }
+  }
 });
