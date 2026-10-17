@@ -15,6 +15,7 @@ import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
 import { createStormtrooper } from './stormtrooper.js';
 import { ease, hitStopScale, kick } from './tween.js';
+import { SaberControl } from './saber-control.js';
 import { createImpactEffects } from './impact-effects.js';
 
 const $ = selector => document.querySelector(selector);
@@ -154,8 +155,14 @@ function init() {
   const inputRight = new THREE.Vector2(10, -8).normalize();
   const inputForward = new THREE.Vector2(-8, -10).normalize();
   const joystick = { x: 0, y: 0, running: false, pointer: null };
-  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT'];
+  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyE'];
   let attackPressed = false, padAttack = false;
+  // Free saber: LT held + right stick, or the right mouse button held + the
+  // pointer around the hero; R3, E or a middle click rolls the blade.
+  const control = new SaberControl();
+  const pointer = { x: 0, y: 0, seen: false, fight: false, twirl: false };
+  let fighting = false, padTwirl = false;
+  const heroScreen = new THREE.Vector3(), socketQuaternion = new THREE.Quaternion(), bladeNow = new THREE.Vector3();
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
@@ -166,11 +173,31 @@ function init() {
       if (event.code === 'KeyF') fullscreen();
       if (event.code === 'KeyT') resetTrooper();
       if (event.code === 'KeyJ') attackPressed = true;
+      if (event.code === 'KeyE') pointer.twirl = true;
     }
     keys.add(event.code);
   });
   window.addEventListener('keyup', event => keys.delete(event.code));
-  function clearInput() { keys.clear(); attackPressed = false; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
+  function clearInput() { keys.clear(); attackPressed = false; pointer.fight = false; pointer.twirl = false; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
+  renderer.domElement.addEventListener('pointermove', event => { pointer.x = event.clientX; pointer.y = event.clientY; pointer.seen = true; });
+  renderer.domElement.addEventListener('pointerdown', event => {
+    pointer.x = event.clientX; pointer.y = event.clientY; pointer.seen = true;
+    if (event.button === 2) pointer.fight = true;
+    if (event.button === 1) { pointer.twirl = true; event.preventDefault(); }
+  });
+  window.addEventListener('pointerup', event => { if (event.button === 2) pointer.fight = false; });
+  renderer.domElement.addEventListener('contextmenu', event => event.preventDefault());
+  /** The pointer as a stick: its offset from the hero on screen, full tilt at ~16 % of the view. */
+  function pointerStick() {
+    heroScreen.set(motion.x, 1, motion.z).project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    const radius = Math.min(rect.width, rect.height) * 0.16;
+    let x = (pointer.x - (rect.left + (heroScreen.x + 1) / 2 * rect.width)) / radius;
+    let y = -(pointer.y - (rect.top + (1 - heroScreen.y) / 2 * rect.height)) / radius;
+    const length = Math.hypot(x, y);
+    if (length > 1) { x /= length; y /= length; }
+    return { x, y };
+  }
   window.addEventListener('blur', clearInput);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); setPause(true); } });
   $('#game').addEventListener('pointerdown', () => { renderer.domElement.focus(); if (audio.enabled) audio.start(); });
@@ -256,11 +283,35 @@ function init() {
         if (resetButton && !padReset) resetTrooper();
         padReset = resetButton;
       }
+      // Free saber input: LT (button 6) and the right stick, R3 (button 11).
+      let trigger = pointer.fight ? 1 : 0, aimX = 0, aimY = 0, twirl = pointer.twirl;
+      pointer.twirl = false;
+      if (pointer.fight && pointer.seen) ({ x: aimX, y: aimY } = pointerStick());
+      if (gamepad) {
+        trigger = Math.max(trigger, gamepad.buttons[6]?.value ?? 0);
+        const rx = gamepad.axes[2] || 0, ry = -(gamepad.axes[3] || 0);
+        if (Math.hypot(rx, ry) > Math.hypot(aimX, aimY)) { const length = Math.max(1, Math.hypot(rx, ry)); aimX = rx / length; aimY = ry / length; }
+        const r3 = !!gamepad.buttons[11]?.pressed;
+        if (r3 && !padTwirl) twirl = true;
+        padTwirl = r3;
+      }
+      fighting = fighting ? trigger > 0.2 : trigger > 0.35;
+      if (fighting && !control.active) combat.cancel();
+      character.saberSocket.getWorldQuaternion(socketQuaternion);
+      bladeNow.set(0, 1, 0).applyQuaternion(socketQuaternion);
+      const free = control.update(sim, {
+        active: fighting, heading: motion.heading, twirl, blade: bladeNow,
+        aimX: inputRight.x * aimX + inputForward.x * aimY, aimZ: inputRight.y * aimX + inputForward.y * aimY,
+      });
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
-      if (attackPressed) combat.attack({ speed: motion.speed });
+      // B strikes and A guards while the blade is not held freely.
+      if (attackPressed && !control.active) combat.attack({ speed: motion.speed });
       attackPressed = false;
-      const action = combat.update(sim, { guard, speed: motion.speed });
+      const choreography = combat.update(sim, { guard: guard && !free.engaged, speed: motion.speed });
+      if (free.engaged) combat.adopt(free, free.weight);
+      const action = free.engaged && !combat.busy ? free : choreography;
+      if (action === free) motion.face(free.heading);
       // Each strike re-aims towards the stick before it lands.
       if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
@@ -277,7 +328,7 @@ function init() {
       character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
-      if (saber.update(motion.saber, time, action.flare) === 'ignite') combat.flourish();
+      if (saber.update(motion.saber, time, action.flare) === 'ignite' && !free.engaged) combat.flourish();
       saber.segment(bladeBase, bladeTip);
       trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
@@ -342,7 +393,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: control.engaged ? control.output.name : combat.output.name, guard: combat.guard, free: control.engaged ? { weight: control.weight, power: control.power, twirl: control.twirling, azimuth: control.azimuth, radius: control.radius } : null, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }

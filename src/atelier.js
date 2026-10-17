@@ -14,6 +14,7 @@ import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
 import { createStormtrooper } from './stormtrooper.js';
 import { createImpactEffects } from './impact-effects.js';
+import { SaberControl } from './saber-control.js';
 
 const SHEET = encodeURI('/Jedi pixel art et planche d’animations.png');
 const FRAMES = { idle: [68, 175, 268, 363, 445], walk: [565, 662, 770, 878, 985], run: [1145, 1250, 1360, 1465] };
@@ -56,6 +57,9 @@ const lighting = createLighting(scene, views[0].renderer);
 createStage(scene);
 const saber = createSaber({ socket: character.saberSocket, scene });
 const combat = new CombatController();
+// Free saber control, driven by state.free = { active, x, z, twirl } (the stick on the floor).
+const control = new SaberControl();
+const socketQuaternion = new THREE.Quaternion(), bladeNow = new THREE.Vector3();
 const trail = createBladeTrail(scene);
 const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastBase = new THREE.Vector3(), lastTip = new THREE.Vector3();
 // Training dummy, placed in front of the hero on demand.
@@ -98,7 +102,14 @@ function step(dt) {
   speed += (target - speed) * (1 - Math.exp(-10 * dt));
   runBlend += ((state.gait === 'run' ? 1 : 0) - runBlend) * (1 - Math.exp(-12 * dt));
   // The hero really travels, so the cloth meets real airflow; cameras follow.
-  const action = combat.update(dt, { guard: Boolean(state.guard) });
+  let action = combat.update(dt, { guard: Boolean(state.guard) });
+  if (state.free || control.engaged) {
+    character.saberSocket.getWorldQuaternion(socketQuaternion);
+    bladeNow.set(0, 1, 0).applyQuaternion(socketQuaternion);
+    const free = control.update(dt, { active: Boolean(state.free?.active), aimX: state.free?.x ?? 0, aimZ: state.free?.z ?? 0, twirl: Boolean(state.free?.twirl), heading: state.turn, blade: bladeNow });
+    if (state.free) state.free.twirl = false;
+    if (free.engaged) { action = free; state.turn = free.heading; }
+  }
   character.root.rotation.y = state.turn + action.spin;
   velocity.set(Math.sin(state.turn), 0, Math.cos(state.turn)).multiplyScalar(Math.min(speed, action.maxSpeed) * action.inputScale + action.drive);
   character.root.position.addScaledVector(velocity, dt);
@@ -134,7 +145,7 @@ window.__ATELIER__ = {
   set(options) { Object.assign(state, options); showReference(); },
   advance(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) step(dt); for (const view of views) view.composer.render(dt); },
   capture() { return views.map(view => { view.composer.render(0); return view.canvas.toDataURL('image/png'); }); },
-  character, coat, scene, saber, views, combat, trooper, effects,
+  character, coat, scene, saber, views, combat, control, trooper, effects,
   /** Stands the stormtrooper at (x, z), facing the given heading, intact. */
   placeTrooper(x, z, heading = Math.PI) { trooperSpot.set(x, 0, z); trooper.reset(); trooper.root.rotation.y = heading; effects.clear(); },
 };

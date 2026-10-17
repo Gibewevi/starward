@@ -364,6 +364,17 @@ export class CombatController {
     this.start(this.choose({ speed }));
     return true;
   }
+  /** Drops the current move where it is (the free blade takes over). */
+  cancel() {
+    this.action = null;
+    this.queued = false;
+  }
+  /** Follows another pose (the free blade), so a strike launched next starts from it. */
+  adopt(pose, weight) {
+    copyPose(this.lastPose, pose);
+    copyPose(this.actionPose, pose);
+    this.output.weight = Math.max(this.output.weight, weight);
+  }
   /** The ignition twirl; it never interrupts a strike or the guard. */
   flourish() {
     if (this.action || this.guard > 0.3) return false;
