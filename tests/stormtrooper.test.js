@@ -193,7 +193,7 @@ test('ragdoll joints stay attached and limbs keep their length', () => {
   assert.ok(p(free).distanceTo(p(b)) > 0.05, 'a severed joint lets go');
 });
 
-test('the saber cuts like butter: the arm drops at his feet and he stays where he stands', () => {
+test('the saber cuts like butter: the arm comes away and lands near him while he stays where he stands', () => {
   const state = fixture(21);
   state.run(0.5);
   const { trooper } = state;
@@ -212,7 +212,7 @@ test('the saber cuts like butter: the arm drops at his feet and he stays where h
   for (const name of ['upperArmL', 'forearmL', 'handL']) {
     for (const index of trooper.bodies[name].indices) {
       const p = trooper.ragdoll.particles[index].position;
-      assert.ok(Math.hypot(p.x - after.x, p.z - after.z) < 0.9, `${name} lies at his feet`);
+      assert.ok(Math.hypot(p.x - after.x, p.z - after.z) < 1.5, `${name} lands near him`);
     }
   }
   assert.ok(trooper.reaction.hurt > 0.9, 'he hunches over the wound');
@@ -359,4 +359,89 @@ test('standing, he answers each hit where it lands', () => {
   leg.run(0.4);
   const ankle = leg.trooper.joints.ankleR.getWorldPosition(new THREE.Vector3());
   assert.ok(ankle.y < 0.12, 'his feet stay planted');
+});
+
+// Cuts a joint with a blade moving at `velocity`, lying along `direction`, and
+// follows the severed body through its flight.
+function throwPiece({ joint, particle, body, velocity, direction = new THREE.Vector3(0, 1, 0), seed = 41 }) {
+  const state = fixture(seed);
+  state.run(0.4);
+  const { trooper } = state;
+  const piece = () => trooper.bodies[body].indices.map(index => trooper.ragdoll.particles[index].position);
+  const centre = () => piece().reduce((sum, p) => sum.add(p), new THREE.Vector3()).divideScalar(piece().length);
+  const frame = () => new THREE.Quaternion().setFromRotationMatrix(trooper.ragdoll.frame(trooper.bodies[body], new THREE.Matrix4()));
+  const pelvis = trooper.joints.pelvis.getWorldPosition(new THREE.Vector3());
+  trooper.cut(joint, { velocity, point: state.particle(particle), direction: direction.clone().normalize() });
+  const start = centre();
+  let peak = start.y, turned = 0, previous = frame(), airborne = 0;
+  for (let i = 0; i < 180; i++) {
+    state.run(1 / 60);
+    const c = centre();
+    peak = Math.max(peak, c.y);
+    const now = frame();
+    turned += previous.angleTo(now);
+    previous = now;
+    if (Math.min(...piece().map(p => p.y)) > 0.08) airborne++;
+  }
+  const end = centre();
+  return { state, trooper, start, end, peak, turned, airborne, pelvis, travel: end.clone().setY(0).sub(start.clone().setY(0)) };
+}
+
+test('a severed hand is thrown up in an arc, tumbling, and lands near him', () => {
+  const sweep = new THREE.Vector3(6, 0, 0);
+  const result = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: sweep });
+  assert.ok(result.peak > result.start.y + 0.2, `it rises (${(result.peak - result.start.y).toFixed(2)} m)`);
+  assert.ok(result.airborne > 15, `and stays in the air a while (${result.airborne} frames)`);
+  assert.ok(result.turned > Math.PI, `spinning (${(result.turned * 180 / Math.PI).toFixed(0)}°)`);
+  const distance = result.travel.length();
+  assert.ok(distance > 0.5 && distance < 2.5, `lands near him, not at his feet nor across the room (${distance.toFixed(2)} m)`);
+  assert.ok(result.travel.dot(sweep) > 0, 'carried along the blade\'s swing');
+  assert.ok(result.end.y < 0.15, 'on the floor');
+  const still = Math.max(...result.trooper.bodies.handL.indices.map(index => result.trooper.ragdoll.velocity(index).length()));
+  assert.ok(still < 0.1, `then at rest (${still.toFixed(2)} m/s)`);
+  assert.ok(result.state.finite());
+  assert.ok(result.trooper.joints.pelvis.getWorldPosition(new THREE.Vector3()).distanceTo(result.pelvis) < 0.1, 'he is not thrown with it');
+});
+
+test('the throw follows the blade: its direction, its speed and its angle', () => {
+  const right = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(6, 0, -1) });
+  const left = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(-6, 0, -1) });
+  assert.ok(right.travel.x > 0.3 && left.travel.x < right.travel.x - 0.6, `swung right, it flies right; swung left, left (${right.travel.x.toFixed(2)} / ${left.travel.x.toFixed(2)})`);
+  const slow = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(2.4, 0, 0) });
+  assert.ok(slow.travel.length() < right.travel.length() - 0.3, 'a slow cut throws it less far');
+  const upswing = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(3, 6, 0), direction: new THREE.Vector3(0, 0, 1) });
+  const chop = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(1, -7, 0.5), direction: new THREE.Vector3(0, 0, 1) });
+  assert.ok(upswing.peak - upswing.start.y > 0.5, `an upswing sends it high (${(upswing.peak - upswing.start.y).toFixed(2)} m)`);
+  assert.ok(chop.peak - chop.start.y < 0.2 && chop.travel.length() > 0.3, 'a downward chop makes it skip low, never just drop');
+  const again = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: new THREE.Vector3(6, 0, -1), seed: 77 });
+  assert.ok(again.end.distanceTo(right.end) > 0.05 && again.end.distanceTo(right.end) < 0.8, 'the same blow lands a little differently each time');
+});
+
+test('light pieces fly further than heavy ones', () => {
+  const sweep = new THREE.Vector3(6, 0, 0);
+  const hand = throwPiece({ joint: 'wristL', particle: 'WL', body: 'handL', velocity: sweep });
+  const arm = throwPiece({ joint: 'shoulderL', particle: 'SL', body: 'upperArmL', velocity: sweep });
+  const leg = throwPiece({ joint: 'hipL', particle: 'HL', body: 'thighL', velocity: sweep });
+  assert.ok(hand.travel.length() > arm.travel.length() + 0.3, `a hand flies, a whole arm less (${hand.travel.length().toFixed(2)} / ${arm.travel.length().toFixed(2)})`);
+  assert.ok(leg.peak - leg.start.y < hand.peak - hand.start.y, 'a leg barely leaves the ground');
+});
+
+test('every hit flashes the struck armour, and a clean cut flares', () => {
+  const state = fixture(43);
+  state.run(0.4);
+  const { trooper, effects } = state;
+  const torso = state.particle('W').lerp(state.particle('N'), 0.5);
+  state.sweep(torso, new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion), new THREE.Vector3(1, 0, 0), 1.6, 3);
+  const glowing = () => { let most = 0; trooper.parts.torso.traverse(child => { if (child.isMesh && child.material.emissive) most = Math.max(most, child.material.emissive.r); }); return most; };
+  assert.ok(glowing() > 0.05, 'the armour flashes');
+  state.run(0.4);
+  assert.equal(glowing(), 0, 'and fades back');
+  let cloned = 0;
+  trooper.parts.head.traverse(child => { if (child.userData.ownMaterial) cloned++; });
+  assert.equal(cloned, 0, 'untouched parts keep their shared materials');
+  horizontal(state, 1.38);
+  state.effects.update(1 / 60);
+  assert.ok(effects.bursts > 0, 'a flare and a ring of light');
+  state.run(0.6);
+  assert.equal(effects.bursts, 0, 'gone in a blink');
 });

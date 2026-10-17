@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createTweens, ease } from './tween.js';
 
 /**
  * Lightsaber impact effects, stylised and without gore. A physical particle
@@ -7,7 +8,9 @@ import * as THREE from 'three';
  * the floor, slide to a stop and lie there as round glowing beads that cool
  * from white-hot to orange, red, then black over a few seconds. Embers drift
  * up from cauterised cuts, an orange flash lights the impact, and glowing
- * materials cool down. sparks()/flash()/smoulder()/glow(), then update(dt).
+ * materials cool down. A burst marks a clean cut: a flare that blooms and
+ * fades, and a ring of light racing out along the cut plane — both tweened.
+ * sparks()/flash()/burst()/smoulder()/glow(), then update(dt).
  */
 const SPARK = 0, DROP = 1, EMBER = 2;
 
@@ -56,9 +59,42 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const lights = [0, 1].map(() => {
     const light = new THREE.PointLight(0xff8a3a, 0, 3.2, 1.8);
     scene.add(light);
-    return { light, age: Infinity, power: 0 };
+    return { light, tween: null };
   });
   let nextLight = 0, cursor = 0;
+  const tweens = createTweens();
+
+  // Flares: a soft radial glow, additive, bright enough to bloom.
+  const glowTexture = (() => {
+    const n = 32, data = new Uint8Array(n * n * 4);
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const d = Math.min(1, Math.hypot((x + 0.5) / n * 2 - 1, (y + 0.5) / n * 2 - 1));
+        data.set([255, 255, 255, Math.round((1 - d) ** 2.2 * 255)], (y * n + x) * 4);
+      }
+    }
+    const texture = new THREE.DataTexture(data, n, n);
+    texture.needsUpdate = true;
+    return texture;
+  })();
+  const flareSlots = Array.from({ length: 6 }, () => {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    sprite.name = 'Impact flare';
+    sprite.visible = false;
+    scene.add(sprite);
+    return { sprite, tween: null };
+  });
+  const ringSlots = Array.from({ length: 6 }, () => {
+    const mesh = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 40), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide }));
+    mesh.name = 'Cut ring';
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh, tween: null };
+  });
+  let nextFlare = 0, nextRing = 0;
+  const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25);
+  const lightWhite = new THREE.Color(1, 0.93, 0.85), lightOrange = new THREE.Color(1, 0.54, 0.23);
+  const facing = new THREE.Vector3(0, 0, 1);
   const smoulders = [], glows = [];
   const hot = new THREE.Color(3.2, 1.35, 0.4), cold = new THREE.Color(0.055, 0.05, 0.05);
   const point = new THREE.Vector3(), start = new THREE.Vector3(), color = new THREE.Color();
@@ -96,12 +132,60 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6);
     }
   }
+  /** The impact lights its surroundings: white at once, cooling to orange as it fades. */
   function flash(at, power = 1) {
     const slot = lights[nextLight];
     nextLight = (nextLight + 1) % lights.length;
+    tweens.cancel(slot.tween);
     slot.light.position.copy(at);
-    slot.age = 0;
-    slot.power = power;
+    slot.tween = tweens.add({
+      duration: 0.22, curve: ease.outQuad,
+      update: (eased, progress) => {
+        slot.light.intensity = power * 4 * (1 - eased);
+        slot.light.color.copy(lightWhite).lerp(lightOrange, ease.outCubic(progress));
+      },
+      complete: () => { slot.light.intensity = 0; },
+    });
+  }
+  /**
+   * A clean cut flares: a glow that blooms at the contact and fades, and a
+   * thin ring of light that races out along the cut plane (`normal` is the
+   * plane's normal), white-hot cooling to orange.
+   */
+  function burst(at, { normal = null, power = 1 } = {}) {
+    power = Math.min(1.5, Math.max(0.2, power));
+    const flare = flareSlots[nextFlare];
+    nextFlare = (nextFlare + 1) % flareSlots.length;
+    tweens.cancel(flare.tween);
+    flare.sprite.position.copy(at);
+    flare.sprite.visible = true;
+    const size = 0.18 + 0.2 * power;
+    flare.tween = tweens.add({
+      duration: 0.2, curve: ease.outExpo,
+      update: (eased, progress) => {
+        flare.sprite.scale.setScalar(0.06 + (size - 0.06) * eased);
+        flare.sprite.material.color.copy(whiteHot).lerp(orange, progress);
+        flare.sprite.material.opacity = 1 - ease.outQuad(progress);
+      },
+      complete: () => { flare.sprite.visible = false; },
+    });
+    if (!normal || normal.lengthSq() < 1e-6) return;
+    const ring = ringSlots[nextRing];
+    nextRing = (nextRing + 1) % ringSlots.length;
+    tweens.cancel(ring.tween);
+    ring.mesh.position.copy(at);
+    ring.mesh.quaternion.setFromUnitVectors(facing, normal.clone().normalize());
+    ring.mesh.visible = true;
+    const reach = 0.12 + 0.14 * power;
+    ring.tween = tweens.add({
+      duration: 0.18, curve: ease.outCubic,
+      update: (eased, progress) => {
+        ring.mesh.scale.setScalar(0.04 + (reach - 0.04) * eased);
+        ring.mesh.material.color.copy(whiteHot).lerp(orange, ease.outQuad(progress)).multiplyScalar(0.8);
+        ring.mesh.material.opacity = (1 - progress) ** 1.6;
+      },
+      complete: () => { ring.mesh.visible = false; },
+    });
   }
   /** Embers rising from an object (a cut) for a few seconds. */
   function smoulder(object, duration = 2.6) { smoulders.push({ object, age: 0, duration, debt: 0 }); }
@@ -112,10 +196,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   }
 
   function update(dt) {
-    for (const slot of lights) {
-      slot.age += dt;
-      slot.light.intensity = slot.age < 0.14 ? slot.power * 3 * (1 - slot.age / 0.14) ** 2 : 0;
-    }
+    tweens.update(dt);
     for (const entry of smoulders) {
       entry.age += dt;
       entry.debt += dt * 12 * (1 - entry.age / entry.duration);
@@ -189,10 +270,15 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     alive.fill(0);
     smoulders.length = 0;
     glows.length = 0;
-    for (const slot of lights) { slot.age = Infinity; slot.light.intensity = 0; }
+    tweens.clear();
     update(0);
   }
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
-  return { points: beads, beads, streaks, sparks, flash, smoulder, glow, update, clear, get live() { return live(); }, get resting() { return restingCount(); }, hot, cold };
+  return {
+    points: beads, beads, streaks, sparks, flash, burst, smoulder, glow, update, clear, hot, cold,
+    get live() { return live(); }, get resting() { return restingCount(); },
+    /** Flares and rings currently shown. */
+    get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },
+  };
 }

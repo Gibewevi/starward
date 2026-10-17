@@ -14,6 +14,7 @@ import { MotionController, damp } from './motion.js';
 import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
 import { createStormtrooper } from './stormtrooper.js';
+import { ease, hitStopScale, kick } from './tween.js';
 import { createImpactEffects } from './impact-effects.js';
 
 const $ = selector => document.querySelector(selector);
@@ -101,7 +102,23 @@ function init() {
     heading: Math.atan2(-screenUp.x, -screenUp.z) + slot * 0.06,
   }));
   const lastBase = new THREE.Vector3();
-  let bladeReady = false, hitStop = 0, impactShake = 0, padReset = false;
+  let bladeReady = false, hitStop = null, impactShake = 0, padReset = false;
+  // Game feel: hit stops ease back to speed, the view is kicked along the
+  // swing and rings out, and a felling blow punches the zoom in a touch.
+  const cameraKick = { direction: new THREE.Vector3(), amplitude: 0, age: Infinity }, kickOffset = new THREE.Vector3();
+  const zoomPunch = { amount: 0, age: Infinity };
+  function stopFor(hold, recover) {
+    if (!hitStop || hold + recover > hitStop.hold + hitStop.recover - hitStop.age) hitStop = { age: 0, hold, recover };
+  }
+  function shove(velocity, amplitude) {
+    if (!velocity || amplitude < cameraKick.amplitude * Math.max(0, 1 - cameraKick.age / 0.3)) return;
+    cameraKick.direction.set(velocity.x, 0, velocity.z);
+    if (cameraKick.direction.lengthSq() < 1e-6) cameraKick.direction.set(0, -1, 0);
+    cameraKick.direction.normalize();
+    cameraKick.direction.y -= 0.35;
+    Object.assign(cameraKick, { amplitude, age: 0 });
+  }
+  function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
   function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); }
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
@@ -121,10 +138,10 @@ function init() {
     reflection.getRenderTarget().setSize(renderWidth, renderHeight);
     updateProjection();
   }
-  function updateProjection() {
+  function updateProjection(height = viewHeight) {
     const aspect = window.innerWidth / window.innerHeight;
-    camera.top = viewHeight / 2; camera.bottom = -viewHeight / 2;
-    camera.left = -viewHeight * aspect / 2; camera.right = viewHeight * aspect / 2;
+    camera.top = height / 2; camera.bottom = -height / 2;
+    camera.left = -height * aspect / 2; camera.right = height * aspect / 2;
     camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
@@ -214,9 +231,9 @@ function init() {
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
     if (!paused) {
-      // A clean cut freezes the action for a few frames.
-      const sim = hitStop > 0 ? dt * 0.08 : dt;
-      hitStop = Math.max(0, hitStop - dt);
+      // A clean cut freezes the action for a beat, then eases back to speed.
+      const sim = dt * (hitStop ? hitStopScale(hitStop.age, hitStop) : 1);
+      if (hitStop && (hitStop.age += dt) > hitStop.hold + hitStop.recover) hitStop = null;
       time += sim;
       let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft')) + joystick.x;
       let y = Number(keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) + joystick.y;
@@ -267,12 +284,19 @@ function init() {
       for (const trooper of troopers) trooper.update(sim, time);
       const struck = saber.extension > 0.6 && bladeReady ? troopers.flatMap(trooper => trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time)) : [];
       for (const event of struck) {
-        if (event.type === 'graze' && event.speed < 1) continue;
+        // Falls are reported alongside the blow that caused them.
+        if (event.type === 'fall' || (event.type === 'graze' && event.speed < 1)) continue;
         const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
-        // The blade meets no resistance: only a felling blow holds the frame.
+        // A light beat of hit stop on a clean cut, a longer one on a felling
+        // blow; the view is kicked along the swing.
         const felling = event.lethal || event.felled;
-        if (felling) hitStop = Math.max(hitStop, 0.045);
-        impactShake = Math.max(impactShake, felling ? 0.5 : heavy ? 0.25 : 0.1);
+        if (felling) stopFor(0.06, 0.16);
+        else if (event.type === 'cut') stopFor(0.035, 0.1);
+        else if (heavy) stopFor(0.018, 0.06);
+        shove(event.velocity, felling ? 0.075 : heavy ? 0.045 : 0.015);
+        if (felling) punch(0.03);
+        else if (event.type === 'cut') punch(0.014);
+        impactShake = Math.max(impactShake, felling ? 0.35 : heavy ? 0.15 : 0.06);
         audio.impact(heavy ? 1 : 0.35);
       }
       bladeReady = saber.extension > 0.6;
@@ -287,10 +311,16 @@ function init() {
       // A heavy landing shakes the view for a moment.
       impactShake = Math.max(0, impactShake - dt * 3);
       shake.set(Math.sin(time * 91 + now * 0.05), Math.sin(time * 77 + 1 + now * 0.04), Math.sin(time * 83 + 2)).multiplyScalar(action.shake * action.shake * 0.09 + impactShake * impactShake * 0.07);
+      // The kick runs in real time, so it rings through a hit stop.
+      cameraKick.age += dt;
+      shake.add(kickOffset.copy(cameraKick.direction).multiplyScalar(cameraKick.amplitude * kick(cameraKick.age, { duration: 0.3, frequency: 11 })));
+      zoomPunch.age += dt;
       audio.swing = Math.min(1, swing / 12) * action.weight;
     }
     viewHeight = damp(viewHeight, desiredHeight + motion.runBlend * 0.24, 6, dt);
-    updateProjection();
+    // Zoom punch: in fast, out slowly.
+    const punched = zoomPunch.age < 0.05 ? ease.outQuad(zoomPunch.age / 0.05) : 1 - ease.inOutSine(Math.min(1, (zoomPunch.age - 0.05) / 0.3));
+    updateProjection(viewHeight * (1 - zoomPunch.amount * punched));
     camera.position.copy(cameraFocus).add(cameraOffset).add(shake);
     camera.lookAt(shakenFocus.copy(cameraFocus).add(shake));
     audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate);

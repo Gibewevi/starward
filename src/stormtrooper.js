@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Ragdoll } from './ragdoll.js';
 import { aimBone, solveTwoBone } from './ik.js';
+import { approach, createTweens, ease } from './tween.js';
 
 /**
  * Stormtrooper training dummy. A low-poly trooper in white armour over a black
@@ -12,7 +13,10 @@ import { aimBone, solveTwoBone } from './ik.js';
  * capsule per part; where it crosses decides which predefined joint is
  * severed (shoulder, elbow, wrist, hip, knee, ankle, neck, or the waist under
  * a horizontal cut), or an armour plate is knocked off. Cuts are cauterised
- * and glow, nothing gory.
+ * and glow, nothing gory. A severed piece is thrown with the blade's momentum
+ * — along its sweep, up into an arc, spinning about the cut — then simply
+ * simulated: it tumbles, bounces, skids and comes to rest near the body.
+ * Every hit flashes the struck armour white for an instant.
  *
  * He feels what happens to him, alive or dead:
  * - standing, each hit is answered where it lands (the head snaps, an arm is
@@ -33,6 +37,8 @@ export const CUT_SPEED = 2.2;
 const SLASH_LETHAL_SPEED = 3.5;
 const SIDES = [['L', 1], ['R', -1]];
 const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0);
+// Floor behaviour of loose pieces: hard and light, they clatter and skid.
+const LOOSE = { bounce: 0.38, friction: 0.05 };
 
 const materials = {
   armor: new THREE.MeshStandardMaterial({ color: 0xb9bdc4, roughness: 0.55, metalness: 0 }),
@@ -241,6 +247,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   // Crawl muscles: per particle, where it should be over the current frame.
   let muscles = [], muscleState = new Map(), driveClock = 0, driveSpan = 1 / 60;
   const reaction = {};
+  const tweens = createTweens(), flashes = new Map();
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3(), quaternion = new THREE.Quaternion();
   const goal = new THREE.Vector3(), stride = new THREE.Vector3(), motion = new THREE.Vector3(), kick = new THREE.Vector3();
   const forward = new THREE.Vector3(), leftward = new THREE.Vector3(), basis = new THREE.Matrix4(), roll = new THREE.Quaternion();
@@ -345,6 +352,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       offset: new THREE.Vector3(), push: new THREE.Vector3(), imbalance: 0,
       holdL: 1, holdR: 1, letGo: { L: 0, R: 0 }, hurt: 0, clutch: 0, wound: null, woundAge: 0,
       press: null, pressAt: null, pressHand: null, pressing: 0, limp: 0,
+      linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
     });
     base = joints.pelvis.position.clone();
     // Where his feet stand: leg IK keeps them planted while the body sways.
@@ -396,7 +404,6 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // Damped springs: hits kick them, they settle back.
     const spring = (key, k = 55, damping = 7) => { r[`v${key}`] += (-k * r[key] - damping * r[`v${key}`]) * dt; r[key] += r[`v${key}`] * dt; };
     for (const key of ['yaw', 'pitch', 'roll', 'head', 'headYaw', 'headRoll', 'buckle', 'armL', 'armR', 'flareL', 'flareR', 'dipL', 'dipR']) spring(key);
-    const ease = rate => 1 - Math.exp(-rate * dt);
     r.push.multiplyScalar(Math.exp(-5 * dt));
     r.offset.addScaledVector(r.push, dt);
     r.imbalance = Math.max(0, r.imbalance - dt * 0.4);
@@ -404,10 +411,14 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // shock draws it in and holds it with the other hand.
     if (r.wound) r.woundAge += dt;
     if (r.press && (r.press.age += dt) > r.press.duration) r.press = null;
-    r.hurt += ((r.wound ? 1 : 0) - r.hurt) * ease(4);
-    r.clutch += ((r.wound && r.woundAge > 0.35 ? 1 : 0) - r.clutch) * ease(5);
-    r.pressing += ((r.press ? 1 : 0) - r.pressing) * ease(9);
-    r.limp += ((collapse ? 1 : 0) - r.limp) * ease(8);
+    // Blends move at a steady pace and are read through easing curves: he
+    // doubles over fast and settles slowly, a hand eases off the rifle and
+    // onto a wound, the knees give way with gathering speed.
+    const glide = (key, target, seconds, curve) => { r.linear[key] = approach(r.linear[key], target, dt / seconds); r[key] = curve(r.linear[key]); };
+    glide('hurt', r.wound ? 1 : 0, 0.45, ease.outCubic);
+    glide('clutch', r.wound && r.woundAge > 0.35 ? 1 : 0, 0.5, ease.inOutCubic);
+    glide('pressing', r.press ? 1 : 0, r.press ? 0.22 : 0.45, ease.inOutSine);
+    glide('limp', collapse ? 1 : 0, 0.28, ease.inQuad);
     // Hands on the rifle, unless hurt, flung off it, or pressed on a burn.
     const grips = {};
     for (const side of ['L', 'R']) {
@@ -415,8 +426,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       grips[side] = !armCut(side) && !r.wound && r.letGo[side] <= 0 && !(r.press && r.pressHand === side);
     }
     if (trooper.holding && !grips.L && !grips.R) dropBlaster(new THREE.Vector3());
-    r.holdL += ((trooper.holding && grips.L ? 1 : 0) - r.holdL) * ease(10);
-    r.holdR += ((trooper.holding && grips.R ? 1 : 0) - r.holdR) * ease(10);
+    glide('holdL', trooper.holding && grips.L ? 1 : 0, 0.25, ease.inOutSine);
+    glide('holdR', trooper.holding && grips.R ? 1 : 0, 0.25, ease.inOutSine);
     const toward = r.wound ? (r.wound.side === 'L' ? 1 : -1) : 0;
     const gasp = Math.sin(time * 4.2) * 0.025 * r.hurt, rock = Math.sin(time * 1.3) * 0.035 * r.hurt;
     const pressSide = r.pressHand === 'L' ? 1 : -1;
@@ -536,10 +547,82 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     }
   }
 
+  function loosen(indices) { for (const index of indices) Object.assign(ragdoll.particles[index], LOOSE); }
+
+  /**
+   * Throws a severed piece with the blade's momentum: carried along the sweep
+   * and popped up into an arc, spinning about the cut like a struck stick.
+   * Light pieces fly further, a heavy one mostly drops, and a touch of
+   * controlled chance keeps two throws from matching. From there on it is
+   * simulated — gravity, drag, tumbling, bounces — never scripted.
+   */
+  function launch(names, hit, cutAt) {
+    const indices = [...new Set(indicesOf(names))];
+    let mass = 0;
+    const centre = new THREE.Vector3();
+    for (const index of indices) {
+      const particle = ragdoll.particles[index], weight = 1 / particle.inverseMass;
+      mass += weight;
+      centre.addScaledVector(particle.position, weight);
+    }
+    centre.divideScalar(mass);
+    // The sweep: how the blade moved across its own length at the contact.
+    const sweep = hit.velocity.clone();
+    if (hit.direction) sweep.addScaledVector(hit.direction, -sweep.dot(hit.direction));
+    const speed = sweep.length();
+    const along = speed > 1e-3 ? sweep.divideScalar(speed) : new THREE.Vector3(random() - 0.5, 0, random() - 0.5).normalize();
+    const vary = (amount = 0.15) => 1 + (random() - 0.5) * 2 * amount;
+    const lightness = THREE.MathUtils.clamp(2.2 / mass, 0.22, 1.3);
+    // Out along the sweep, a little away from his body, turned a touch at
+    // random; never straight down, and never far — it lands near him.
+    const throwSpeed = THREE.MathUtils.clamp(speed * 0.3, 0.5, 2.6) * lightness * vary();
+    const velocity = new THREE.Vector3(along.x, 0, along.z).multiplyScalar(throwSpeed);
+    const away = centre.clone().sub(trooper.particle('W').position).setY(0);
+    if (away.lengthSq() > 1e-6) velocity.addScaledVector(away.normalize(), 0.5 * lightness);
+    const least = 0.8 * lightness;
+    if (velocity.length() < least) velocity.setLength(least);
+    velocity.applyAxisAngle(UP, (random() - 0.5) * 0.4);
+    // Up into an arc: high off an upswing, a low skip off a downward chop.
+    const lift = THREE.MathUtils.clamp(2.6 + along.y * 1.6, 1.2, 4.2) * (0.55 + 0.45 * lightness) * THREE.MathUtils.clamp(0.6 + speed * 0.08, 0.7, 1.2) * vary();
+    velocity.y += lift;
+    // Spin: the blade drives the cut end, so the piece turns about its centre.
+    const lever = new THREE.Vector3().subVectors(cutAt, centre);
+    const spin = new THREE.Vector3();
+    if (lever.lengthSq() > 1e-4) {
+      spin.crossVectors(lever, along).multiplyScalar(THREE.MathUtils.clamp(speed * 0.45, 1.5, 6) * vary(0.25) / lever.lengthSq());
+      const rate = THREE.MathUtils.clamp(spin.length(), 3, 15) * (0.6 + 0.4 * lightness);
+      if (spin.lengthSq() > 1e-8) spin.setLength(rate);
+      spin.addScaledVector(lever.normalize(), (random() - 0.5) * 6);
+    }
+    for (const index of indices) ragdoll.push([index], temp.crossVectors(spin, temp2.subVectors(ragdoll.particles[index].position, centre)).add(velocity));
+    loosen(indices);
+    return { velocity, spin, mass };
+  }
+
+  /** The struck armour flashes white for an instant, then fades back. */
+  function flashPart(body, power = 1) {
+    const object = body?.object;
+    if (!object) return;
+    const meshes = [];
+    object.traverse(child => { if (child.isMesh && child.material?.emissive && !child.parent?.name.startsWith('Cut')) meshes.push(child); });
+    for (const mesh of meshes) {
+      if (mesh.userData.ownMaterial) continue;
+      mesh.material = mesh.material.clone();
+      mesh.userData.ownMaterial = true;
+    }
+    tweens.cancel(flashes.get(object));
+    flashes.set(object, tweens.add({
+      duration: 0.18, curve: ease.outQuad,
+      update: eased => { const v = (1 - eased) * power; for (const mesh of meshes) mesh.material.emissive.setRGB(v * 1.3, v * 1.22, v * 1.15); },
+      complete: () => { for (const mesh of meshes) mesh.material.emissive.setRGB(0, 0, 0); flashes.delete(object); },
+    }));
+  }
+
   function dropBlaster(velocity) {
     if (!trooper.holding) return;
     trooper.holding = false;
     release(['blaster']);
+    loosen(bodies.blaster.indices);
     ragdoll.push(bodies.blaster.indices, temp.copy(velocity).clampLength(0, 4).multiplyScalar(0.08).add(temp2.set(0, 0.25, 0)));
     spin(['blaster'], 2.5);
   }
@@ -557,6 +640,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     }));
     const body = ragdoll.addBody({ name: piece.name, indices, object: piece });
     body.debris = true;
+    loosen(indices);
     ragdoll.bind(body, piece.matrixWorld);
     piece.matrixAutoUpdate = false;
     for (const index of indices) ragdoll.particles[index].kinematic = false;
@@ -734,14 +818,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       effects?.smoulder(cap);
     }
     release(childBodies);
-    // The severed part is carried off by the blade. Through the waist it is
-    // the upper body that goes; the legs give way beneath it.
-    const flying = name === 'waist' ? subtree('torso').filter(part => !childBodies.includes(part)) : childBodies;
-    const fly = temp.copy(hit.velocity).clampLength(0, 4).multiplyScalar(name === 'waist' ? 0.1 : 0.06)
-      .add(temp2.set((random() - 0.5) * 0.2, 0.05 + random() * 0.12, (random() - 0.5) * 0.2));
-    if (name === 'waist') release(flying);
-    ragdoll.push(indicesOf(flying), fly);
-    spin([name === 'waist' ? 'torso' : definition.child], 0.6 + random() * 1.4);
+    // The severed part is thrown by the blade; the body it leaves stays put.
+    // Through the waist it is the upper body that slides off, and the legs
+    // give way beneath it.
+    if (name === 'waist') {
+      const upper = subtree('torso').filter(part => !childBodies.includes(part));
+      release(upper);
+      ragdoll.push(indicesOf(upper), temp.copy(hit.velocity).clampLength(0, 4).multiplyScalar(0.1).add(temp2.set((random() - 0.5) * 0.2, 0.05 + random() * 0.12, (random() - 0.5) * 0.2)));
+      spin(['torso'], 0.6 + random() * 1.4);
+    } else trooper.lastThrow = launch(childBodies, hit, ragdoll.particles[particleIndex[definition.particle]].position);
     if (felt) {
       const armLost = childBodies.some(child => /^(upperArm|forearm|hand)/.test(child));
       const legLost = childBodies.some(child => /^(thigh|shin|foot)/.test(child));
@@ -995,6 +1080,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   function update(dt, time) {
     dt = Math.min(dt, 0.05);
     clock += dt;
+    tweens.update(dt);
     if (!trooper.fallen) {
       pose(time, dt);
       placeParticles(dt);
@@ -1089,6 +1175,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const alive = !trooper.dead, standing = !trooper.fallen;
     if (speed < CUT_SPEED) {
       effects?.sparks(hit.point, sparkDirection, hit.normal, { count: speed < 0.6 ? 6 : 18, speed: 1.5 + speed });
+      if (speed > 0.6) flashPart(body, 0.35);
       if (speed > 0.6) {
         if (alive && standing) react(hit.velocity, hit.point, 0.35, name);
         else if (alive) suffer(0.4);
@@ -1110,8 +1197,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     else if (/^thigh/.test(name)) joint = hit.s < 0.35 ? `hip${side}` : `knee${side}`;
     else if (/^shin/.test(name)) joint = hit.s < 0.45 ? `knee${side}` : `ankle${side}`;
     else if (/^foot/.test(name)) joint = `ankle${side}`;
-    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: 55, speed: 2 + Math.min(speed, 8) * 0.5 });
-    effects?.flash(hit.point, Math.min(1, speed / 5));
+    // The faster the blade, the bigger the spray.
+    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(THREE.MathUtils.clamp(30 + speed * 6, 40, 95)), speed: 2 + Math.min(speed, 8) * 0.5 });
+    effects?.flash(hit.point, Math.min(1.2, speed / 5));
+    flashPart(body, 1);
     if (name === 'blaster') {
       event.type = 'disarm';
       if (trooper.holding) dropBlaster(hit.velocity);
@@ -1119,10 +1208,13 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     } else if (joint && cut(joint, hit)) {
       event.type = 'cut';
       event.joint = joint;
+      flashPart(bodies[CUTS[joint].child], 1);
+      effects?.burst(hit.point, { normal: hit.normal, power: 0.5 + speed / 10 });
       if (trooper.fallen) ragdoll.push(body.indices, hit.velocity.clone().clampLength(0, 6).multiplyScalar(0.1));
     } else if (name === 'torso' || name === 'pelvis') {
       event.type = 'slash';
       scorch(body, hit);
+      effects?.burst(hit.point, { normal: hit.normal, power: 0.3 });
       if (alive && standing) {
         if (speed > SLASH_LETHAL_SPEED) die('slash', hit.velocity);
         else { react(hit.velocity, hit.point, 1.2, name); pressWound(hit.point); }
@@ -1147,6 +1239,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     }
   }
   function reset() {
+    tweens.clear();
     dispose();
     build();
   }

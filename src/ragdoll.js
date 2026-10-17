@@ -7,7 +7,9 @@ import * as THREE from 'three';
  * be kinematic — placed by the animated pose every frame, keeping their
  * velocity — or simulated. Severing a joint gives the child side its own copy
  * of the shared particle, so a limb comes free with the velocity it had.
- * Simulated particles fall, collide with the floor and with other limbs.
+ * Simulated particles fall, collide with the floor and with other limbs; a
+ * particle may carry its own floor bounce and friction (a light, hard piece
+ * clatters and skids where a body lies still).
  * A body drives its mesh from the frame of its three particles.
  */
 const STEP = 1 / 120;
@@ -167,10 +169,14 @@ export class Ragdoll {
       const { position, previous } = particle;
       position.y = particle.radius;
       // Contact friction and a little bounce.
-      previous.x = position.x - (position.x - previous.x) * (1 - this.friction);
-      previous.z = position.z - (position.z - previous.z) * (1 - this.friction);
-      // Only a particle moving into the floor bounces; one already rising keeps its speed.
-      if (previous.y > position.y) previous.y = position.y + (position.y - previous.y) * this.bounce;
+      const friction = particle.friction ?? this.friction, bounce = particle.bounce ?? this.bounce;
+      previous.x = position.x - (position.x - previous.x) * (1 - friction);
+      previous.z = position.z - (position.z - previous.z) * (1 - friction);
+      // Only a particle moving into the floor bounces, and only from a real
+      // impact (over ~0.5 m/s): slow contacts settle instead of jittering.
+      // One already rising keeps its speed.
+      const incoming = previous.y - position.y;
+      if (incoming > 0) previous.y = incoming > 0.004 ? position.y - incoming * bounce : position.y;
     }
   }
   collideBodies() {
