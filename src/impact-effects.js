@@ -1,23 +1,57 @@
 import * as THREE from 'three';
 
 /**
- * Lightsaber impact effects, stylised and without gore: bursts of sparks
- * that bounce on the floor, an orange flash of light, embers drifting up
- * from cauterised cuts, and glowing materials that cool from white-hot
- * orange to scorched black. sparks()/flash()/smoulder()/glow(), then update(dt).
+ * Lightsaber impact effects, stylised and without gore. A physical particle
+ * system: sparks fly as streaks stretched along their velocity, droplets of
+ * molten armour fall heavier, and both obey gravity and air drag, bounce on
+ * the floor, slide to a stop and lie there as round glowing beads that cool
+ * from white-hot to orange, red, then black over a few seconds. Embers drift
+ * up from cauterised cuts, an orange flash lights the impact, and glowing
+ * materials cool down. sparks()/flash()/smoulder()/glow(), then update(dt).
  */
+const SPARK = 0, DROP = 1, EMBER = 2;
+
 export function createImpactEffects(scene, { random = Math.random } = {}) {
-  const MAX = 900;
-  const positions = new Float32Array(MAX * 3), colors = new Float32Array(MAX * 3);
-  const velocities = new Float32Array(MAX * 3), ages = new Float32Array(MAX).fill(Infinity), lives = new Float32Array(MAX), kinds = new Uint8Array(MAX);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-  const material = new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-  const points = new THREE.Points(geometry, material);
-  points.name = 'Impact sparks';
-  points.frustumCulled = false;
-  scene.add(points);
+  const MAX = 1800;
+  const position = new Float32Array(MAX * 3), velocity = new Float32Array(MAX * 3);
+  const heat = new Float32Array(MAX), cooling = new Float32Array(MAX), size = new Float32Array(MAX);
+  const kind = new Uint8Array(MAX), alive = new Uint8Array(MAX), resting = new Uint8Array(MAX), seed = new Float32Array(MAX);
+
+  // Round, soft-edged beads (points) and velocity streaks (lines).
+  const beadGeometry = new THREE.BufferGeometry();
+  const beadPositions = new Float32Array(MAX * 3), beadColors = new Float32Array(MAX * 3), beadSizes = new Float32Array(MAX);
+  beadGeometry.setAttribute('position', new THREE.BufferAttribute(beadPositions, 3).setUsage(THREE.DynamicDrawUsage));
+  beadGeometry.setAttribute('glow', new THREE.BufferAttribute(beadColors, 3).setUsage(THREE.DynamicDrawUsage));
+  beadGeometry.setAttribute('size', new THREE.BufferAttribute(beadSizes, 1).setUsage(THREE.DynamicDrawUsage));
+  const beadMaterial = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: /* glsl */`
+      attribute vec3 glow; attribute float size; varying vec3 vGlow;
+      void main() {
+        vGlow = glow;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size;
+      }`,
+    fragmentShader: /* glsl */`
+      varying vec3 vGlow;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float d = dot(c, c) * 4.0;
+        if (d > 1.0) discard;
+        gl_FragColor = vec4(vGlow * (1.0 - d * 0.7), 1.0);
+      }`,
+  });
+  const beads = new THREE.Points(beadGeometry, beadMaterial);
+  beads.name = 'Impact beads';
+  beads.frustumCulled = false;
+  const streakGeometry = new THREE.BufferGeometry();
+  const streakPositions = new Float32Array(MAX * 6), streakColors = new Float32Array(MAX * 6);
+  streakGeometry.setAttribute('position', new THREE.BufferAttribute(streakPositions, 3).setUsage(THREE.DynamicDrawUsage));
+  streakGeometry.setAttribute('color', new THREE.BufferAttribute(streakColors, 3).setUsage(THREE.DynamicDrawUsage));
+  const streaks = new THREE.LineSegments(streakGeometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  streaks.name = 'Spark streaks';
+  streaks.frustumCulled = false;
+  scene.add(beads, streaks);
 
   const lights = [0, 1].map(() => {
     const light = new THREE.PointLight(0xff8a3a, 0, 3.2, 1.8);
@@ -26,36 +60,51 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   });
   let nextLight = 0, cursor = 0;
   const smoulders = [], glows = [];
-  const hot = new THREE.Color(3.2, 1.35, 0.4), cold = new THREE.Color(0.055, 0.05, 0.05), color = new THREE.Color(), orange = new THREE.Color(2.4, 0.7, 0.12);
-  const point = new THREE.Vector3();
+  const hot = new THREE.Color(3.2, 1.35, 0.4), cold = new THREE.Color(0.055, 0.05, 0.05);
+  const point = new THREE.Vector3(), start = new THREE.Vector3(), color = new THREE.Color();
 
-  function emit(position, velocity, life, kind) {
+  // Black-body-ish ramp: white-hot, yellow, orange, deep red, out.
+  function incandescence(t, out) {
+    if (t > 0.75) return out.setRGB(2.6, 2.1, 1.4).lerp(color.setRGB(2.4, 1.3, 0.4), (1 - t) / 0.25);
+    if (t > 0.45) return out.setRGB(2.4, 1.3, 0.4).lerp(color.setRGB(2.2, 0.55, 0.08), (0.75 - t) / 0.3);
+    if (t > 0.15) return out.setRGB(2.2, 0.55, 0.08).lerp(color.setRGB(0.7, 0.08, 0.02), (0.45 - t) / 0.3);
+    return out.setRGB(0.7, 0.08, 0.02).multiplyScalar(Math.max(0, t / 0.15));
+  }
+  const glowColor = new THREE.Color();
+
+  function emit(at, v, type, temperature, rate, pixels) {
     const i = cursor;
     cursor = (cursor + 1) % MAX;
-    position.toArray(positions, i * 3);
-    velocity.toArray(velocities, i * 3);
-    ages[i] = 0; lives[i] = life; kinds[i] = kind;
+    at.toArray(position, i * 3);
+    v.toArray(velocity, i * 3);
+    kind[i] = type; heat[i] = temperature; cooling[i] = rate; size[i] = pixels; alive[i] = 1; resting[i] = 0; seed[i] = random() * 100;
   }
   /** A burst along the blade's motion, fanned across the cut plane. */
-  function sparks(position, direction, normal, { count = 40, speed = 4 } = {}) {
-    const velocity = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
+  function sparks(at, direction, normal, { count = 40, speed = 4 } = {}) {
+    const v = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    side.normalize();
     for (let i = 0; i < count; i++) {
-      velocity.copy(direction).multiplyScalar(speed * (0.25 + random() * 0.85))
-        .addScaledVector(side, (random() - 0.5) * speed * 0.9)
+      const drop = i % 6 === 5;
+      const pace = drop ? 0.25 + random() * 0.45 : 0.35 + random() * 0.9;
+      v.copy(direction).multiplyScalar(speed * pace)
+        .addScaledVector(side, (random() - 0.5) * speed * (drop ? 0.4 : 1))
         .addScaledVector(normal, (random() - 0.5) * speed * 0.5);
-      velocity.y += 0.6 + random() * 1.6;
-      emit(position, velocity, 0.22 + random() * 0.55, 0);
+      v.y += drop ? 0.2 + random() * 0.6 : 0.6 + random() * 2;
+      // Staggered along their paths, so the burst never piles up in one blinding point.
+      start.copy(at).addScaledVector(v, random() * 0.03);
+      emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6);
     }
   }
-  function flash(position, power = 1) {
+  function flash(at, power = 1) {
     const slot = lights[nextLight];
     nextLight = (nextLight + 1) % lights.length;
-    slot.light.position.copy(position);
+    slot.light.position.copy(at);
     slot.age = 0;
     slot.power = power;
   }
   /** Embers rising from an object (a cut) for a few seconds. */
-  function smoulder(object, duration = 2.4) { smoulders.push({ object, age: 0, duration, debt: 0 }); }
+  function smoulder(object, duration = 2.6) { smoulders.push({ object, age: 0, duration, debt: 0 }); }
   /** A material that cools from white-hot to scorched over a few seconds. */
   function glow(material, duration = 4.5) {
     glows.push({ material, age: 0, duration });
@@ -65,15 +114,15 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   function update(dt) {
     for (const slot of lights) {
       slot.age += dt;
-      slot.light.intensity = slot.age < 0.16 ? slot.power * 5 * (1 - slot.age / 0.16) ** 2 : 0;
+      slot.light.intensity = slot.age < 0.14 ? slot.power * 3 * (1 - slot.age / 0.14) ** 2 : 0;
     }
     for (const entry of smoulders) {
       entry.age += dt;
-      entry.debt += dt * 14 * (1 - entry.age / entry.duration);
+      entry.debt += dt * 12 * (1 - entry.age / entry.duration);
       while (entry.debt > 1) {
         entry.debt -= 1;
         entry.object.getWorldPosition(point);
-        emit(point, new THREE.Vector3((random() - 0.5) * 0.25, 0.25 + random() * 0.4, (random() - 0.5) * 0.25), 0.6 + random() * 0.8, 1);
+        emit(point, new THREE.Vector3((random() - 0.5) * 0.2, 0.2 + random() * 0.35, (random() - 0.5) * 0.2), EMBER, 0.55 + random() * 0.2, 0.45 + random() * 0.3, 1.4 + random() * 0.5);
       }
     }
     for (let i = smoulders.length - 1; i >= 0; i--) if (smoulders[i].age >= smoulders[i].duration) smoulders.splice(i, 1);
@@ -85,33 +134,65 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     for (let i = glows.length - 1; i >= 0; i--) if (glows[i].age >= glows[i].duration) glows.splice(i, 1);
 
     for (let i = 0; i < MAX; i++) {
-      if (ages[i] >= lives[i]) { colors[i * 3] = colors[i * 3 + 1] = colors[i * 3 + 2] = 0; continue; }
-      ages[i] += dt;
-      const o = i * 3;
-      const ember = kinds[i] === 1;
-      if (!ember) velocities[o + 1] -= 9.8 * dt;
-      positions[o] += velocities[o] * dt; positions[o + 1] += velocities[o + 1] * dt; positions[o + 2] += velocities[o + 2] * dt;
-      if (positions[o + 1] < 0.005) {
-        positions[o + 1] = 0.005;
-        velocities[o + 1] *= -0.35; velocities[o] *= 0.6; velocities[o + 2] *= 0.6;
+      const o = i * 3, l = i * 6;
+      if (!alive[i]) {
+        beadSizes[i] = 0;
+        beadColors[o] = beadColors[o + 1] = beadColors[o + 2] = 0;
+        streakColors.fill(0, l, l + 6);
+        continue;
       }
-      // Clamped: a spark that outlives the frame must not raise a negative to a power (NaN).
-      const t = Math.min(1, ages[i] / lives[i]);
-      // Sparks: white-hot, then orange, then out. Embers glow a dim orange.
-      if (ember) color.setRGB(1.6, 0.5, 0.1).multiplyScalar(Math.sin(Math.PI * t) * 0.9);
-      else color.setRGB(4, 3, 1.6).lerp(orange, Math.min(1, t * 2)).multiplyScalar((1 - t) ** 1.4);
-      colors[o] = color.r; colors[o + 1] = color.g; colors[o + 2] = color.b;
+      const type = kind[i];
+      // Air: drag, and gravity (embers float on the heat instead).
+      const drag = Math.exp(-(type === EMBER ? 1.5 : type === DROP ? 0.4 : 1.1) * dt);
+      velocity[o] *= drag; velocity[o + 1] *= drag; velocity[o + 2] *= drag;
+      if (type === EMBER) {
+        velocity[o] += Math.sin(seed[i] + heat[i] * 20) * 0.4 * dt;
+        velocity[o + 2] += Math.cos(seed[i] * 1.3 + heat[i] * 17) * 0.4 * dt;
+      } else if (!resting[i]) velocity[o + 1] -= 9.8 * dt;
+      position[o] += velocity[o] * dt; position[o + 1] += velocity[o + 1] * dt; position[o + 2] += velocity[o + 2] * dt;
+      // Floor: bounce with losses, then slide to a stop and lie there.
+      if (type !== EMBER && position[o + 1] < 0.006) {
+        position[o + 1] = 0.006;
+        if (velocity[o + 1] < -0.6) {
+          velocity[o + 1] *= -(0.25 + (seed[i] % 1) * 0.25);
+          velocity[o] *= 0.62; velocity[o + 2] *= 0.62;
+        } else {
+          velocity[o + 1] = 0;
+          resting[i] = 1;
+          const slide = Math.exp(-5 * dt);
+          velocity[o] *= slide; velocity[o + 2] *= slide;
+        }
+      }
+      // Cooling: slower once lying on the floor, so they linger.
+      heat[i] -= cooling[i] * dt * (resting[i] ? 0.75 : 1);
+      if (heat[i] <= 0) { alive[i] = 0; continue; }
+      incandescence(heat[i], glowColor);
+      const flicker = type === EMBER ? 0.75 + 0.25 * Math.sin(seed[i] * 7 + heat[i] * 60) : 1;
+      beadPositions[o] = position[o]; beadPositions[o + 1] = position[o + 1]; beadPositions[o + 2] = position[o + 2];
+      beadColors[o] = glowColor.r * flicker; beadColors[o + 1] = glowColor.g * flicker; beadColors[o + 2] = glowColor.b * flicker;
+      beadSizes[i] = size[i] * (0.6 + 0.4 * Math.min(1, heat[i] * 2));
+      // A fast spark is a streak along its path: bright head, fading tail.
+      const speed = Math.hypot(velocity[o], velocity[o + 1], velocity[o + 2]);
+      const stretch = type === SPARK && speed > 1.2 ? 0.035 : 0;
+      streakPositions[l] = position[o]; streakPositions[l + 1] = position[o + 1]; streakPositions[l + 2] = position[o + 2];
+      streakPositions[l + 3] = position[o] - velocity[o] * stretch;
+      streakPositions[l + 4] = position[o + 1] - velocity[o + 1] * stretch;
+      streakPositions[l + 5] = position[o + 2] - velocity[o + 2] * stretch;
+      const strength = stretch ? 1 : 0;
+      streakColors[l] = glowColor.r * strength; streakColors[l + 1] = glowColor.g * strength; streakColors[l + 2] = glowColor.b * strength;
+      streakColors[l + 3] = glowColor.r * 0.2 * strength; streakColors[l + 4] = glowColor.g * 0.1 * strength; streakColors[l + 5] = glowColor.b * 0.05 * strength;
+      if (stretch) beadSizes[i] *= 0.7;
     }
-    geometry.attributes.position.needsUpdate = true;
-    geometry.attributes.color.needsUpdate = true;
+    for (const attribute of [beadGeometry.attributes.position, beadGeometry.attributes.glow, beadGeometry.attributes.size, streakGeometry.attributes.position, streakGeometry.attributes.color]) attribute.needsUpdate = true;
   }
   function clear() {
-    ages.fill(Infinity);
+    alive.fill(0);
     smoulders.length = 0;
     glows.length = 0;
     for (const slot of lights) { slot.age = Infinity; slot.light.intensity = 0; }
     update(0);
   }
-  const live = () => { let count = 0; for (let i = 0; i < MAX; i++) if (ages[i] < lives[i]) count++; return count; };
-  return { points, sparks, flash, smoulder, glow, update, clear, get live() { return live(); }, hot, cold };
+  const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
+  const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
+  return { points: beads, beads, streaks, sparks, flash, smoulder, glow, update, clear, get live() { return live(); }, get resting() { return restingCount(); }, hot, cold };
 }

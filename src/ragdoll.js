@@ -10,6 +10,8 @@ import * as THREE from 'three';
  * Simulated particles fall, collide with the floor and with other limbs.
  * A body drives its mesh from the frame of its three particles.
  */
+const STEP = 1 / 120;
+
 export class Ragdoll {
   constructor({ gravity = -11, damping = 0.996, friction = 0.18, bounce = 0.15 } = {}) {
     Object.assign(this, { gravity, damping, friction, bounce });
@@ -95,9 +97,8 @@ export class Ragdoll {
       }
     }
     if (tag) this.constraints = this.constraints.filter(constraint => constraint.tag !== tag);
-    for (const child of childBodies) {
-      for (const owner of original.bodies) { this.adjacent.delete(`${child.index}:${owner.index}`); this.adjacent.delete(`${owner.index}:${child.index}`); }
-    }
+    // The two sides stay 'adjacent': their overlapping joint ends must not
+    // shove each other apart the instant they are cut.
     return copyIndex;
   }
   /** Adds a velocity (m/s) to the given particles. */
@@ -112,14 +113,19 @@ export class Ragdoll {
     return out.subVectors(particle.position, particle.previous).divideScalar(step);
   }
 
+  /**
+   * Fixed 1/120 s steps from an accumulator. Variable steps would read the
+   * position corrections of a slowed-down frame (a hit stop) as huge speeds.
+   */
   step(dt) {
-    const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
-    const h = dt / steps;
-    for (let s = 0; s < steps; s++) this.substep(h);
+    this.accumulator = Math.min((this.accumulator ?? 0) + Math.max(0, dt), 0.1);
+    while (this.accumulator >= STEP) {
+      this.substep(STEP);
+      this.accumulator -= STEP;
+    }
   }
   substep(h) {
-    const scale = h / (this.lastStep ?? h);
-    this.lastStep = h;
+    const scale = 1;
     for (const particle of this.particles) {
       if (particle.kinematic) continue;
       const { position, previous } = particle;
@@ -174,8 +180,11 @@ export class Ragdoll {
         const distance = Math.sqrt(squared);
         const wa = a.kinematic ? 0 : a.inverseMass, wb = b.kinematic ? 0 : b.inverseMass;
         const k = (distance - reach) / distance / (wa + wb) * 0.5;
-        a.position.x += dx * k * wa; a.position.y += dy * k * wa; a.position.z += dz * k * wa;
-        b.position.x -= dx * k * wb; b.position.y -= dy * k * wb; b.position.z -= dz * k * wb;
+        // Separate without adding speed: contacts between limbs are inelastic.
+        for (const [particle, scale] of [[a, k * wa], [b, -k * wb]]) {
+          particle.position.x += dx * scale; particle.position.y += dy * scale; particle.position.z += dz * scale;
+          particle.previous.x += dx * scale; particle.previous.y += dy * scale; particle.previous.z += dz * scale;
+        }
       }
     }
   }

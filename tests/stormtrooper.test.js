@@ -185,3 +185,49 @@ test('ragdoll joints stay attached and limbs keep their length', () => {
   for (let i = 0; i < 30; i++) ragdoll.step(1 / 60);
   assert.ok(p(free).distanceTo(p(b)) > 0.05, 'a severed joint lets go');
 });
+
+test('the saber cuts like butter: the arm drops at his feet and he stays where he stands', () => {
+  const state = fixture(21);
+  state.run(0.5);
+  const { trooper } = state;
+  const shoulder = state.particle('SL'), elbow = state.particle('EL');
+  const target = shoulder.clone().lerp(elbow, 0.6);
+  const before = trooper.joints.pelvis.getWorldPosition(new THREE.Vector3());
+  const events = state.sweep(target, new THREE.Vector3(0, -1, 1), new THREE.Vector3(-1, 0, 0).applyQuaternion(trooper.root.quaternion), 3, 3);
+  assert.ok(events.some(event => event.type === 'cut' && /^(shoulder|elbow)L$/.test(event.joint)));
+  // Slowed frames, as during a hit stop, then normal time.
+  for (let i = 0; i < 5; i++) { state.time += 0.0013; trooper.update(0.0013, state.time); }
+  state.run(3);
+  assert.ok(!trooper.dead, 'one arm lost does not fell him');
+  const after = trooper.joints.pelvis.getWorldPosition(new THREE.Vector3());
+  assert.ok(before.distanceTo(after) < 0.1, `he stays in place (${before.distanceTo(after).toFixed(2)} m)`);
+  for (const name of ['upperArmL', 'forearmL', 'handL']) {
+    for (const index of trooper.bodies[name].indices) {
+      const p = trooper.ragdoll.particles[index].position;
+      assert.ok(Math.hypot(p.x - after.x, p.z - after.z) < 0.9, `${name} lies at his feet`);
+    }
+  }
+  assert.ok(trooper.reaction.hurt > 0.9, 'he hunches over the wound');
+  const hand = trooper.joints.wristR.getWorldPosition(new THREE.Vector3());
+  const joint = trooper.severed.has('shoulderL') ? 'shoulderL' : 'elbowL';
+  assert.ok(hand.distanceTo(trooper.caps[joint][0].cap.getWorldPosition(new THREE.Vector3())) < 0.12, 'his other hand presses on the stump');
+});
+
+test('sparks streak through the air, land, and glow on the floor before going out', () => {
+  const scene = new THREE.Scene();
+  const effects = createImpactEffects(scene, { random: seeded(31) });
+  effects.sparks(new THREE.Vector3(0, 1.1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1), { count: 70, speed: 5 });
+  effects.update(1 / 60);
+  const lengths = [];
+  const streak = effects.streaks.geometry.attributes.position;
+  for (let i = 0; i < 70; i++) lengths.push(new THREE.Vector3().fromBufferAttribute(streak, i * 2).distanceTo(new THREE.Vector3().fromBufferAttribute(streak, i * 2 + 1)));
+  assert.ok(lengths.filter(length => length > 0.03).length > 30, 'flying sparks are streaks, not squares');
+  for (let i = 0; i < 90; i++) effects.update(1 / 60);
+  assert.ok(effects.resting > 20, `many lie glowing on the floor (${effects.resting})`);
+  const beads = effects.beads.geometry.attributes.position;
+  for (let i = 0; i < 70; i++) assert.ok(beads.getY(i) >= 0, 'nothing falls through the floor');
+  for (let i = 0; i < 60; i++) effects.update(1 / 60);
+  assert.ok(effects.live > 10, 'they take their time to fade');
+  for (let i = 0; i < 360; i++) effects.update(1 / 60);
+  assert.equal(effects.live, 0, 'and finally go out');
+});

@@ -75,7 +75,7 @@ export function createCoat({ scene, character }) {
     ['LeftUpLeg', 'LeftLeg', 0.1], ['LeftLeg', 'LeftFoot', 0.08], ['LeftFoot', 'LeftToeBase', 0.07],
     ['RightUpLeg', 'RightLeg', 0.1], ['RightLeg', 'RightFoot', 0.08], ['RightFoot', 'RightToeBase', 0.07],
   ].map(([from, to, radius]) => ({ from: bones[from], to: bones[to], radius, a: new THREE.Vector3(), b: new THREE.Vector3() }));
-  let previousStep = 1 / 120, disposed = false;
+  let previousStep = 1 / 120, accumulator = 0, disposed = false;
 
   function readFrame() {
     character.root.updateMatrixWorld(true);
@@ -173,8 +173,13 @@ export function createCoat({ scene, character }) {
     if (!Number.isFinite(dt) || dt > 0.2 || rootPosition.distanceToSquared(lastRoot) > 1) { reset(); return; }
     if (dt <= 0) return;
     dt = Math.min(dt, 0.05);
-    const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
-    const h = dt / steps;
+    // Fixed steps: a slowed-down frame (hit stop) must not turn the solver's
+    // corrections into speeds once time runs normally again.
+    const h = 1 / 120;
+    accumulator = Math.min(accumulator + dt, 0.1);
+    const steps = Math.floor(accumulator / h);
+    accumulator -= steps * h;
+    if (!steps) return;
     const speed = Math.min(7, Math.hypot(velocity.x || 0, velocity.z || 0));
     // Relative airflow pushes the tails back; it gusts slightly with the stride.
     wind.set(-(velocity.x || 0), 0, -(velocity.z || 0)).multiplyScalar(1.4 + speed * 0.3);
@@ -183,7 +188,7 @@ export function createCoat({ scene, character }) {
     const hold = 1 / (1 + 0.08 * speed * speed);
     const damping = Math.exp(-2.4 * h);
     for (let step = 0; step < steps; step++) {
-      const timeScale = h / previousStep;
+      const timeScale = 1;
       // The waist and the tailored shape move smoothly across sub-steps.
       const fraction = (step + 1) / steps;
       for (let i = 0; i < COUNT * 3; i++) goal[i] = lastTargets[i] + (targets[i] - lastTargets[i]) * fraction;

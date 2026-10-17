@@ -91,12 +91,18 @@ function init() {
   const trail = createBladeTrail(scene);
   const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastTip = new THREE.Vector3();
   const shake = new THREE.Vector3();
-  // A stormtrooper stands guard a few steps ahead, as a training dummy.
+  // A squad of stormtroopers stands in a row at the top of the screen, facing
+  // the hero: training dummies. Screen-up on the floor is away from the camera.
   const effects = createImpactEffects(scene);
-  const trooper = createStormtrooper({ scene, position: new THREE.Vector3(2.5, 0, -0.72), heading: -1.29, effects });
+  const screenUp = new THREE.Vector3(-8, 0, -10).normalize(), screenRight = new THREE.Vector3(10, 0, -8).normalize();
+  const troopers = [-2, -1, 0, 1, 2].map(slot => createStormtrooper({
+    scene, effects,
+    position: screenUp.clone().multiplyScalar(4.2).addScaledVector(screenRight, slot * 1.15),
+    heading: Math.atan2(-screenUp.x, -screenUp.z) + slot * 0.06,
+  }));
   const lastBase = new THREE.Vector3();
   let bladeReady = false, hitStop = 0, impactShake = 0, padReset = false;
-  function resetTrooper() { trooper.reset(); effects.clear(); }
+  function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); }
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
   // The final canvas is then enlarged with nearest-neighbour, never blurred.
@@ -241,8 +247,9 @@ function init() {
       // Each strike re-aims towards the stick before it lands.
       if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
-      const blocker = trooper.blocker();
-      if (blocker) {
+      for (const trooper of troopers) {
+        const blocker = trooper.blocker();
+        if (!blocker) continue;
         const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
         if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
       }
@@ -257,15 +264,15 @@ function init() {
       saber.segment(bladeBase, bladeTip);
       trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
-      trooper.update(sim, time);
-      if (saber.extension > 0.6 && bladeReady) {
-        for (const event of trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time)) {
-          if (event.type === 'graze' && event.speed < 1) continue;
-          const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
-          if (heavy) hitStop = Math.max(hitStop, event.lethal ? 0.09 : 0.065);
-          impactShake = Math.max(impactShake, event.lethal ? 0.85 : heavy ? 0.55 : 0.2);
-          audio.impact(heavy ? 1 : 0.35);
-        }
+      for (const trooper of troopers) trooper.update(sim, time);
+      const struck = saber.extension > 0.6 && bladeReady ? troopers.flatMap(trooper => trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time)) : [];
+      for (const event of struck) {
+        if (event.type === 'graze' && event.speed < 1) continue;
+        const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
+        // The blade meets no resistance: only a felling blow holds the frame.
+        if (event.lethal) hitStop = Math.max(hitStop, 0.045);
+        impactShake = Math.max(impactShake, event.lethal ? 0.5 : heavy ? 0.25 : 0.1);
+        audio.impact(heavy ? 1 : 0.35);
       }
       bladeReady = saber.extension > 0.6;
       lastBase.copy(bladeBase);
@@ -304,7 +311,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, trooperDown: trooper.dead, severed: [...trooper.severed], paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, troopersDown: troopers.filter(trooper => trooper.dead).length, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }

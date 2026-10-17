@@ -294,7 +294,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     scene.add(root, debris);
     Object.assign(trooper, { root, debris, dead: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
-    Object.assign(reaction, { yaw: 0, pitch: 0, roll: 0, head: 0, buckle: 0, vyaw: 0, vpitch: 0, vroll: 0, vhead: 0, vbuckle: 0, offset: new THREE.Vector3(), push: new THREE.Vector3(), imbalance: 0, armL: 0, armR: 0, varmL: 0, varmR: 0, hold: 1 });
+    Object.assign(reaction, { yaw: 0, pitch: 0, roll: 0, head: 0, buckle: 0, vyaw: 0, vpitch: 0, vroll: 0, vhead: 0, vbuckle: 0, offset: new THREE.Vector3(), push: new THREE.Vector3(), imbalance: 0, armL: 0, armR: 0, varmL: 0, varmR: 0, hold: 1, hurt: 0, clutch: 0, wound: null, woundAge: 0 });
     base = joints.pelvis.position.clone();
     pose(0, 0);
     root.updateMatrixWorld(true);
@@ -311,15 +311,22 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     r.offset.addScaledVector(r.push, dt);
     r.imbalance = Math.max(0, r.imbalance - dt * 0.4);
     r.hold += ((trooper.holding ? 1 : 0) - r.hold) * (1 - Math.exp(-10 * dt));
+    // A wound: he hunches over it, looks down at it, and his other hand goes
+    // to the stump after a moment of shock.
+    if (r.wound) r.woundAge += dt;
+    r.hurt += ((r.wound ? 1 : 0) - r.hurt) * (1 - Math.exp(-4 * dt));
+    r.clutch += ((r.wound && r.woundAge > 0.3 ? 1 : 0) - r.clutch) * (1 - Math.exp(-5 * dt));
+    const toward = r.wound ? (r.wound.side === 'L' ? 1 : -1) : 0;
+    const gasp = Math.sin(time * 4.2) * 0.025 * r.hurt;
 
-    const breathe = Math.sin(time * 1.7), look = Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08;
-    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08, base.z + r.offset.z);
+    const breathe = Math.sin(time * 1.7), look = (Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08) * (1 - r.hurt);
+    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04, base.z + r.offset.z);
     joints.pelvis.rotation.set(r.pitch * 0.3, r.yaw * 0.4, r.roll * 0.4);
-    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7, r.yaw * 0.6, r.roll * 0.6);
-    joints.neck.rotation.set(0.05 + r.head * 0.6, look - r.yaw * 0.5 + r.head * 0.3, r.roll * -0.3);
+    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06);
+    joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.3, look - r.yaw * 0.5 + r.head * 0.3 + toward * r.hurt * 0.45, r.roll * -0.3);
     for (const [side, sign] of [['L', 1], ['R', -1]]) {
-      joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5, 0, sign * 0.06);
-      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9, 0, 0);
+      joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5 - r.hurt * 0.22, 0, sign * 0.06);
+      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38, 0, 0);
       joints[`ankle${side}`].rotation.set(-0.06, 0, -sign * 0.06);
       // Without the rifle the arms hang, flung by the hits.
       joints[`shoulder${side}`].rotation.set(-0.15 + r[`arm${side}`], 0, sign * (0.12 + Math.abs(r[`arm${side}`]) * 0.5));
@@ -342,6 +349,19 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
           shoulder.updateMatrixWorld(true);
         }
       }
+    }
+    // The healthy hand presses on the cauterised stump, trembling.
+    const healthy = r.wound && (r.wound.side === 'L' ? 'R' : 'L');
+    if (r.clutch > 0.01 && healthy && !trooper.severed.has(`shoulder${healthy}`)) {
+      const shoulder = joints[`shoulder${healthy}`], elbow = joints[`elbow${healthy}`], wrist = joints[`wrist${healthy}`];
+      const restUpper = shoulder.quaternion.clone(), restLower = elbow.quaternion.clone();
+      const stump = caps[r.wound.joint][0].cap;
+      const target = stump.localToWorld(temp.set(Math.sin(time * 23) * 0.006, Math.sin(time * 19) * 0.006, 0.05));
+      const pole = shoulder.localToWorld(temp2.set(-toward * 0.4, -0.35, 0.1));
+      solveTwoBone(shoulder, elbow, wrist, target, pole);
+      shoulder.quaternion.slerpQuaternions(restUpper, shoulder.quaternion.clone(), r.clutch);
+      elbow.quaternion.slerpQuaternions(restLower, elbow.quaternion.clone(), r.clutch);
+      shoulder.updateMatrixWorld(true);
     }
   }
 
@@ -401,8 +421,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (!trooper.holding) return;
     trooper.holding = false;
     release(['blaster']);
-    ragdoll.push(bodies.blaster.indices, temp.copy(velocity).clampLength(0, 6).multiplyScalar(0.25).add(temp2.set(0, 0.6, 0)));
-    spin(['blaster'], 7);
+    ragdoll.push(bodies.blaster.indices, temp.copy(velocity).clampLength(0, 4).multiplyScalar(0.08).add(temp2.set(0, 0.25, 0)));
+    spin(['blaster'], 2.5);
   }
 
   function knockOff(piece, velocity) {
@@ -448,8 +468,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     r.vbuckle += 2.5 * force;
     r.varmL += (random() - 0.5) * 8 * force;
     r.varmR += (random() - 0.5) * 8 * force;
-    r.push.addScaledVector(world(push), 0.9 * force);
-    r.imbalance += 0.28 * force;
+    r.push.addScaledVector(world(push), 0.22 * force);
+    r.imbalance += 0.2 * force;
     if (r.imbalance > 1) die('imbalance', velocity);
   }
 
@@ -467,8 +487,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     ragdoll.push(ragdoll.particles.map((_, index) => index), reaction.push.clone());
     const upper = ['head', 'torso', 'upperArmL', 'upperArmR', 'forearmL', 'forearmR', 'handL', 'handR'].filter(name => !cutChild || !cutChild.includes(name));
     const knees = ['KL', 'KR'].map(key => particleIndex[key]);
-    const buckle = forward.clone().multiplyScalar(0.8 + random() * 0.9);
-    const topple = 0.9 + random() * 1.3;
+    const buckle = forward.clone().multiplyScalar(0.5 + random() * 0.45);
+    const topple = 0.35 + random() * 0.6;
     switch (cause) {
       case 'neck':
         ragdoll.push(indicesOf(upper.filter(name => name !== 'head')), along.clone().multiplyScalar(0.5));
@@ -497,6 +517,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const definition = CUTS[name];
     if (!definition || trooper.severed.has(name)) return false;
     const childBodies = subtree(definition.child);
+    // Only a cut into the standing body is felt; a fallen piece is just cut.
+    const attached = !trooper.dead && !bodies[definition.parent].dynamic;
     trooper.severed.add(name);
     ragdoll.sever(particleIndex[definition.particle], childBodies.map(child => bodies[child]), name);
     for (const { cap, ring } of caps[name]) {
@@ -504,20 +526,23 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       effects?.glow(ring.material);
       effects?.smoulder(cap);
     }
-    const wasAlive = !trooper.dead;
     release(childBodies);
     // The severed part is carried off by the blade. Through the waist it is
     // the upper body that goes; the legs give way beneath it.
     const flying = name === 'waist' ? subtree('torso').filter(part => !childBodies.includes(part)) : childBodies;
-    const fly = temp.copy(hit.velocity).clampLength(0, 6).multiplyScalar(0.32).add(temp2.set(0, 0.35 + random() * 0.5, 0));
+    const fly = temp.copy(hit.velocity).clampLength(0, 4).multiplyScalar(name === 'waist' ? 0.1 : 0.06)
+      .add(temp2.set((random() - 0.5) * 0.2, 0.05 + random() * 0.12, (random() - 0.5) * 0.2));
     if (name === 'waist') release(flying);
     ragdoll.push(indicesOf(flying), fly);
-    spin([name === 'waist' ? 'torso' : definition.child], 3 + random() * 4);
-    if (wasAlive) {
+    spin([name === 'waist' ? 'torso' : definition.child], 0.6 + random() * 1.4);
+    if (attached) {
       const armLost = childBodies.some(child => /^(upperArm|forearm|hand)/.test(child));
       if (armLost) dropBlaster(hit.velocity);
       if (definition.lethal) die(name.replace(/[LR]$/, ''), hit.velocity, childBodies);
-      else react(hit.velocity, hit.point, 1);
+      else {
+        react(hit.velocity, hit.point, 0.6);
+        if (armLost) Object.assign(reaction, { wound: { joint: name, side: name.slice(-1) }, woundAge: 0 });
+      }
     }
     return true;
   }
@@ -627,7 +652,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const event = { type: 'graze', part: body.name, point: hit.point.clone(), velocity: hit.velocity.clone(), normal: hit.normal.clone(), speed };
     const sparkDirection = speed > 0.01 ? hit.velocity.clone().normalize() : new THREE.Vector3(0, 1, 0);
     if (speed < CUT_SPEED) {
-      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: speed < 0.6 ? 4 : 12, speed: 1.5 + speed });
+      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: speed < 0.6 ? 6 : 18, speed: 1.5 + speed });
       if (!trooper.dead && speed > 0.6) react(hit.velocity, hit.point, 0.35);
       const name = body.name;
       if (/^shin/.test(name) && speed > 1.2) {
@@ -647,7 +672,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     else if (/^hand/.test(name)) joint = `wrist${side}`;
     else if (/^thigh/.test(name)) joint = hit.s < 0.35 ? `hip${side}` : `knee${side}`;
     else if (/^shin/.test(name)) joint = hit.s < 0.4 ? `knee${side}` : null;
-    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: 30, speed: 2 + Math.min(speed, 8) * 0.5 });
+    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: 55, speed: 2 + Math.min(speed, 8) * 0.5 });
     effects?.flash(hit.point, Math.min(1, speed / 5));
     if (name === 'blaster') {
       event.type = 'disarm';
