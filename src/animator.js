@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { MOCAP_BONES, MOCAP_CLIPS } from './mocap-clips.js';
+import { solveTwoBone } from './ik.js';
 
 /**
  * Motion capture playback for the Jedi rig. Captured idle, walk and run are
@@ -164,47 +165,18 @@ export function createAnimator({ root, bones, list, restPositions, legLength, sa
   }
   const cycle = { walk: measureCycle('walk'), run: measureCycle('run') };
 
-  // Two-bone arm IK, solved in world space: the elbow bends towards the pole.
-  const ik = { s: new THREE.Vector3(), e: new THREE.Vector3(), h: new THREE.Vector3(), dir: new THREE.Vector3(), bend: new THREE.Vector3(), elbow: new THREE.Vector3(), reach: new THREE.Vector3(), a: new THREE.Vector3(), b: new THREE.Vector3() };
-  const worldQuaternion = new THREE.Quaternion(), parentQuaternion = new THREE.Quaternion(), delta = new THREE.Quaternion();
-  function aim(bone, from, current, desired) {
-    ik.a.subVectors(current, from).normalize();
-    ik.b.subVectors(desired, from).normalize();
-    delta.setFromUnitVectors(ik.a, ik.b);
-    bone.getWorldQuaternion(worldQuaternion).premultiply(delta);
-    bone.parent.getWorldQuaternion(parentQuaternion);
-    bone.quaternion.copy(parentQuaternion.invert().multiply(worldQuaternion));
-    bone.updateMatrixWorld(true);
-  }
-  function solveArm(upper, lower, end, target, pole) {
-    upper.getWorldPosition(ik.s); lower.getWorldPosition(ik.e); end.getWorldPosition(ik.h);
-    const a = ik.s.distanceTo(ik.e), b = ik.e.distanceTo(ik.h);
-    ik.dir.subVectors(target, ik.s);
-    const d = clamp(ik.dir.length(), Math.abs(a - b) + 1e-3, a + b - 1e-3);
-    ik.dir.normalize();
-    const cosine = clamp((a * a + d * d - b * b) / (2 * a * d), -1, 1);
-    ik.bend.subVectors(pole, ik.s);
-    ik.bend.addScaledVector(ik.dir, -ik.bend.dot(ik.dir));
-    if (ik.bend.lengthSq() < 1e-8) ik.bend.set(0, -1, 0);
-    ik.bend.normalize();
-    ik.elbow.copy(ik.s).addScaledVector(ik.dir, a * cosine).addScaledVector(ik.bend, a * Math.sqrt(1 - cosine * cosine));
-    ik.reach.copy(ik.s).addScaledVector(ik.dir, d);
-    aim(upper, ik.s, ik.e, ik.elbow);
-    lower.getWorldPosition(ik.e); end.getWorldPosition(ik.h);
-    aim(lower, ik.e, ik.h, ik.reach);
-  }
   const arms = ['Right', 'Left'].map(side => ({
     upper: bones[`${side}Arm`], lower: bones[`${side}ForeArm`], end: bones[`${side}Hand`],
     pole: new THREE.Vector3(side === 'Right' ? -0.55 : 0.55, -0.35, -0.45),
     fk: [new THREE.Quaternion(), new THREE.Quaternion()],
   }));
-  const target = new THREE.Vector3(), poleWorld = new THREE.Vector3(), actionBlade = new THREE.Vector3(), grip = new THREE.Vector3();
+  const target = new THREE.Vector3(), poleWorld = new THREE.Vector3(), poleOffset = new THREE.Vector3(), actionBlade = new THREE.Vector3(), grip = new THREE.Vector3();
   function applyArm(arm, goal, weight) {
     arm.fk[0].copy(arm.upper.quaternion);
     arm.fk[1].copy(arm.lower.quaternion);
     arm.upper.getWorldPosition(poleWorld);
-    poleWorld.add(ik.a.copy(arm.pole).applyQuaternion(rootQuaternion));
-    solveArm(arm.upper, arm.lower, arm.end, goal, poleWorld);
+    poleWorld.add(poleOffset.copy(arm.pole).applyQuaternion(rootQuaternion));
+    solveTwoBone(arm.upper, arm.lower, arm.end, goal, poleWorld);
     if (weight < 1) {
       arm.upper.quaternion.slerpQuaternions(arm.fk[0], arm.upper.quaternion.clone(), weight);
       arm.lower.quaternion.slerpQuaternions(arm.fk[1], arm.lower.quaternion.clone(), weight);

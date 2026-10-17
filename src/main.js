@@ -13,6 +13,8 @@ import { createSaber } from './saber.js';
 import { MotionController, damp } from './motion.js';
 import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
+import { createStormtrooper } from './stormtrooper.js';
+import { createImpactEffects } from './impact-effects.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -89,6 +91,12 @@ function init() {
   const trail = createBladeTrail(scene);
   const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastTip = new THREE.Vector3();
   const shake = new THREE.Vector3();
+  // A stormtrooper stands guard a few steps ahead, as a training dummy.
+  const effects = createImpactEffects(scene);
+  const trooper = createStormtrooper({ scene, position: new THREE.Vector3(2.5, 0, -0.72), heading: -1.29, effects });
+  const lastBase = new THREE.Vector3();
+  let bladeReady = false, hitStop = 0, impactShake = 0, padReset = false;
+  function resetTrooper() { trooper.reset(); effects.clear(); }
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
   // The final canvas is then enlarged with nearest-neighbour, never blurred.
@@ -123,7 +131,7 @@ function init() {
   const inputRight = new THREE.Vector2(10, -8).normalize();
   const inputForward = new THREE.Vector2(-8, -10).normalize();
   const joystick = { x: 0, y: 0, running: false, pointer: null };
-  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK'];
+  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT'];
   let attackPressed = false, padAttack = false;
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
@@ -133,6 +141,7 @@ function init() {
       if (event.code === 'KeyR') reset();
       if (event.code === 'KeyH') togglePanel('help');
       if (event.code === 'KeyF') fullscreen();
+      if (event.code === 'KeyT') resetTrooper();
       if (event.code === 'KeyJ') attackPressed = true;
     }
     keys.add(event.code);
@@ -150,7 +159,7 @@ function init() {
   function reset() {
     motion.reset(); character.root.position.set(0, 0, 0); character.root.rotation.y = motion.heading;
     character.update({ dt: 0, time, speed: 0, runBlend: 0, turnRate: 0 });
-    combat.reset(); trail.clear(); cape.reset(); cameraFocus.set(0, 0.6, 0);
+    combat.reset(); trail.clear(); cape.reset(); bladeReady = false; cameraFocus.set(0, 0.6, 0);
   }
   function togglePanel(name) {
     const willOpen = $(`#${name}-panel`).hidden;
@@ -199,7 +208,10 @@ function init() {
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
     if (!paused) {
-      time += dt;
+      // A clean cut freezes the action for a few frames.
+      const sim = hitStop > 0 ? dt * 0.08 : dt;
+      hitStop = Math.max(0, hitStop - dt);
+      time += sim;
       let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft')) + joystick.x;
       let y = Number(keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) + joystick.y;
       let sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') || joystick.running;
@@ -216,34 +228,57 @@ function init() {
         const attackButton = !!gamepad.buttons[1]?.pressed;
         if (attackButton && !padAttack) attackPressed = true;
         padAttack = attackButton;
+        // Y puts the stormtrooper back on his feet.
+        const resetButton = !!gamepad.buttons[3]?.pressed;
+        if (resetButton && !padReset) resetTrooper();
+        padReset = resetButton;
       }
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       if (attackPressed) combat.attack({ speed: motion.speed });
       attackPressed = false;
-      const action = combat.update(dt, { guard, speed: motion.speed });
+      const action = combat.update(sim, { guard, speed: motion.speed });
       // Each strike re-aims towards the stick before it lands.
       if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
-      motion.update(dt, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+      motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+      const blocker = trooper.blocker();
+      if (blocker) {
+        const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
+        if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
+      }
       if (!moved && (motion.speed > 0.1 || action.engaged)) { moved = true; document.body.classList.add('playing'); }
       character.root.position.set(motion.x, 0, motion.z);
       character.root.rotation.y = motion.heading + action.spin;
       velocity.set(motion.vx, 0, motion.vz);
-      character.update({ dt, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
-      cape.update({ dt, time, velocity });
+      character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
+      cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
       if (saber.update(motion.saber, time, action.flare) === 'ignite') combat.flourish();
       saber.segment(bladeBase, bladeTip);
-      trail.update(dt, bladeBase, bladeTip, action.trail * motion.saber);
-      const swing = dt > 0 ? lastTip.distanceTo(bladeTip) / dt : 0;
+      trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
+      const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
+      trooper.update(sim, time);
+      if (saber.extension > 0.6 && bladeReady) {
+        for (const event of trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time)) {
+          if (event.type === 'graze' && event.speed < 1) continue;
+          const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
+          if (heavy) hitStop = Math.max(hitStop, event.lethal ? 0.09 : 0.065);
+          impactShake = Math.max(impactShake, event.lethal ? 0.85 : heavy ? 0.55 : 0.2);
+          audio.impact(heavy ? 1 : 0.35);
+        }
+      }
+      bladeReady = saber.extension > 0.6;
+      lastBase.copy(bladeBase);
       lastTip.copy(bladeTip);
+      effects.update(sim);
       playerPosition.copy(character.root.position);
       lighting.follow(playerPosition);
       targetFocus.set(motion.x + motion.vx * 0.16, 0.6, motion.z + motion.vz * 0.16);
-      cameraFocus.lerp(targetFocus, 1 - Math.exp(-7 * dt));
+      cameraFocus.lerp(targetFocus, 1 - Math.exp(-7 * sim));
       stage.update({ time, playerPosition });
       // A heavy landing shakes the view for a moment.
-      shake.set(Math.sin(time * 91), Math.sin(time * 77 + 1), Math.sin(time * 83 + 2)).multiplyScalar(action.shake * action.shake * 0.09);
+      impactShake = Math.max(0, impactShake - dt * 3);
+      shake.set(Math.sin(time * 91 + now * 0.05), Math.sin(time * 77 + 1 + now * 0.04), Math.sin(time * 83 + 2)).multiplyScalar(action.shake * action.shake * 0.09 + impactShake * impactShake * 0.07);
       audio.swing = Math.min(1, swing / 12) * action.weight;
     }
     viewHeight = damp(viewHeight, desiredHeight + motion.runBlend * 0.24, 6, dt);
@@ -269,7 +304,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, trooperDown: trooper.dead, severed: [...trooper.severed], paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
@@ -292,6 +327,26 @@ function createAudio() {
       context.resume().catch(() => {});
     },
     swing: 0,
+    /** A crackling hiss with a low thud when the blade bites. */
+    impact(strength) {
+      if (!this.enabled || !context) return;
+      const length = Math.floor(context.sampleRate * 0.35);
+      const buffer = context.createBuffer(1, length, context.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * 0.22));
+      const noise = context.createBufferSource(), band = context.createBiquadFilter(), level = context.createGain();
+      noise.buffer = buffer; band.type = 'bandpass'; band.frequency.value = 2200; band.Q.value = 0.7;
+      level.gain.value = 0.14 * strength;
+      noise.connect(band); band.connect(level); level.connect(context.destination);
+      noise.start();
+      const thud = context.createOscillator(), thudLevel = context.createGain();
+      thud.frequency.setValueAtTime(110, context.currentTime);
+      thud.frequency.exponentialRampToValueAtTime(45, context.currentTime + 0.2);
+      thudLevel.gain.setValueAtTime(0.18 * strength, context.currentTime);
+      thudLevel.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.25);
+      thud.connect(thudLevel); thudLevel.connect(context.destination);
+      thud.start(); thud.stop(context.currentTime + 0.3);
+    },
     update(saber, speed, turn) {
       if (!context) return;
       // Strikes swell and raise the hum, like a blade cutting the air.

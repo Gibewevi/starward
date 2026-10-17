@@ -12,6 +12,8 @@ import { createLighting } from './lighting.js';
 import { createSaber } from './saber.js';
 import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
+import { createStormtrooper } from './stormtrooper.js';
+import { createImpactEffects } from './impact-effects.js';
 
 const SHEET = encodeURI('/Jedi pixel art et planche d’animations.png');
 const FRAMES = { idle: [68, 175, 268, 363, 445], walk: [565, 662, 770, 878, 985], run: [1145, 1250, 1360, 1465] };
@@ -55,7 +57,12 @@ createStage(scene);
 const saber = createSaber({ socket: character.saberSocket, scene });
 const combat = new CombatController();
 const trail = createBladeTrail(scene);
-const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3();
+const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastBase = new THREE.Vector3(), lastTip = new THREE.Vector3();
+// Training dummy, placed in front of the hero on demand.
+const effects = createImpactEffects(scene);
+const trooperSpot = new THREE.Vector3(0, 0, 40);
+const trooper = createStormtrooper({ scene, position: trooperSpot, heading: Math.PI, effects });
+let bladeReady = false;
 
 const state = { gait: 'idle', frame: 1, turn: -0.35, freeze: false, time: 0 };
 const reference = document.querySelector('#reference');
@@ -101,6 +108,11 @@ function step(dt) {
   if (saber.update(state.ignition ?? 1, state.time, action.flare) === 'ignite') combat.flourish();
   saber.segment(bladeBase, bladeTip);
   trail.update(dt, bladeBase, bladeTip, action.trail);
+  trooper.update(dt, state.time);
+  if (bladeReady) trooper.strike(lastBase, lastTip, bladeBase, bladeTip, dt, state.time);
+  bladeReady = true;
+  lastBase.copy(bladeBase); lastTip.copy(bladeTip);
+  effects.update(dt);
   lighting.follow(character.root.position);
   for (const view of views) {
     focus.copy(character.root.position).add(new THREE.Vector3(0, 0.8, 0));
@@ -122,5 +134,7 @@ window.__ATELIER__ = {
   set(options) { Object.assign(state, options); showReference(); },
   advance(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) step(dt); for (const view of views) view.composer.render(dt); },
   capture() { return views.map(view => { view.composer.render(0); return view.canvas.toDataURL('image/png'); }); },
-  character, coat, scene, saber, views, combat,
+  character, coat, scene, saber, views, combat, trooper, effects,
+  /** Stands the stormtrooper at (x, z), facing the given heading, intact. */
+  placeTrooper(x, z, heading = Math.PI) { trooperSpot.set(x, 0, z); trooper.reset(); trooper.root.rotation.y = heading; effects.clear(); },
 };
