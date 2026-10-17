@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STARWARD — Atelier du personnage</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: #0b0d12; color: #cfd2d8; font: 13px/1.5 system-ui, sans-serif; padding: 18px; }
+      h1 { font-size: 15px; letter-spacing: .14em; font-weight: 600; margin: 0 0 4px; }
+      p { margin: 0 0 14px; color: #8b919c; }
+      .views { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+      figure { margin: 0; }
+      figcaption { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8b919c; margin-bottom: 6px; }
+      .reference { width: 450px; height: 500px; background-repeat: no-repeat; image-rendering: pixelated; border: 1px solid #222731; }
+      canvas { display: block; width: 450px; height: 500px; image-rendering: pixelated; border: 1px solid #222731; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; align-items: center; }
+      button { background: #171b23; color: #cfd2d8; border: 1px solid #2b313d; padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; }
+      button[aria-pressed="true"] { background: #2a3e5c; border-color: #4f73a6; }
+      label { display: inline-flex; gap: 6px; align-items: center; color: #8b919c; }
+    </style>
+  </head>
+  <body>
+    <h1>STARWARD / ATELIER DU PERSONNAGE</h1>
+    <p>Référence fournie et rendu temps réel à la même échelle de pixels. Outil de développement, absent du jeu compilé.</p>
+    <div class="views">
+      <figure><figcaption>Référence</figcaption><div id="reference" class="reference"></div></figure>
+      <figure><figcaption>Rendu du jeu</figcaption><canvas id="view"></canvas></figure>
+      <figure><figcaption>Caméra du jeu</figcaption><canvas id="game-view"></canvas></figure>
+    </div>
+    <div class="controls">
+      <button data-gait="idle" aria-pressed="true">Repos</button>
+      <button data-gait="walk" aria-pressed="false">Marche</button>
+      <button data-gait="run" aria-pressed="false">Course</button>
+      <button id="attack">Attaque (combo)</button>
+      <button id="guard" aria-pressed="false">Garde</button>
+      <label>Image de référence <input id="frame" type="range" min="0" max="4" value="1" step="1"></label>
+      <label>Orientation <input id="turn" type="range" min="-3.14" max="3.14" value="-0.35" step="0.01"></label>
+      <label><input id="freeze" type="checkbox"> Figer</label>
+    </div>
+    <script type="module" src="/src/atelier.js"></script>
+  </body>
+</html>
