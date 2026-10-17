@@ -28,7 +28,8 @@ Sur écran tactile, le joystick et le bouton de course apparaissent automatiquem
 ## Comportement
 
 - Allure continue au stick : marche lente 0,6 m/s, marche 1,7 m/s, course 3,3 m/s, sprint 4,5 m/s à pleine inclinaison ; au clavier, marche et sprint (Maj). Accélération vive, freinage court et rotation progressive. La cadence reste naturelle pour les jambes courtes du personnage (≈ 2,5 pas/s en marche, 4,4 en sprint).
-- Combat au sabre : combo de quatre coups — taille diagonale, revers montant, moulinet tournoyant à 360°, frappe plongeante sautée à deux mains avec secousse de caméra — et estocade en course quand on attaque lancé. Les appuis sont mémorisés pour enchaîner sans attendre, chaque coup se réoriente vers le stick et porte le Jedi vers l’avant. Une traînée lumineuse bleue dessine les arcs de lame.
+- Combat au sabre : une bibliothèque de dix-sept mouvements — tailles diagonale et horizontale, revers montant, taille montante, double taille en X, fauchage bas, vrilles dans les deux sens, moulinets puis estocade, hélice au-dessus de la tête — enchaînés au hasard : chaque coup commence là où le précédent a laissé la lame, jamais deux fois le même d’affilée, avec un tempo et une amplitude qui varient. Après trois à six coups, un final ferme le combo (frappe plongeante, vrille sautée, taille montante en saut avec moulinet, fente après trois moulinets). Attaquer lancé ouvre par une estocade ou une vrille en course. Les appuis sont mémorisés, chaque coup se réoriente vers le stick et porte le Jedi vers l’avant ; une traînée bleue dessine les arcs et les moulinets.
+- Sabre : la lame jaillit de l’émetteur en 0,3 s avec un léger dépassement et s’accompagne d’un double moulinet de dégainage, que le Jedi soit à l’arrêt ou en mouvement ; le faisceau est plus large au poignet et s’affine vers la pointe.
 - Garde : lame verticale tenue à deux mains devant le buste, genoux fléchis ; on peut marcher ou courir en garde (allure plafonnée à 2,2 m/s). Les tirs ennemis ne sont pas encore codés.
 - Animation en capture de mouvement (Mixamo) : repos, marche et course mélangés selon la vitesse avec une phase de pas commune. Tête, cou, trois vertèbres, clavicules, bras, bassin, jambes et orteils bougent comme sur l’acteur capturé. La foulée est élargie pour les proportions du Jedi, la cadence est calibrée sur le squelette au démarrage, et une passe de sol plante les semelles.
 - Couches procédurales au-dessus de la capture : inclinaison dans l’accélération et les virages, buste penché en sprint, tête qui regarde dans le virage, bras écartés du manteau, posture campée au repos, sabre porté bas puis traîné en arrière en course.
@@ -66,7 +67,7 @@ Pour régénérer les animations : télécharger https://threejs.org/examples/mo
 - `src/jedi-head.js` : visage et coiffure.
 - `src/character-shading.js` : étalonnage de la lumière sur le personnage.
 - `src/animator.js` : lecture et mélange de la capture, couches procédurales, passe de sol, cinématique inverse des bras, visée du sabre.
-- `src/combat.js` : chorégraphie des attaques et de la garde (poses clés, combos, élans, sauts).
+- `src/combat.js` : chorégraphie des attaques et de la garde (poses clés, enchaînements aléatoires, moulinets, élans, sauts).
 - `src/blade-trail.js` : traînée lumineuse de la lame.
 - `src/mocap-clips.js` : clips générés par `scripts/extract-mocap.mjs`.
 - `src/coat.js` : pans du manteau simulés.

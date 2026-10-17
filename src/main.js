@@ -221,7 +221,7 @@ function init() {
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       if (attackPressed) combat.attack({ speed: motion.speed });
       attackPressed = false;
-      const action = combat.update(dt, { guard });
+      const action = combat.update(dt, { guard, speed: motion.speed });
       // Each strike re-aims towards the stick before it lands.
       if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       motion.update(dt, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
@@ -231,7 +231,8 @@ function init() {
       velocity.set(motion.vx, 0, motion.vz);
       character.update({ dt, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
       cape.update({ dt, time, velocity });
-      saber.update(motion.saber, time, action.flare);
+      // Igniting the blade, moving or not, comes with a quick draw twirl.
+      if (saber.update(motion.saber, time, action.flare) === 'ignite') combat.flourish();
       saber.segment(bladeBase, bladeTip);
       trail.update(dt, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = dt > 0 ? lastTip.distanceTo(bladeTip) / dt : 0;

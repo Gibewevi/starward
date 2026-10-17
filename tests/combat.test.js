@@ -1,76 +1,121 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { CombatController, COMBO, ATTACKS, GUARD_SPEED } from '../src/combat.js';
+import { CombatController, MOVES, GUARD_SPEED, sampleMove } from '../src/combat.js';
 import { createCharacter } from '../src/character.js';
 import { createBladeTrail } from '../src/blade-trail.js';
+import { createSaber, IGNITE_TIME } from '../src/saber.js';
 
+function seeded(seed) {
+  return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+}
 function run(combat, seconds, { press = () => false, guard = false, speed = 0 } = {}) {
   const started = [];
   for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
     if (press(frame)) combat.attack({ speed });
-    combat.update(1 / 60, { guard });
+    combat.update(1 / 60, { guard, speed });
     const name = combat.takeStart();
     if (name) started.push(name);
   }
   return started;
 }
+const strikes = Object.keys(MOVES).filter(name => !MOVES[name].free);
 
-test('repeated presses chain the four strikes, then the combo starts over', () => {
-  const combat = new CombatController();
-  combat.attack();
-  const started = [combat.takeStart(), ...run(combat, 4, { press: frame => frame % 8 === 4 })];
-  assert.deepEqual(started.slice(0, 5), [...COMBO, 'slash']);
+test('every move is well formed and every strike can follow another', () => {
+  for (const [name, move] of Object.entries(MOVES)) {
+    assert.ok(move.keys.length >= 3 && move.keys[0].t === 0 && move.keys.at(-1).t === 1, `${name} keys span the move`);
+    for (let i = 1; i < move.keys.length; i++) assert.ok(move.keys[i].t > move.keys[i - 1].t, `${name} keys are ordered`);
+    for (const twirl of move.twirls ?? []) assert.ok(Number.isInteger(twirl[2]), `${name} twirls end where they began`);
+    if (move.spin) assert.ok(Number.isInteger(move.spin[2]), `${name} spins whole turns, so the facing is kept`);
+  }
+  // From each side a blade can end on, some link and some finisher can start.
+  for (const side of new Set(strikes.map(name => MOVES[name].to))) {
+    for (const role of ['link', 'finisher']) {
+      assert.ok(strikes.some(name => MOVES[name].role.includes(role) && MOVES[name].from.includes(side)), `${role} from ${side}`);
+    }
+  }
+});
+
+test('combos are varied: random flowing chains, no immediate repeats, a finisher at the end', () => {
+  const combat = new CombatController({ random: seeded(11) });
+  const sequence = run(combat, 40, { press: frame => frame % 9 === 0 });
+  assert.ok(sequence.length > 50);
+  assert.ok(new Set(sequence).size >= 12, `distinct strikes: ${new Set(sequence).size}`);
+  for (let i = 1; i < sequence.length; i++) assert.notEqual(sequence[i], sequence[i - 1], 'never the same strike twice in a row');
+  // Split into combos at the finishers: lengths vary between three and six.
+  const lengths = [];
+  let count = 0;
+  for (const name of sequence) {
+    count++;
+    if (MOVES[name].role.includes('finisher')) { lengths.push(count); count = 0; }
+  }
+  assert.ok(lengths.length >= 6 && lengths.every(length => length >= 2 && length <= 6), `combo lengths ${lengths}`);
+  assert.ok(new Set(lengths).size >= 2, 'combo lengths change');
+  // Consecutive strikes inside a combo start where the previous one ended.
+  for (let i = 1; i < sequence.length; i++) {
+    const previous = MOVES[sequence[i - 1]], next = MOVES[sequence[i]];
+    if (previous.role.includes('finisher') || next.role.includes('opener') && !next.role.includes('link')) continue;
+    if (next.role.includes('link') || next.role.includes('finisher')) assert.ok(next.from.includes(previous.to), `${sequence[i - 1]} → ${sequence[i]}`);
+  }
 });
 
 test('a single press plays one strike and hands the arms back to locomotion', () => {
-  const combat = new CombatController();
+  const combat = new CombatController({ random: seeded(5) });
   combat.attack();
-  combat.takeStart();
-  run(combat, ATTACKS.slash.duration * 0.5);
+  const first = combat.takeStart();
+  run(combat, MOVES[first].duration * 0.5);
   assert.ok(combat.busy && combat.output.weight === 1);
-  const started = run(combat, 1.2);
-  assert.deepEqual(started, []);
+  assert.deepEqual(run(combat, 1.4), []);
   assert.ok(!combat.busy && combat.output.weight === 0, 'the strike ends and its pose fades out');
 });
 
-test('a press shortly after a strike continues the combo; a late one restarts it', () => {
-  const quick = new CombatController();
-  quick.attack(); quick.takeStart();
-  run(quick, ATTACKS.slash.duration + 0.1);
-  quick.attack();
-  assert.equal(quick.takeStart(), 'backhand');
-  const late = new CombatController();
-  late.attack(); late.takeStart();
-  run(late, ATTACKS.slash.duration + 0.6);
-  late.attack();
-  assert.equal(late.takeStart(), 'slash');
-});
-
-test('running opens with a dashing cut that carries the hero forward', () => {
-  const combat = new CombatController();
-  combat.attack({ speed: 4 });
-  assert.equal(combat.takeStart(), 'dash');
-  let travelled = 0;
-  for (let frame = 0; frame < 30; frame++) travelled += combat.update(1 / 60).drive / 60;
-  assert.ok(travelled > 1, `dash distance ${travelled}`);
-});
-
-test('the spin turns a full circle and the slam leaps, lands and shakes the view', () => {
-  const combat = new CombatController();
-  combat.start('spin', 2);
-  let spin = 0;
-  for (let frame = 0; frame < 40; frame++) spin = Math.max(spin, combat.update(1 / 60).spin);
-  assert.ok(Math.abs(spin - Math.PI * 2) < 1e-6, 'one full turn');
-  combat.start('slam', 3);
-  let lift = 0, shake = 0, trail = 0;
-  for (let frame = 0; frame < 60; frame++) {
-    const out = combat.update(1 / 60);
-    lift = Math.max(lift, out.lift); shake = Math.max(shake, out.shake); trail = Math.max(trail, out.trail);
+test('running opens with a dashing move that carries the hero forward', () => {
+  for (const seed of [1, 2, 3, 4]) {
+    const combat = new CombatController({ random: seeded(seed) });
+    combat.attack({ speed: 4 });
+    const name = combat.takeStart();
+    assert.ok(MOVES[name].role.includes('run'), name);
+    let travelled = 0;
+    for (let frame = 0; frame < 30; frame++) travelled += combat.update(1 / 60).drive / 60;
+    assert.ok(travelled > 0.8, `${name} distance ${travelled}`);
   }
-  assert.ok(lift > 0.15, 'the hero leaves the ground');
-  assert.equal(combat.output.lift, 0, 'and lands');
-  assert.ok(shake > 0.9 && trail > 0.9);
+});
+
+test('moulinets spin the blade full circles and the wrist circles with it', () => {
+  const pose = { hand: new THREE.Vector3(), blade: new THREE.Vector3(), left: new THREE.Vector3(), grip: 0, yaw: 0, pitch: 0, crouch: 0 };
+  for (const name of ['twirlThrust', 'helicopter', 'lunge', 'draw']) {
+    const move = MOVES[name];
+    const [from, to] = move.twirls[0];
+    let turned = 0, previous = null, wrist = 0;
+    for (let i = 0; i <= 200; i++) {
+      const t = from + (to - from) * i / 200;
+      sampleMove(move, t, pose);
+      if (previous) turned += previous.angleTo(pose.blade);
+      previous = pose.blade.clone();
+      wrist = Math.max(wrist, pose.hand.distanceTo(sampleMove({ ...move, twirls: [] }, t, { ...pose, hand: new THREE.Vector3(), blade: new THREE.Vector3(), left: new THREE.Vector3() }).hand));
+    }
+    assert.ok(turned > Math.PI * 2 * 0.8 * Math.abs(move.twirls[0][2]) * 0.5, `${name} turns the blade (${turned.toFixed(1)} rad)`);
+    assert.ok(wrist > 0.01 && wrist < 0.06, `${name} wrist circle ${wrist}`);
+  }
+});
+
+test('spins turn whole circles; finishers leap, land and shake the view', () => {
+  const combat = new CombatController({ random: seeded(9) });
+  combat.start('spin');
+  let spin = 0;
+  for (let frame = 0; frame < 60 && combat.busy; frame++) spin = Math.max(spin, combat.update(1 / 60).spin);
+  assert.ok(Math.abs(spin - Math.PI * 2) < 1e-6, 'one full turn');
+  for (const name of ['slam', 'spinSlam', 'risingLeap']) {
+    combat.reset();
+    combat.start(name);
+    let lift = 0, shake = 0;
+    while (combat.busy) {
+      const out = combat.update(1 / 60);
+      lift = Math.max(lift, out.lift); shake = Math.max(shake, out.shake);
+    }
+    assert.ok(lift > 0.15 && shake > 0.4, `${name} leaps and lands`);
+    assert.equal(combat.output.lift, 0);
+  }
 });
 
 test('holding guard raises a two-handed guard that caps the pace and blocks attacks', () => {
@@ -85,17 +130,51 @@ test('holding guard raises a two-handed guard that caps the pace and blocks atta
   assert.ok(!combat.guarding && combat.output.maxSpeed === Infinity, 'releasing restores full speed');
 });
 
+test('the draw twirl keeps the legs free and gives way to a strike', () => {
+  const combat = new CombatController({ random: seeded(4) });
+  assert.ok(combat.flourish());
+  combat.update(1 / 60);
+  assert.equal(combat.takeStart(), 'draw');
+  const out = combat.update(1 / 60);
+  assert.ok(!combat.busy && out.inputScale === 1 && out.turnScale === 1 && out.drive === 0 && out.engaged);
+  combat.attack();
+  assert.ok(combat.busy && combat.takeStart() !== 'draw', 'an attack interrupts the flourish');
+  assert.equal(combat.flourish(), false, 'no flourish over a strike');
+});
+
+test('the blade shoots out of the emitter, overshoots slightly and settles', () => {
+  const scene = new THREE.Scene();
+  const socket = new THREE.Object3D();
+  scene.add(socket);
+  const saber = createSaber({ socket, scene });
+  assert.equal(saber.update(1, 0), null);
+  assert.equal(saber.update(0, 0.1), 'retract');
+  for (let time = 0.1; time < 0.6; time += 1 / 60) saber.update(0, time);
+  assert.equal(saber.blade.visible, false, 'retracted into the hilt');
+  assert.equal(saber.update(1, 0.62), 'ignite');
+  let peak = 0;
+  for (let time = 0.62; time < 0.62 + IGNITE_TIME * 1.5; time += 1 / 60) {
+    saber.update(1, time);
+    peak = Math.max(peak, saber.blade.scale.y);
+  }
+  assert.ok(peak > 1.02 && peak < 1.1, `overshoot ${peak}`);
+  assert.ok(Math.abs(saber.blade.scale.y - 1) < 1e-6);
+  // The beam is widest at the emitter and tapers to the tip.
+  const core = saber.blade.children[0].geometry.parameters;
+  assert.ok(core.radiusBottom > core.radiusTop * 1.5);
+});
+
 test('the rig follows the choreography: the sword hand and blade hit their marks', () => {
   const character = createCharacter();
-  const combat = new CombatController();
+  const combat = new CombatController({ random: seeded(21) });
   character.root.position.set(2, 0, -1);
   const hand = new THREE.Vector3(), target = new THREE.Vector3(), shoulder = new THREE.Vector3();
   const blade = new THREE.Vector3(), quaternion = new THREE.Quaternion();
   combat.attack();
   let checked = 0;
-  for (let frame = 0; frame < 200; frame++) {
+  for (let frame = 0; frame < 400; frame++) {
     if (frame % 9 === 4) combat.attack();
-    const action = combat.update(1 / 60, { guard: frame > 170 });
+    const action = combat.update(1 / 60, { guard: frame > 370 });
     character.root.rotation.y = 0.4 + action.spin;
     character.update({ dt: 1 / 60, time: frame / 60, speed: 0, action });
     assert.ok([...character.skeleton.boneMatrices].every(Number.isFinite));
@@ -107,7 +186,7 @@ test('the rig follows the choreography: the sword hand and blade hit their marks
     blade.set(0, 1, 0).applyQuaternion(character.saberSocket.getWorldQuaternion(quaternion));
     assert.ok(blade.angleTo(action.blade.clone().applyQuaternion(character.root.quaternion)) < 0.01, 'the blade points as choreographed');
   }
-  assert.ok(checked > 60);
+  assert.ok(checked > 100);
 });
 
 test('the blade trail sweeps an arc and fades away', () => {
@@ -121,7 +200,6 @@ test('the blade trail sweeps an arc and fades away', () => {
   }
   assert.ok(trail.samples > 30, 'sub-steps fill fast swings');
   assert.ok(trail.mesh.visible && trail.mesh.geometry.attributes.position.array.every(Number.isFinite));
-  // Every outer vertex stays on the circle swept by the tip.
   const positions = trail.mesh.geometry.attributes.position;
   for (let i = 0; i < trail.samples; i++) assert.ok(Math.abs(Math.hypot(positions.getX(i * 2 + 1), positions.getZ(i * 2 + 1)) - 1) < 1e-3);
   for (let frame = 0; frame < 20; frame++) trail.update(1 / 60, base, tip, 0);

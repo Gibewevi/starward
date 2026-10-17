@@ -98,7 +98,7 @@ function step(dt) {
   if (character.root.position.length() > 20) { character.root.position.set(0, 0, 0); coat.reset(); }
   character.update({ dt, time: state.time, speed: velocity.length(), runBlend, sprintIntent: state.gait === 'run' && !action.engaged, action });
   coat.update({ dt, time: state.time, velocity });
-  saber.update(state.ignition ?? 1, state.time, action.flare);
+  if (saber.update(state.ignition ?? 1, state.time, action.flare) === 'ignite') combat.flourish();
   saber.segment(bladeBase, bladeTip);
   trail.update(dt, bladeBase, bladeTip, action.trail);
   lighting.follow(character.root.position);
