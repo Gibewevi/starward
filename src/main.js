@@ -616,7 +616,7 @@ function init() {
       const strikeKey = `${combat.sequence}:${combat.hits}`;
       if (strikeKey !== stoppedSequence) { stopped.clear(); stoppedSequence = strikeKey; }
       troopers.forEach((trooper, index) => {
-        const struck = saber.extension > 0.6 && bladeReady && !down ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
+        const struck = saber.extension > 0.6 && bladeReady && !down ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
         if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
         if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {

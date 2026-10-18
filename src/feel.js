@@ -32,9 +32,10 @@ export const FEEL = {
   hit: {
     toughness: 1, // blade blows a standing trooper takes (burnt, staggered) before the blade cuts him apart
     knockback: 3.4, // m/s per unit of blow: a hit shoves a standing trooper back
+    maxKnock: 2.6, // m/s: never more, however many parts one swing touches (about half a metre of slide)
     spin: 2.6, // rad/s per unit of blow: and turns him away from it
     carry: 0.38, // share of the blade's speed a felled body carries away
-    maxCarry: 4.5, // m/s
+    maxCarry: 3.4, // m/s
     slide: 1.3, // seconds the floor stays slippery under a felled body
   },
   pull: {

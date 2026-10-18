@@ -343,7 +343,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   // Throwing a grenade (the left hand), and the grenade in that hand.
   let throwing = null, heldGrenade = null;
   // Blade blows he has taken standing: the first only burns and staggers him.
-  let blows = 0, sparing = false, woundedAt = -Infinity;
+  let blows = 0, sparing = false, woundedAt = -Infinity, woundingBlow = null;
   // Walking over to his rifle.
   let fetching = null;
   // Motion capture drives his steps; inertia carries his body.
@@ -456,6 +456,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = null;
     blows = 0;
     woundedAt = -Infinity;
+    woundingBlow = null;
     feed.length = 0;
     twitches = [];
     muscles = [];
@@ -940,7 +941,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   }
 
   /** Staggers the standing trooper where and as hard as he was hit (once per sweep). */
-  let pending = null;
+  let pending = null, lastStagger = -Infinity;
   function react(velocity, contact, strength, part = 'torso') {
     if (!pending || strength > pending.strength) pending = { velocity: velocity.clone(), contact: contact.clone(), strength, part };
   }
@@ -948,7 +949,11 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (trooper.dead || trooper.fallen) return;
     const r = reaction;
     const push = local(velocity).setY(0);
-    const force = Math.min(1.6, push.length() / 4) * strength;
+    // One swing touches several parts over a few frames: the body reels from
+    // the first contact, the next ones only add a little.
+    const again = clock - lastStagger < 0.25;
+    lastStagger = clock;
+    const force = Math.min(1.6, push.length() / 4) * strength * (again ? 0.3 : 1);
     push.normalize();
     const at = local(temp.subVectors(contact, trooper.root.position));
     const side = /[LR]$/.test(part) ? part.slice(-1) : at.x > 0 ? 'L' : 'R', sign = side === 'L' ? 1 : -1;
@@ -991,11 +996,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     }
     r.push.addScaledVector(world(push), 0.22 * force * (region === 'arm' ? 0.4 : region === 'head' ? 0.6 : 1));
     // Shoved back along the blow and turned away from it, around where it landed.
-    r.knock.addScaledVector(world(push), FEEL.hit.knockback * force * (region === 'arm' ? 0.55 : region === 'head' ? 0.7 : 1));
+    r.knock.addScaledVector(world(push), FEEL.hit.knockback * force * (region === 'arm' ? 0.55 : region === 'head' ? 0.7 : 1)).clampLength(0, FEEL.hit.maxKnock);
+    r.push.clampLength(0, 0.6);
     r.spin += (at.z * push.x - at.x * push.z) / Math.max(0.12, Math.hypot(at.x, at.z)) * FEEL.hit.spin * force + (random() - 0.5) * 0.5 * force;
+    r.spin = THREE.MathUtils.clamp(r.spin, -3.5, 3.5);
     r.imbalance += (region === 'leg' ? 0.3 : 0.2) * force;
-    // Too many blows: his legs go and he falls, still alive.
-    if (r.imbalance > 1) fall('imbalance', velocity);
+    // Too many blows: his legs go and he falls, still alive — but the first,
+    // wounding swing only makes him reel.
+    if (sparing) r.imbalance = Math.min(r.imbalance, 0.85);
+    else if (r.imbalance > 1) fall('imbalance', velocity);
   }
 
   /** A hand goes to a fresh burn on his front, if one is free to. */
@@ -1081,7 +1090,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // A body felled by the blade carries the blow and the shove already under
     // way: it does not drop where it was struck, it is thrown and slides.
     if (cause !== 'force' && cause !== 'pull') {
-      const carry = new THREE.Vector3().copy(velocity).setY(0).multiplyScalar(FEEL.hit.carry).clampLength(0, FEEL.hit.maxCarry).add(reaction.knock);
+      const carry = new THREE.Vector3().copy(velocity).setY(0).multiplyScalar(FEEL.hit.carry).add(reaction.knock).clampLength(0, FEEL.hit.maxCarry);
       if (carry.lengthSq() > 0.04) {
         carry.y = 0.35 + carry.length() * 0.12;
         const indices = joinedIndices();
@@ -2019,7 +2028,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
    * Tests the blade's sweep since the last frame against every part and
    * applies cuts, scorches, armour hits and reactions. Returns the events.
    */
-  function strike(previousBase, previousTip, bladeBase, bladeTip, dt, time = 0) {
+  /** blow: which of the hero's strikes this is (all its frames are the one blow). */
+  function strike(previousBase, previousTip, bladeBase, bladeTip, dt, time = 0, blow = null) {
     trooper.events = [];
     if (!(dt > 0)) return trooper.events;
     const steps = 8;
@@ -2059,10 +2069,16 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     pending = null;
     // Standing and still fresh, he is burnt and staggered — not yet cut apart.
     // (the whole swing that wounded him counts as that one blow)
-    sparing = !trooper.dead && !trooper.fallen && (blows < FEEL.hit.toughness || clock - woundedAt < 0.25);
+    const sameBlow = blow !== null ? blow === woundingBlow : clock - woundedAt < 0.25;
+    sparing = !trooper.dead && !trooper.fallen && (blows < FEEL.hit.toughness || sameBlow);
     for (const hit of hits) resolve(hit, time);
     if (pending) stagger(pending);
-    if (trooper.events.some(event => event.wound) && clock - woundedAt >= 0.25) { blows++; woundedAt = clock; }
+    // The same swing keeps touching him: it is still that one blow.
+    if (trooper.events.some(event => event.wound)) {
+      if (blow !== null ? blow !== woundingBlow : clock - woundedAt >= 0.25) blows++;
+      woundedAt = clock;
+      woundingBlow = blow;
+    }
     return trooper.events;
   }
 

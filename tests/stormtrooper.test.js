@@ -770,3 +770,31 @@ test('the first blade blow only burns and staggers him; the next one cuts', () =
   assert.ok(second.some(event => event.type === 'cut') && trooper.severed.size > 0, `then the blade cuts (${second.map(event => event.type).join()})`);
   FEEL.hit.toughness = 0;
 });
+
+test('one swing touching him all over is still one blow: he reels back a little, never flies off', () => {
+  FEEL.hit.toughness = 1;
+  const state = fixture(73);
+  state.run(0.4);
+  const { trooper } = state;
+  const start = trooper.root.position.clone();
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion);
+  const side = new THREE.Vector3(1, 0, 0).applyQuaternion(trooper.root.quaternion);
+  // A long sweep down his body over half a second, touching part after part.
+  const events = [];
+  for (let frame = 0; frame < 30; frame++) {
+    const height = 1.5 - frame * 0.045, x0 = (frame % 2 ? 0.3 : -0.3);
+    const a = trooper.root.position.clone().setY(height).addScaledVector(side, x0).addScaledVector(forward, -0.4);
+    const b = a.clone().addScaledVector(forward, 0.9);
+    const a2 = a.clone().addScaledVector(side, -x0 * 2), b2 = b.clone().addScaledVector(side, -x0 * 2);
+    state.time += 1 / 60;
+    trooper.update(1 / 60, state.time);
+    events.push(...trooper.strike(a, b, a2, b2, 1 / 60, state.time, 'swing-1'));
+  }
+  assert.ok(events.filter(event => event.wound).length >= 3, 'it touched him again and again');
+  assert.equal(trooper.severed.size, 0, 'nothing cut');
+  assert.ok(!trooper.fallen, 'still on his feet');
+  state.run(1.5);
+  const moved = trooper.root.position.clone().setY(0).distanceTo(start.setY(0));
+  assert.ok(moved < 1.2, `reeled back ${moved.toFixed(2)} m, no flight`);
+  FEEL.hit.toughness = 0;
+});
