@@ -342,6 +342,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   let lifting = null;
   // Throwing a grenade (the left hand), and the grenade in that hand.
   let throwing = null, heldGrenade = null;
+  // Blade blows he has taken standing: the first only burns and staggers him.
+  let blows = 0, sparing = false, woundedAt = -Infinity;
   // Walking over to his rifle.
   let fetching = null;
   // Motion capture drives his steps; inertia carries his body.
@@ -452,6 +454,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
     collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = null;
+    blows = 0;
+    woundedAt = -Infinity;
     feed.length = 0;
     twitches = [];
     muscles = [];
@@ -2053,8 +2057,12 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       before = now;
     }
     pending = null;
+    // Standing and still fresh, he is burnt and staggered — not yet cut apart.
+    // (the whole swing that wounded him counts as that one blow)
+    sparing = !trooper.dead && !trooper.fallen && (blows < FEEL.hit.toughness || clock - woundedAt < 0.25);
     for (const hit of hits) resolve(hit, time);
     if (pending) stagger(pending);
+    if (trooper.events.some(event => event.wound) && clock - woundedAt >= 0.25) { blows++; woundedAt = clock; }
     return trooper.events;
   }
 
@@ -2095,7 +2103,18 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.cut, random) * THREE.MathUtils.clamp(0.5 + speed / 12, 0.6, 1.2)), speed: 2 + Math.min(speed, 8) * 0.5 });
     effects?.flash(hit.point, Math.min(1.2, speed / 5));
     flashPart(body, 1);
-    if (name === 'blaster') {
+    if (sparing && name !== 'blaster') {
+      // A wounding blow: a scorch across the armour, a spray, a plate may
+      // fly, and he reels from it — limbs stay on.
+      event.type = 'slash';
+      event.wound = true;
+      scorch(body, hit);
+      effects?.burst(hit.point, { normal: hit.normal, power: 0.4 });
+      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.slash, random)), speed: 1.5 + Math.min(speed, 8) * 0.4 });
+      chip(body, hit.point, hit.velocity, FEEL.armor.slash);
+      react(hit.velocity, hit.point, /^(torso|pelvis|head)$/.test(name) ? 1.15 : 1, name);
+      if (name === 'torso' || name === 'pelvis') pressWound(hit.point);
+    } else if (name === 'blaster') {
       event.type = 'disarm';
       if (trooper.holding) dropBlaster(hit.velocity);
       else ragdoll.push(body.indices, hit.velocity.clone().clampLength(0, 6).multiplyScalar(0.3));

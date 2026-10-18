@@ -610,7 +610,9 @@ function init() {
       for (const cue of thoughts.cues) audio.alert(cue.type === 'alert' ? '!' : '?');
       for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
       collideSquad(troopers);
-      if (combat.sequence !== stoppedSequence) { stopped.clear(); stoppedSequence = combat.sequence; }
+      // One hit stop per enemy and per strike (a new strike, a new one).
+      const strikeKey = `${combat.sequence}:${combat.hits}`;
+      if (strikeKey !== stoppedSequence) { stopped.clear(); stoppedSequence = strikeKey; }
       troopers.forEach((trooper, index) => {
         const struck = saber.extension > 0.6 && bladeReady && !down ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
         if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
@@ -622,13 +624,13 @@ function init() {
           // A short hit stop on a clean cut, a little longer on a felling blow
           // — once per enemy and per attack sequence, so it never drags.
           const felling = event.lethal || event.felled;
-          if ((felling || event.type === 'cut') && !stopped.has(index)) {
+          if (heavy && !stopped.has(index)) {
             stopped.add(index);
-            const [hold, recover] = felling ? FEEL.hitStop.felling : FEEL.hitStop.cut;
+            const [hold, recover] = felling ? FEEL.hitStop.felling : event.type === 'cut' ? FEEL.hitStop.cut : FEEL.hitStop.blow;
             stopFor(hold, recover);
           }
           shove(event.velocity, felling ? FEEL.camera.kickFelling : heavy ? FEEL.camera.kick : 0.012);
-          if (felling || event.type === 'cut') punch(FEEL.camera.punch * (felling ? 1.8 : 1));
+          if (heavy) punch(FEEL.camera.punch * (felling ? 1.8 : event.type === 'cut' ? 1 : 0.7));
           impactShake = Math.max(impactShake, felling ? 0.3 : heavy ? 0.14 : 0.05);
           audio.impact(heavy ? 1 : 0.35);
         }
@@ -711,7 +713,7 @@ function init() {
     grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
     explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },
     set guard(value) { forcedGuard = value; },
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }

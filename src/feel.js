@@ -17,9 +17,11 @@ export const FEEL = {
     slash: [18, 60],
   },
   hitStop: {
-    // At most one per enemy and per attack sequence: [hold, recover] seconds.
-    cut: [0.02, 0.05],
-    felling: [0.032, 0.075],
+    // Once per enemy and per strike: [hold, recover] seconds. The action
+    // freezes for the hold, then eases back to speed.
+    blow: [0.055, 0.07], // the blade bites without cutting through
+    cut: [0.075, 0.08],
+    felling: [0.1, 0.12],
   },
   camera: { kick: 0.04, kickFelling: 0.065, punch: 0.012, kickPush: 0.07, punchPush: 0.02 },
   force: {
@@ -28,6 +30,7 @@ export const FEEL = {
     pullAt: 0.3,
   },
   hit: {
+    toughness: 1, // blade blows a standing trooper takes (burnt, staggered) before the blade cuts him apart
     knockback: 3.4, // m/s per unit of blow: a hit shoves a standing trooper back
     spin: 2.6, // rad/s per unit of blow: and turns him away from it
     carry: 0.38, // share of the blade's speed a felled body carries away

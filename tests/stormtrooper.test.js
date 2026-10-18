@@ -4,6 +4,10 @@ import * as THREE from 'three';
 import { createStormtrooper, collideSquad } from '../src/stormtrooper.js';
 import { createImpactEffects } from '../src/impact-effects.js';
 import { Ragdoll } from '../src/ragdoll.js';
+import { FEEL } from '../src/feel.js';
+
+// These tests cut through fresh troopers: no wounding first blow here (tested on its own below).
+FEEL.hit.toughness = 0;
 
 function seeded(seed) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -748,4 +752,21 @@ test('pulled while down but alive, he is hauled to his feet first, then brought 
   assert.equal(trooper.state, 'held');
   assert.ok(trooper.root.position.distanceTo(point) < 0.2, 'and brought in, hanging before the hero');
   assert.ok(trooper.reaction.choke > 0.9, 'choking');
+});
+
+test('the first blade blow only burns and staggers him; the next one cuts', () => {
+  FEEL.hit.toughness = 1;
+  const state = fixture(71);
+  state.run(0.4);
+  const { trooper } = state;
+  const arm = state.particle('EL').lerp(state.particle('WL'), 0.5);
+  const side = new THREE.Vector3(1, 0, 0).applyQuaternion(trooper.root.quaternion);
+  const first = state.sweep(arm, new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion), side.clone().negate(), 6, 6);
+  assert.ok(first.some(event => event.wound), first.map(event => event.type).join());
+  assert.equal(trooper.severed.size, 0, 'nothing comes off');
+  assert.ok(!trooper.dead && !trooper.fallen);
+  state.run(0.5);
+  const second = state.sweep(state.particle('EL').lerp(state.particle('WL'), 0.5), new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion), side.clone().negate(), 6, 6);
+  assert.ok(second.some(event => event.type === 'cut') && trooper.severed.size > 0, `then the blade cuts (${second.map(event => event.type).join()})`);
+  FEEL.hit.toughness = 0;
 });
