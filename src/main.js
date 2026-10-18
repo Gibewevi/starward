@@ -158,7 +158,8 @@ function init() {
   const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyE'];
   let attackPressed = false, padAttack = false;
   // Free saber: LT held + right stick, or the right mouse button held + the
-  // pointer around the hero; R3, E or a middle click rolls the blade.
+  // pointer around the hero (up raises the blade, down lowers it, left and
+  // right carry it to his sides); R3, E or a middle click rolls the blade.
   const control = new SaberControl();
   const pointer = { x: 0, y: 0, seen: false, fight: false, twirl: false };
   let fighting = false, padTwirl = false;
@@ -300,8 +301,7 @@ function init() {
       character.saberSocket.getWorldQuaternion(socketQuaternion);
       bladeNow.set(0, 1, 0).applyQuaternion(socketQuaternion);
       const free = control.update(sim, {
-        active: fighting, heading: motion.heading, twirl, blade: bladeNow,
-        aimX: inputRight.x * aimX + inputForward.x * aimY, aimZ: inputRight.y * aimX + inputForward.y * aimY,
+        active: fighting, heading: motion.heading, twirl, blade: bladeNow, stickX: aimX, stickY: aimY,
       });
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
@@ -311,7 +311,6 @@ function init() {
       const choreography = combat.update(sim, { guard: guard && !free.engaged, speed: motion.speed });
       if (free.engaged) combat.adopt(free, free.weight);
       const action = free.engaged && !combat.busy ? free : choreography;
-      if (action === free) motion.face(free.heading);
       // Each strike re-aims towards the stick before it lands.
       if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
@@ -393,7 +392,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: control.engaged ? control.output.name : combat.output.name, guard: combat.guard, free: control.engaged ? { weight: control.weight, power: control.power, twirl: control.twirling, azimuth: control.azimuth, radius: control.radius } : null, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: control.engaged ? control.output.name : combat.output.name, guard: combat.guard, free: control.engaged ? { weight: control.weight, power: control.power, twirl: control.twirling, stick: control.stick } : null, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }

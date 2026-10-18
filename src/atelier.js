@@ -57,7 +57,7 @@ const lighting = createLighting(scene, views[0].renderer);
 createStage(scene);
 const saber = createSaber({ socket: character.saberSocket, scene });
 const combat = new CombatController();
-// Free saber control, driven by state.free = { active, x, z, twirl } (the stick on the floor).
+// Free saber control, driven by state.free = { active, x, y, twirl } (the right stick: right and up).
 const control = new SaberControl();
 const socketQuaternion = new THREE.Quaternion(), bladeNow = new THREE.Vector3();
 const trail = createBladeTrail(scene);
@@ -106,9 +106,9 @@ function step(dt) {
   if (state.free || control.engaged) {
     character.saberSocket.getWorldQuaternion(socketQuaternion);
     bladeNow.set(0, 1, 0).applyQuaternion(socketQuaternion);
-    const free = control.update(dt, { active: Boolean(state.free?.active), aimX: state.free?.x ?? 0, aimZ: state.free?.z ?? 0, twirl: Boolean(state.free?.twirl), heading: state.turn, blade: bladeNow });
+    const free = control.update(dt, { active: Boolean(state.free?.active), stickX: state.free?.x ?? 0, stickY: state.free?.y ?? 0, twirl: Boolean(state.free?.twirl), heading: state.turn, blade: bladeNow });
     if (state.free) state.free.twirl = false;
-    if (free.engaged) { action = free; state.turn = free.heading; }
+    if (free.engaged) action = free;
   }
   character.root.rotation.y = state.turn + action.spin;
   velocity.set(Math.sin(state.turn), 0, Math.cos(state.turn)).multiplyScalar(Math.min(speed, action.maxSpeed) * action.inputScale + action.drive);
