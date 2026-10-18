@@ -341,9 +341,11 @@ function init() {
   function detonate(at) {
     const blast = FEEL.blast;
     explosions.spawn(at);
-    effects.blast(at.clone().setY(0.25), { sparks: 230, embers: 120, speed: 15 });
+    effects.blast(at.clone().setY(0.25), { sparks: 200, embers: 170, speed: 12 });
+    // A few that fly much further, long burning streaks.
+    effects.blast(at.clone().setY(0.35), { sparks: 45, embers: 0, speed: 24 });
     debris.blast(at);
-    debris.fragments(at, 12 + Math.round(Math.random() * 6));
+    debris.fragments(at, 18 + Math.round(Math.random() * 8));
     for (const trooper of troopers) {
       const offset = whereIs(trooper).sub(at).setY(0), distance = offset.length();
       if (distance > blast.radius) continue;

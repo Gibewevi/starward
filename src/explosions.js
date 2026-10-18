@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ease } from './tween.js';
 
 /**
@@ -9,6 +10,11 @@ import { ease } from './tween.js';
  * view pixel for pixel. It plays fast at first and slower as the smoke
  * spreads, cross-fading between frames; its hottest parts are pushed above
  * white so they bloom.
+ *
+ * Greasy clouds burst out of the blaze, live and in 3D: clusters of dark,
+ * sooty puffs — the cauliflower smoke of the reference — that glow with the
+ * fire at first, blacken, drift out and up, swell, and thin away puff by puff.
+ * Being real geometry, the blast's own light paints their undersides orange.
  *
  * Around it, all live: a blinding flash that lights the room and fades from
  * white to orange, a flare, a shockwave racing over the floor, a slower ring
@@ -128,6 +134,89 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
   });
   let next = 0;
   const white = new THREE.Color(1, 0.95, 0.85), orange = new THREE.Color(1, 0.45, 0.12);
+  // The greasy clouds: every puff of every cloud is one instance.
+  const PUFFS = 240;
+  // A lumpy ball: the same bumps wherever it is drawn, smooth-shaded.
+  const lumpy = (() => {
+    const geometry = mergeVertices(new THREE.IcosahedronGeometry(1, 2));
+    const p = geometry.attributes.position, v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      const bump = Math.sin(v.x * 12.9898 + v.y * 78.233 + v.z * 37.719) * 43758.5453;
+      v.multiplyScalar(0.84 + 0.3 * (bump - Math.floor(bump)));
+      p.setXYZ(i, v.x, v.y, v.z);
+    }
+    geometry.computeVertexNormals();
+    return geometry;
+  })();
+  const puffMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
+  // A puff glows by itself while its colour is still fire-orange (red well above blue).
+  puffMaterial.onBeforeCompile = shader => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      #ifdef USE_INSTANCING_COLOR
+        totalEmissiveRadiance += vColor.rgb * max(0.0, vColor.r - vColor.b - 0.12) * 3.0;
+      #endif`);
+  };
+  const puffs = new THREE.InstancedMesh(lumpy, puffMaterial, PUFFS);
+  puffs.name = 'Explosion clouds';
+  puffs.castShadow = true;
+  puffs.receiveShadow = true;
+  puffs.frustumCulled = false;
+  puffs.count = 0;
+  puffs.setColorAt(0, new THREE.Color());
+  scene.add(puffs);
+  const clouds = [];
+  const glowing = new THREE.Color(1, 0.4, 0.08), soot = new THREE.Color(0.03, 0.027, 0.025), thin = new THREE.Color(0.075, 0.07, 0.066);
+  function burstClouds(at, count = 6 + Math.floor(random() * 3)) {
+    for (let i = 0; i < count; i++) {
+      // Most burst out round the blaze; one or two crown it.
+      const crown = i < 2, angle = i / count * Math.PI * 2 + (random() - 0.5) * 1.1, out = crown ? random() * 0.3 : 0.3 + random() * 0.55;
+      const cloud = {
+        position: new THREE.Vector3(at.x + Math.cos(angle) * out, crown ? 1.1 + random() * 0.4 : 0.45 + random() * 0.8, at.z + Math.sin(angle) * out),
+        velocity: new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle)).multiplyScalar(1.4 + random() * 2.2).setY(1 + random() * 2.2),
+        age: 0, life: 2 + random() * 1.3, delay: random() * 0.12, puffs: [],
+      };
+      // Cauliflower: many lumps of every size, packed together.
+      const lumps = 8 + Math.floor(random() * 6);
+      for (let j = 0; j < lumps; j++) {
+        const offset = new THREE.Vector3(random() - 0.5, (random() - 0.35) * 0.75, random() - 0.5).multiplyScalar(0.55);
+        cloud.puffs.push({ offset, size: 0.12 + random() ** 1.5 * 0.24, delay: random() * 0.14, fade: 0.45 + random() * 0.48, turn: new THREE.Quaternion().setFromEuler(new THREE.Euler(random() * 6, random() * 6, random() * 6)) });
+      }
+      clouds.push(cloud);
+    }
+    while (clouds.reduce((sum, cloud) => sum + cloud.puffs.length, 0) > PUFFS) clouds.shift();
+  }
+  const matrix = new THREE.Matrix4(), scale = new THREE.Vector3(), puffAt = new THREE.Vector3(), puffColor = new THREE.Color();
+  function updateClouds(dt) {
+    let index = 0;
+    for (let i = clouds.length - 1; i >= 0; i--) if (clouds[i].age > clouds[i].life + clouds[i].delay) clouds.splice(i, 1);
+    for (const cloud of clouds) {
+      cloud.age += dt;
+      const t = cloud.age - cloud.delay;
+      if (t < 0) continue;
+      // Thrown out of the blaze, braked by the air, then lifted by the heat.
+      cloud.velocity.x *= Math.exp(-2.6 * dt); cloud.velocity.z *= Math.exp(-2.6 * dt);
+      cloud.velocity.y = cloud.velocity.y * Math.exp(-2.2 * dt) + 0.35 * dt;
+      cloud.position.addScaledVector(cloud.velocity, dt);
+      const p = t / cloud.life, swell = 1 + 0.55 * ease.outCubic(Math.min(1, p * 1.4));
+      // Glowing with the fire at first, then black soot, thinning to grey.
+      puffColor.copy(glowing).lerp(soot, ease.outQuad(Math.min(1, t / 0.45))).lerp(thin, Math.max(0, (p - 0.4) / 0.6) * 0.7);
+      for (const puff of cloud.puffs) {
+        const grow = ease.outBack(Math.min(1, Math.max(0, t - puff.delay) / 0.28));
+        const fade = p < puff.fade ? 1 : 1 - ease.inCubic(Math.min(1, (p - puff.fade) / Math.max(0.05, 1 - puff.fade)));
+        const size = puff.size * grow * swell * fade;
+        if (size < 0.004) continue;
+        puffAt.copy(cloud.position).addScaledVector(puff.offset, swell);
+        matrix.compose(puffAt, puff.turn, scale.setScalar(size));
+        puffs.setMatrixAt(index, matrix);
+        puffs.setColorAt(index, puffColor);
+        if (++index >= PUFFS) break;
+      }
+    }
+    puffs.count = index;
+    puffs.instanceMatrix.needsUpdate = true;
+    if (puffs.instanceColor) puffs.instanceColor.needsUpdate = true;
+  }
   const hot = new THREE.Color(3, 2.6, 2.1), warm = new THREE.Color(2.4, 0.9, 0.25);
 
   /** Uses the Blender flipbook (texture + its metadata). */
@@ -148,8 +237,8 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
   function spawn(at, { power = 1 } = {}) {
     const slot = pool[next];
     next = (next + 1) % pool.length;
-    // Drawn larger than the simulated cloud: a grenade blast that fills the room.
-    Object.assign(slot, { age: 0, power, live: true, scorchAge: 0, spin: random() < 0.5 ? 1 : -1, size: 1.25 + random() * 0.15 });
+    // A compact, dense blaze.
+    Object.assign(slot, { age: 0, power, live: true, scorchAge: 0, spin: random() < 0.5 ? 1 : -1, size: 0.92 + random() * 0.12 });
     slot.at.copy(at).setY(0);
     slot.billboard.visible = Boolean(map);
     slot.reflection.visible = Boolean(map);
@@ -157,10 +246,12 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
     slot.scorch.position.copy(slot.at).setY(0.004);
     slot.scorch.scale.setScalar(1.1 + random() * 0.4);
     slot.scorch.rotation.z = random() * Math.PI;
+    burstClouds(slot.at);
     return slot;
   }
   const toCamera = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3(), view = new THREE.Vector3();
   function update(dt, camera = null) {
+    updateClouds(dt);
     if (camera) {
       camera.getWorldDirection(view);
       right.set(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -203,9 +294,11 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
       // The flash: blinding at once, white cooling to orange, gone in half a second.
       const flash = Math.max(0, 1 - ease.outCubic(Math.min(1, t / 0.55))) * (t < 0.04 ? t / 0.04 : 1);
       slot.light.position.copy(slot.at).setY(1.1);
-      slot.light.intensity = 30 * power * flash + 5 * power * Math.max(0, 1 - t / 1.4);
-      slot.light.color.copy(white).lerp(orange, Math.min(1, t / 0.35));
-      slot.reflection.material.uniforms.flash.value = flash * 0.45 + Math.max(0, 0.14 * (1 - t / 1.2));
+      // The blaze keeps the room lit orange while it burns.
+      const burning = Math.max(0, 1 - t / 1.7) ** 1.3;
+      slot.light.intensity = 30 * power * flash + 11 * power * burning;
+      slot.light.color.copy(white).lerp(orange, Math.min(1, t / 0.2));
+      slot.reflection.material.uniforms.flash.value = flash * 0.55 + 0.42 * burning;
       slot.flare.position.copy(slot.at).setY(0.9);
       const flareP = Math.min(1, t / 0.28);
       slot.flare.scale.setScalar((0.8 + 2.1 * ease.outExpo(flareP)) * power);
@@ -215,8 +308,8 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
       // The shockwave races out over the floor; the dust follows, slower.
       const shockP = Math.min(1, t / 0.32);
       slot.shock.position.copy(slot.at).setY(0.03);
-      slot.shock.scale.setScalar(0.3 + 5.2 * ease.outCubic(shockP) * power);
-      slot.shock.material.opacity = (1 - shockP) ** 2;
+      slot.shock.scale.setScalar(0.3 + 3.6 * ease.outCubic(shockP) * power);
+      slot.shock.material.opacity = 0.7 * (1 - shockP) ** 2;
       slot.shock.visible = shockP < 1;
       const dustP = Math.min(1, t / 1.3);
       slot.dust.position.copy(slot.at).setY(0.02);
@@ -231,6 +324,8 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
     }
   }
   function clear() {
+    clouds.length = 0;
+    updateClouds(0);
     for (const slot of pool) {
       slot.live = false;
       for (const object of [slot.billboard, slot.reflection, slot.flare, slot.shock, slot.dust, slot.scorch]) object.visible = false;
@@ -238,7 +333,7 @@ export function createExplosions(scene, { random = Math.random, slots = 2 } = {}
     }
   }
   return {
-    spawn, update, configure, clear, pool,
+    spawn, update, configure, clear, pool, clouds,
     get active() { return pool.filter(slot => slot.live).length; },
     get duration() { return DURATION; },
   };

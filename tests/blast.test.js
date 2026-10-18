@@ -83,12 +83,14 @@ test('an explosion flashes, rings out over the floor and is gone; it leaves a sc
   camera.position.set(9, 9.2, 11);
   camera.lookAt(1, 0.6, 1);
   camera.updateMatrixWorld();
+  assert.ok(explosions.clouds.length >= 6, 'greasy clouds burst out of it');
   const light = [];
   for (let i = 0; i < 60 * 3; i++) { explosions.update(1 / 60, camera); light.push(slot.light.intensity); }
   const peak = light.indexOf(Math.max(...light));
   assert.ok(peak < 6 && light[peak] > 20, 'a blinding flash at once');
   assert.ok(light[40] < light[peak] * 0.3, 'that fades fast');
   assert.equal(explosions.active, 0, 'done');
+  assert.ok(explosions.clouds.length === 0 || explosions.clouds.every(cloud => cloud.age > 1.5), 'its greasy clouds are thinning away');
   assert.ok(slot.scorch.visible && slot.scorch.material.opacity > 0.3, 'a scorch stays');
 });
 

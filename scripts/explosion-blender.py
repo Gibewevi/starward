@@ -29,8 +29,12 @@ FRAMES = int(argv[2]) if len(argv) > 2 else 56     # frames kept in the flipbook
 RESOLUTION = int(os.environ.get('RESOLUTION', 96))
 UPRES = int(os.environ.get('UPRES', 1))
 SAMPLES = int(os.environ.get('SAMPLES', 128))
-ORTHO = 6.6                                        # metres across a frame
-TARGET = Vector((0, 0, 1.7))                       # the frame's centre, in Blender space (Z up)
+# MODE=blast (default): the compact blaze → explosion.png. MODE=cloud: one
+# greasy smoke cloud → smoke.png, which the game scatters around the blaze.
+MODE = os.environ.get('MODE', 'blast')
+NAME = 'explosion' if MODE == 'blast' else 'smoke'
+ORTHO = 6.6 if MODE == 'blast' else 3.4              # metres across a frame
+TARGET = Vector((0, 0, 1.7 if MODE == 'blast' else 1.25))  # the frame's centre, in Blender space (Z up)
 # The game camera looks along -(8, 8.2, 10) in three.js (Y up); in Blender (Z up) that offset is (8, -10, 8.2).
 OFFSET = Vector((8, -10, 8.2)).normalized()
 FPS = 30
@@ -58,10 +62,10 @@ def keyframes_constant(obj):
 
 
 # ---- Simulation ---------------------------------------------------------------
-bpy.ops.mesh.primitive_cube_add(location=(0, 0, 3.0))
+bpy.ops.mesh.primitive_cube_add(location=(0, 0, 3.0) if MODE == 'blast' else (0, 0, 1.8))
 domain = bpy.context.active_object
 domain.name = 'Domain'
-domain.scale = (3.9, 3.9, 3.0)
+domain.scale = (3.9, 3.9, 3.0) if MODE == 'blast' else (1.9, 1.9, 1.8)
 bpy.ops.object.transform_apply(scale=True)
 fluid = domain.modifiers.new('Fluid', 'FLUID')
 fluid.fluid_type = 'DOMAIN'
@@ -74,18 +78,18 @@ d.cache_frame_start, d.cache_frame_end = 1, FRAMES + 4
 d.use_adaptive_domain = False  # an adaptive domain chokes a fast blast
 d.adapt_margin = 6
 d.adapt_threshold = 0.004
-d.alpha = 0.0             # smoke neither sinks nor lifts by its weight
-d.beta = 1.25             # heat lifts it into a column
+d.alpha = 0.15            # heavy soot hangs
+d.beta = 0.9              # the heat lifts it, slowly: clouds, not a column
 d.vorticity = float(os.environ.get('VORTICITY', 0.6))
 d.use_dissolve_smoke = True
 d.dissolve_speed = 200
 d.use_dissolve_smoke_log = True
-d.burning_rate = float(os.environ.get('BURN', 0.5))      # the fire rolls on for most of a second
-d.flame_smoke = 4.0       # burning makes thick smoke
+d.burning_rate = float(os.environ.get('BURN', 0.4))      # a dense blaze that burns on for about a second
+d.flame_smoke = 2.0       # burning makes thick smoke
 d.flame_vorticity = 0.7
 d.flame_max_temp = 3.0
 d.flame_ignition = 1.25
-d.flame_smoke_color = (0.7, 0.63, 0.56)   # smoke from the burning
+d.flame_smoke_color = (0.3, 0.27, 0.25)   # greasy smoke from the burning
 d.timesteps_max = 8
 d.timesteps_min = 2
 d.use_noise = UPRES > 1
@@ -95,11 +99,11 @@ d.noise_pos_scale = 2.2
 d.noise_time_anim = 0.12
 
 
-def flow(obj, *, fuel, temperature, density, color, normal=0.0, source=0.0, coord=None, texture=None, distance=0.2):
+def flow(obj, *, fuel, temperature, density, color, normal=0.0, source=0.0, coord=None, texture=None, distance=0.2, kind='BOTH'):
     m = obj.modifiers.new('Fluid', 'FLUID')
     m.fluid_type = 'FLOW'
     s = m.flow_settings
-    s.flow_type = 'BOTH'
+    s.flow_type = kind
     s.flow_behavior = 'INFLOW'
     s.flow_source = 'MESH'
     s.surface_distance = distance
@@ -121,25 +125,32 @@ def flow(obj, *, fuel, temperature, density, color, normal=0.0, source=0.0, coor
     return s
 
 
+# Emission broken up by a noise texture.
+clouds = bpy.data.textures.new('Breakup', 'CLOUDS')
+clouds.noise_scale = 0.22
+clouds.noise_depth = 3
+clouds.contrast = 1.2
+
 # The blast: a burst of hundreds of particles thrown out of the charge and
 # braked by drag, each one emitting fuel and smoke along its path. A gas sim
 # is incompressible, so pushing the gas outward does little; particles flying
 # out are what make the fireball balloon in a few frames, then slow down.
-bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=3, radius=0.3, location=(0, 0, 0.55))
+CLOUD = MODE == 'cloud'
+bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=3, radius=0.3 if not CLOUD else 0.22, location=(0, 0, 0.55) if not CLOUD else (0, 0, 0.85))
 charge = bpy.context.active_object
 charge.name = 'Charge'
 charge.modifiers.new('Burst', 'PARTICLE_SYSTEM')
 burst = charge.particle_systems[0]
 p = burst.settings
-p.count = int(os.environ.get('PARTICLES', 500))
+p.count = int(os.environ.get('PARTICLES', 650 if not CLOUD else 320))
 p.frame_start, p.frame_end = 1, 3
-p.lifetime, p.lifetime_random = int(os.environ.get('LIFE', 5)), 0.4
+p.lifetime, p.lifetime_random = int(os.environ.get('LIFE', 6 if not CLOUD else 9)), 0.4
 p.emit_from = 'FACE'
 p.use_emit_random = True
-p.normal_factor = float(os.environ.get('BURST', 7.5))
+p.normal_factor = float(os.environ.get('BURST', 3.6 if not CLOUD else 2.3))
 p.factor_random = 3.0
 p.physics_type = 'NEWTON'
-p.drag_factor = float(os.environ.get('DRAG', 0.6))
+p.drag_factor = float(os.environ.get('DRAG', 0.85))
 p.damping = 0.03
 p.effector_weights.gravity = 0.25
 p.render_type = 'NONE'
@@ -152,34 +163,16 @@ s.flow_behavior = 'INFLOW'
 s.flow_source = 'PARTICLES'
 s.particle_system = burst
 s.use_particle_size = False
-s.particle_size = float(os.environ.get('PUFF', 0.7))
+s.particle_size = float(os.environ.get('PUFF', 0.55 if not CLOUD else 0.42))
 s.subframes = 2
-s.fuel_amount = 2.2
-s.temperature = 3.0
-s.density = 1.4
-s.smoke_color = (0.92, 0.86, 0.78)
+# The cloud: thick dark soot with only a little fire in its heart.
+s.fuel_amount = 3.2 if not CLOUD else float(os.environ.get('EMBER', 0.35))
+s.temperature = 3.0 if not CLOUD else 1.2
+s.density = 1.4 if not CLOUD else float(os.environ.get('SOOT', 2.6))
+s.smoke_color = (0.42, 0.38, 0.34) if not CLOUD else (0.15, 0.135, 0.125)
 s.use_initial_velocity = True
 s.velocity_factor = 1.0
 charge.hide_render = True
-
-# Burning fragments thrown out on ballistic arcs: fingers of fire and soot.
-for i in range(5):
-    angle = i / 5 * math.tau + random.uniform(-0.3, 0.3)
-    speed = random.uniform(5.5, 8.5)
-    lift = random.uniform(3.0, 7.0)
-    start = Vector((math.cos(angle) * 0.3, math.sin(angle) * 0.3, 0.5))
-    bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=2, radius=random.uniform(0.09, 0.15), location=start)
-    shard = bpy.context.active_object
-    shard.name = f'Fragment{i}'
-    flow(shard, fuel=1.2, temperature=2.4, density=0.7, color=(0.24, 0.2, 0.18), source=0.5, distance=0.12)
-    life = random.randint(7, 11)
-    for frame in range(1, life + 1):
-        t = (frame - 1) / FPS
-        shard.location = start + Vector((math.cos(angle) * speed * t, math.sin(angle) * speed * t, lift * t - 4.9 * t * t))
-        shard.location.z = max(shard.location.z, 0.15)
-        shard.keyframe_insert('location', frame=frame)
-    shard.location = (0, 0, -50)
-    shard.keyframe_insert('location', frame=life + 1)
 
 print('baking...', flush=True)
 for obj in bpy.context.view_layer.objects:
@@ -222,7 +215,7 @@ sharp = nodes.new('ShaderNodeMapRange')
 sharp.inputs['From Min'].default_value = 0.02
 sharp.inputs['From Max'].default_value = 0.55
 links.new(density.outputs['Fac'], sharp.inputs['Value'])
-links.new(math_node('MULTIPLY', float(os.environ.get('THICK', 5.0)), math_node('POWER', 1.35, sharp.outputs['Result'])), volume.inputs['Density'])
+links.new(math_node('MULTIPLY', float(os.environ.get('THICK', 7.0)), math_node('POWER', 1.35, sharp.outputs['Result'])), volume.inputs['Density'])
 # The smoke's colour grid is stored weighted by density: the node's own
 # colour attribute undoes that (an Attribute node would darken thin smoke).
 volume.inputs['Color'].default_value = (1, 1, 1, 1)
@@ -232,14 +225,14 @@ volume.inputs['Density Attribute'].default_value = ''
 # Fire: the flame grid through a ramp, intensity rising steeply with it.
 flame = attribute('flame')
 ramp = nodes.new('ShaderNodeValToRGB')
-stops = [(0.0, (0, 0, 0, 1)), (0.08, (0.4, 0.02, 0.0, 1)), (0.25, (1.0, 0.18, 0.01, 1)), (0.5, (1.0, 0.42, 0.05, 1)), (0.78, (1.0, 0.66, 0.2, 1)), (1.0, (1.0, 0.85, 0.55, 1))]
+stops = [(0.0, (0, 0, 0, 1)), (0.06, (0.4, 0.02, 0.0, 1)), (0.22, (1.0, 0.14, 0.0, 1)), (0.45, (1.0, 0.36, 0.02, 1)), (0.72, (1.0, 0.62, 0.12, 1)), (1.0, (1.0, 0.88, 0.5, 1))]
 ramp.color_ramp.elements[0].position, ramp.color_ramp.elements[0].color = stops[0]
 ramp.color_ramp.elements[1].position, ramp.color_ramp.elements[1].color = stops[-1]
 for position, color in stops[1:-1]:
     ramp.color_ramp.elements.new(position).color = color
 links.new(flame.outputs['Fac'], ramp.inputs['Fac'])
 links.new(ramp.outputs['Color'], volume.inputs['Emission Color'])
-links.new(math_node('MULTIPLY', float(os.environ.get('GLOW', 22.0)), math_node('POWER', 1.6, flame.outputs['Fac'])), volume.inputs['Emission Strength'])
+links.new(math_node('MULTIPLY', float(os.environ.get('GLOW', 18.0)), math_node('POWER', 1.6, flame.outputs['Fac'])), volume.inputs['Emission Strength'])
 links.new(volume.outputs['Volume'], output.inputs['Volume'])
 domain.data.materials.clear()
 domain.data.materials.append(material)
@@ -253,14 +246,14 @@ toward_light = (OFFSET * 0.7 + Vector((0, 0, 1.1)) - right * 0.6).normalized()
 bpy.ops.object.light_add(type='SUN', rotation=(-toward_light).to_track_quat('-Z', 'Y').to_euler())
 bpy.context.active_object.data.angle = math.radians(8)
 sun = bpy.context.active_object.data
-sun.energy = float(os.environ.get('SUN', 18.0))
+sun.energy = float(os.environ.get('SUN', 12.0))
 sun.color = (1.0, 0.9, 0.8)
-bpy.ops.object.light_add(type='POINT', location=(0, 0, 0.9))
+bpy.ops.object.light_add(type='POINT', location=(0, 0, 0.9 if MODE == 'blast' else 0.35))
 blast = bpy.context.active_object.data
 blast.color = (1.0, 0.48, 0.14)
 blast.shadow_soft_size = 0.9
 for frame, energy in ((1, 40000), (5, 30000), (12, 16000), (20, 6000), (30, 1500), (42, 0)):
-    blast.energy = energy
+    blast.energy = energy * (1 if MODE == 'blast' else 0.06)
     blast.keyframe_insert('energy', frame=frame)
 world = bpy.data.worlds.new('Dark')
 world.use_nodes = True
@@ -347,19 +340,19 @@ for index in range(FRAMES):
     bpy.data.images.remove(image)
 packed = bpy.data.images.new('ExplosionSheet', columns * SIZE, rows * SIZE, alpha=True)
 packed.pixels.foreach_set(sheet.ravel())
-packed.filepath_raw = os.path.join(OUT, 'explosion.png')
+packed.filepath_raw = os.path.join(OUT, f'{NAME}.png')
 packed.file_format = 'PNG'
 packed.save()
 meta = {
-    'image': 'explosion.png', 'frames': FRAMES, 'columns': columns, 'rows': rows, 'size': SIZE, 'fps': FPS,
+    'image': f'{NAME}.png', 'frames': FRAMES, 'columns': columns, 'rows': rows, 'size': SIZE, 'fps': FPS,
     # Metres across a frame, and the frame centre's height above the blast point:
     # in the game the sprite is laid over the same iso view, pixel for pixel.
     'width': ORTHO, 'centre': round(TARGET.z, 3),
     'source': 'scripts/explosion-blender.py (Blender Mantaflow + Cycles)',
 }
-with open(os.path.join(OUT, 'explosion.json'), 'w') as handle:
+with open(os.path.join(OUT, f'{NAME}.json'), 'w') as handle:
     json.dump(meta, handle, indent=2)
 if os.environ.get('KEEP_FRAMES'):
     shutil.copytree(frames_dir, os.environ['KEEP_FRAMES'], dirs_exist_ok=True)
 shutil.rmtree(work, ignore_errors=True)
-print('flipbook', os.path.join(OUT, 'explosion.png'), columns, 'x', rows, flush=True)
+print('flipbook', os.path.join(OUT, f'{NAME}.png'), columns, 'x', rows, flush=True)
