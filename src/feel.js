@@ -57,7 +57,7 @@ export const FEEL = {
     stun: [0.5, 1.5], // lying dazed after the fall
     rise: [0.95, 1.3], riseCurve: 'inOutCubic', // getting up, from a crouch
     daze: [0.9, 1.6], // swaying once up
-    pickup: 0.7, reach: 1.7, // fetching his rifle if it lies close enough
+    pickup: 0.7, reach: 3, // he walks over to his rifle if it lies this close (m), and picks it up
   },
   armor: {
     graze: 0.45, slash: 1, cut: 0.6, landing: 0.4, landingSpeed: 3.6, // chances; impact speed (m/s)

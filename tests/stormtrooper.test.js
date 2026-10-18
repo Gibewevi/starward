@@ -678,21 +678,74 @@ test('caught by the Force pull he drops his rifle, clutches his throat and strug
     assert.ok(wrist.distanceTo(throat) < 0.16, `${side} hand at his throat (${wrist.distanceTo(throat).toFixed(2)} m)`);
   }
   // He fights: head, body and legs keep moving, fast and irregularly.
-  const samples = { hip: [], knee: [], neck: [], spine: [] };
-  for (let frame = 0; frame < 60; frame++) {
+  const samples = { hip: [], knee: [], neck: [], spine: [], pelvisYaw: [], pelvisPitch: [] };
+  for (let frame = 0; frame < 90; frame++) {
     run(1 / 60);
     samples.hip.push(trooper.joints.hipL.rotation.x);
     samples.knee.push(trooper.joints.kneeR.rotation.x);
     samples.neck.push(trooper.joints.neck.rotation.y);
     samples.spine.push(trooper.joints.spine.rotation.z);
+    samples.pelvisYaw.push(trooper.joints.pelvis.rotation.y);
+    samples.pelvisPitch.push(trooper.joints.pelvis.rotation.x);
   }
   const range = values => Math.max(...values) - Math.min(...values);
   const reversals = values => values.slice(2).filter((value, i) => Math.sign(value - values[i + 1]) !== Math.sign(values[i + 1] - values[i])).length;
-  assert.ok(range(samples.hip) > 0.4 && range(samples.knee) > 0.3, `the legs kick (${range(samples.hip).toFixed(2)}, ${range(samples.knee).toFixed(2)} rad)`);
-  assert.ok(reversals(samples.hip) >= 7, `fast: ${reversals(samples.hip)} changes of direction in a second`);
-  assert.ok(range(samples.neck) > 0.15 && range(samples.spine) > 0.1, 'the head jerks and the body writhes');
+  assert.ok(range(samples.hip) > 0.25 && range(samples.knee) > 0.25, `the legs kick (${range(samples.hip).toFixed(2)}, ${range(samples.knee).toFixed(2)} rad)`);
+  const kicks = reversals(samples.hip) / 1.5;
+  assert.ok(kicks >= 2 && kicks <= 7, `at a struggling pace, not a blur: ${kicks.toFixed(1)} changes of direction a second`);
+  assert.ok(range(samples.pelvisYaw) > 0.2 && range(samples.pelvisPitch) > 0.15, `the hips twist and thrust (${range(samples.pelvisYaw).toFixed(2)}, ${range(samples.pelvisPitch).toFixed(2)} rad)`);
+  assert.ok(range(samples.neck) > 0.15 && range(samples.spine) > 0.15, 'the head jerks and the chest writhes');
   // Let go: the hands leave his throat.
   trooper.drop();
   run(1.2);
   assert.ok(trooper.reaction.choke < 0.05, 'he breathes again');
+});
+
+test('thrown by the Force he stays alive in every limb: braced in the air, squirming on the floor — unlike the dead', () => {
+  // How much his limbs move relative to his trunk, over a stretch of time.
+  const limbMotion = (trooper, run, seconds) => {
+    const rel = () => ['WL', 'WR', 'AL', 'AR', 'HT'].map(name => trooper.particle(name).position.clone().sub(trooper.particle('W').position));
+    let total = 0, last = rel();
+    for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
+      run(1 / 60);
+      const now = rel();
+      total += now.reduce((sum, v, i) => sum + v.distanceTo(last[i]), 0);
+      last = now;
+    }
+    return total;
+  };
+  const alive = standAlone(71, 3);
+  alive.trooper.forcePush(new THREE.Vector3(0, 3, 6));
+  const flight = limbMotion(alive.trooper, alive.run, 0.5);
+  // While airborne his arms come out in front of him, to break the fall.
+  alive.run(0.6);
+  const lying = limbMotion(alive.trooper, alive.run, 1);
+  assert.ok(['stunned', 'rising'].includes(alive.trooper.state), alive.trooper.state);
+  const dead = standAlone(71, 3);
+  dead.trooper.die('slash');
+  dead.run(0.4);
+  dead.trooper.forcePush(new THREE.Vector3(0, 3, 6));
+  dead.run(0.5);
+  dead.run(0.6);
+  const still = limbMotion(dead.trooper, dead.run, 1);
+  assert.ok(lying > still * 3 && lying > 0.5, `alive, he squirms on the floor (${lying.toFixed(2)} vs ${still.toFixed(2)} for the dead)`);
+  assert.ok(flight > 0.5, `and works his limbs in the air (${flight.toFixed(2)})`);
+});
+
+test('pulled while down but alive, he is hauled to his feet first, then brought in', () => {
+  const { trooper, run } = standAlone(73, 3);
+  trooper.forcePush(new THREE.Vector3(0, 2, 4));
+  run(1.5);
+  assert.ok(trooper.fallen && !trooper.dead, trooper.state);
+  const point = new THREE.Vector3(0, 0.5, 1.25);
+  assert.ok(trooper.forcePull(point.clone(), { hold: true }));
+  assert.equal(trooper.state, 'pulled');
+  let tallest = 0;
+  for (let frame = 0; frame < 30; frame++) { run(1 / 60); tallest = Math.max(tallest, trooper.particle('N').position.y - trooper.particle('W').position.y); }
+  assert.ok(!trooper.fallen, 'upright again within half a second');
+  assert.ok(tallest > 0.3, 'his trunk stands up (not dragged lying)');
+  for (let frame = 0; frame < 90; frame++) { trooper.hold(point, Math.PI); run(1 / 60); }
+  assert.equal(trooper.state, 'held');
+  assert.ok(trooper.root.position.distanceTo(point) < 0.2, 'and brought in, hanging before the hero');
+  assert.ok(trooper.reaction.choke > 0.9, 'choking');
 });
