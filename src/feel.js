@@ -62,6 +62,35 @@ export const FEEL = {
   armor: {
     graze: 0.45, slash: 1, cut: 0.6, landing: 0.4, landingSpeed: 3.6, // chances; impact speed (m/s)
   },
+  blaster: {
+    speed: 12.5, // m/s: fast, yet readable and deflectable
+    spread: 0.035, // rad: the aim's scatter on a shot meant to hit
+    miss: 0.35, // share of shots that go wide (near misses that whizz past)
+    burst: [2, 4], gap: [0.13, 0.24], // shots per burst; seconds between shots
+    firing: 2, // troopers shooting at the same moment, at most
+  },
+  deflect: {
+    reach: 0.9, // m: the blade meets a bolt this far from his chest
+    react: 0.17, // s: the parry starts this long before the bolt arrives
+    yaw: [0.15, 0.9], lift: [-0.04, 0.18], // scatter (rad) of a return left to chance
+    speedUp: 1.3, // a sent-back bolt flies faster
+    precision: { start: 0.1, gain: 0.004, hitGain: 0.012, max: 0.95 }, // chance a return goes for an enemy: grows per deflection, more per hit
+    error: 0.14, // rad: aim error of such a return at zero precision (none at full)
+  },
+  senses: {
+    sight: 11, cone: 1.05, peripheral: 1.75, // m; half-angles (rad): full view, corner of the eye
+    notice: 1.1, // seconds to spot the hero in full view, close by
+    suspicious: 0.3, // awareness that raises a "?"
+    forget: 0.1, // awareness lost per second without news
+    callout: 10, // m: a trooper who spots the hero alerts his squad this far
+  },
+  ai: {
+    startle: [0.28, 0.5], // s from "!" to acting on it
+    hide: [0.7, 1.7], // s crouched behind cover between bursts
+    cycles: [2, 4], // bursts from one cover before moving to another
+    range: [4, 8.5], // m from the hero a good cover lies
+    close: 2.6, // m: closer than this, he backs away
+  },
 };
 
 export const curve = name => ease[name] ?? ease.outCubic;

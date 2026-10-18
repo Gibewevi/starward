@@ -102,7 +102,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     scene.add(mesh);
     return { mesh, tween: null };
   });
-  const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25);
+  const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25), red = new THREE.Color(0.85, 0.01, 0.01);
   const lightWhite = new THREE.Color(1, 0.93, 0.85), lightOrange = new THREE.Color(1, 0.54, 0.23);
   const facing = new THREE.Vector3(0, 0, 1);
   const smoulders = [], glows = [];
@@ -143,7 +143,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     }
   }
   /** The impact lights its surroundings: white at once, cooling to orange as it fades. */
-  function flash(at, power = 1) {
+  function flash(at, power = 1, { color = null } = {}) {
     const slot = lights[nextLight];
     nextLight = (nextLight + 1) % lights.length;
     tweens.cancel(slot.tween);
@@ -152,7 +152,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       duration: 0.22, curve: ease.outQuad,
       update: (eased, progress) => {
         slot.light.intensity = power * 4 * (1 - eased);
-        slot.light.color.copy(lightWhite).lerp(lightOrange, ease.outCubic(progress));
+        slot.light.color.copy(lightWhite).lerp(color ?? lightOrange, ease.outCubic(progress));
       },
       complete: () => { slot.light.intensity = 0; },
     });
@@ -162,8 +162,10 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
    * thin ring of light that races out along the cut plane (`normal` is the
    * plane's normal), white-hot cooling to orange.
    */
-  function burst(at, { normal = null, power = 1 } = {}) {
+  function burst(at, { normal = null, power = 1, tint = null } = {}) {
     power = Math.min(1.5, Math.max(0.2, power));
+    // A blaster's flare cools to red, the blade's to orange.
+    const cool = tint === 'red' ? red : orange;
     const flare = flareSlots[nextFlare];
     nextFlare = (nextFlare + 1) % flareSlots.length;
     tweens.cancel(flare.tween);
@@ -174,7 +176,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       duration: 0.2, curve: ease.outExpo,
       update: (eased, progress) => {
         flare.sprite.scale.setScalar(0.06 + (size - 0.06) * eased);
-        flare.sprite.material.color.copy(whiteHot).lerp(orange, progress);
+        flare.sprite.material.color.copy(whiteHot).lerp(cool, progress);
         flare.sprite.material.opacity = 1 - ease.outQuad(progress);
       },
       complete: () => { flare.sprite.visible = false; },
@@ -191,7 +193,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       duration: 0.18, curve: ease.outCubic,
       update: (eased, progress) => {
         ring.mesh.scale.setScalar(0.04 + (reach - 0.04) * eased);
-        ring.mesh.material.color.copy(whiteHot).lerp(orange, ease.outQuad(progress)).multiplyScalar(0.8);
+        ring.mesh.material.color.copy(whiteHot).lerp(cool, ease.outQuad(progress)).multiplyScalar(0.8);
         ring.mesh.material.opacity = (1 - progress) ** 1.6;
       },
       complete: () => { ring.mesh.visible = false; },

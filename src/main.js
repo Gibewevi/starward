@@ -17,6 +17,11 @@ import { createStormtrooper, collideSquad } from './stormtrooper.js';
 import { ease, hitStopScale, kick } from './tween.js';
 import { FEEL, pick } from './feel.js';
 import { createImpactEffects } from './impact-effects.js';
+import { createLab, onScreen } from './lab.js';
+import { createBlasters, closestSegments } from './blasters.js';
+import { createAlerts } from './alerts.js';
+import { createSquadMind } from './trooper-ai.js';
+import { returnDirection } from './deflect.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -53,6 +58,8 @@ function init() {
   const lighting = createLighting(scene, renderer);
 
   const stage = createStage(scene);
+  // The AI lab: crates, barrels and barriers on the floor, no walls.
+  const lab = createLab(scene);
   const reflection = new Reflector(new THREE.PlaneGeometry(80, 80), {
     textureWidth: 640, textureHeight: 400, multisample: 0, clipBias: 0.001,
     shader: {
@@ -93,15 +100,36 @@ function init() {
   const trail = createBladeTrail(scene);
   const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastTip = new THREE.Vector3();
   const shake = new THREE.Vector3();
-  // A squad of stormtroopers stands in a row at the top of the screen, facing
-  // the hero: training dummies. Screen-up on the floor is away from the camera.
+  // A squad of stormtroopers among the crates, unaware of the hero at first:
+  // sentries and patrols. Screen-up on the floor is away from the camera.
   const effects = createImpactEffects(scene);
   const screenUp = new THREE.Vector3(-8, 0, -10).normalize(), screenRight = new THREE.Vector3(10, 0, -8).normalize();
-  const troopers = [-2, -1, 0, 1, 2].map(slot => createStormtrooper({
-    scene, effects,
-    position: screenUp.clone().multiplyScalar(4.2).addScaledVector(screenRight, slot * 1.15),
-    heading: Math.atan2(-screenUp.x, -screenUp.z) + slot * 0.06,
-  }));
+  const towards = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
+  // Screen directions as headings: down (towards the camera) 0.68, up -2.47, left -0.9, right 2.24.
+  const POSTS = [
+    { position: onScreen(-2.4, 5.4), heading: -0.9 },
+    { position: onScreen(0.3, 5.7), route: [onScreen(0.3, 5.7), onScreen(4.7, 6.2), onScreen(4.9, 7.6), onScreen(0.8, 7.9)] },
+    { position: onScreen(4.1, 8.4), heading: -2.47 },
+    { position: onScreen(-5.6, 2.7), route: [onScreen(-5.6, 2.7), onScreen(-5.4, 7.2)] },
+    { position: onScreen(-0.6, 8.1), heading: 2.24 },
+  ];
+  for (const post of POSTS) post.heading ??= towards(post.route[0], post.route[1]);
+  const troopers = POSTS.map(post => createStormtrooper({ scene, effects, lab, position: post.position, heading: post.heading }));
+  const alerts = createAlerts(scene);
+  const blasters = createBlasters(scene, { effects, lab });
+  const squad = createSquadMind({ troopers, lab, alerts, posts: POSTS, cameraRight: screenRight });
+  // What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
+  const noises = [];
+  const noise = (position, radius, options = {}) => noises.push({ position: position.clone(), radius, ...options });
+  let stepClock = 0, humClock = 0;
+  // Precision: the chance that a bolt the blade sends back goes for an enemy.
+  // It grows with every deflection, and more with every enemy hit.
+  let precision = FEEL.deflect.precision.start;
+  try { const saved = Number(localStorage.getItem('starward.precision')); if (saved > 0) precision = Math.min(FEEL.deflect.precision.max, saved); } catch { /* no storage */ }
+  const train = gain => {
+    precision = Math.min(FEEL.deflect.precision.max, precision + gain);
+    try { localStorage.setItem('starward.precision', precision.toFixed(3)); } catch { /* no storage */ }
+  };
   const lastBase = new THREE.Vector3();
   let bladeReady = false, hitStop = null, impactShake = 0, padReset = false;
   // Game feel: hit stops ease back to speed, the view is kicked along the
@@ -120,7 +148,7 @@ function init() {
     Object.assign(cameraKick, { amplitude, age: 0 });
   }
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
-  function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); }
+  function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); blasters.clear(); squad.reset(); }
   // Hit stops: at most one per enemy and per attack sequence.
   const stopped = new Set();
   let stoppedSequence = -1;
@@ -169,6 +197,7 @@ function init() {
         trooper.forcePush(direction.multiplyScalar(pick(FEEL.push.speed) * strength).setY(pick(FEEL.push.lift) * strength));
       }
       effects.wave(leftHand, facing, { kind: 'push', length: FEEL.push.range * 0.8 });
+      noise(here, 8.5, { alarm: true, from: here });
       shove(facing, FEEL.camera.kickPush);
       punch(FEEL.camera.punchPush);
       audio.force('push');
@@ -181,9 +210,97 @@ function init() {
         if (trooper.forcePull(holdPoint(), { hold: true })) held = trooper;
       } else if (trooper) trooper.forcePull(here.clone().addScaledVector(toward.clone().normalize(), Math.min(FEEL.pull.stop, distance)));
       effects.wave(leftHand, toward, { kind: 'pull', length: distance });
+      noise(here, 8.5, { alarm: true, from: here });
       shove(toward.clone().negate(), FEEL.camera.kick);
       audio.force('pull');
     }
+  }
+
+  // ---- Blaster fire -----------------------------------------------------------
+  const chest = new THREE.Vector3(), heroFeet = new THREE.Vector3(), heroHead = new THREE.Vector3(), offset = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
+  /** Is that point in front of the hero (where the blade can cover)? */
+  const inFront = point => {
+    offset.subVectors(point, chest).setY(0);
+    return offset.lengthSq() < 1e-6 || offset.angleTo(new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading))) < 1.95;
+  };
+  const guardUp = () => saber.extension > 0.6 && (combat.guard > 0.4 || (combat.output.name ?? '').startsWith('parry'));
+  /** RB held: a bolt about to arrive makes the blade snap to meet it, on its side. */
+  function autoParry(guarding) {
+    if (!guarding || saber.extension < 0.6) return;
+    chest.set(motion.x, 1.05, motion.z);
+    for (const bolt of blasters.live) {
+      if (bolt.deflected || bolt.parried) continue;
+      offset.subVectors(bolt.position, chest);
+      const speed = bolt.velocity.length(), closing = -offset.dot(bolt.velocity) / speed;
+      if (closing <= 0 || !inFront(bolt.position)) continue;
+      const passes = offset.clone().addScaledVector(bolt.velocity, closing / speed).length();
+      if (passes > FEEL.deflect.reach + 0.2 || (closing - FEEL.deflect.reach) / speed > FEEL.deflect.react) continue;
+      const local = offset.clone().applyAxisAngle(UP, -motion.heading);
+      combat.deflect(local.x > 0.12 ? 'left' : local.x < -0.12 ? 'right' : bolt.position.y > 1.45 ? 'high' : null);
+      bolt.parried = true;
+    }
+  }
+  /** The blade meets a bolt and sends it back — at an enemy if his precision allows, else somewhere off. */
+  function deflectBolt(bolt, a, b) {
+    const meet = closestSegments(a, b, bladeBase, bladeTip);
+    const at = meet.c2.clone(), incoming = bolt.velocity.clone().normalize();
+    const enemies = troopers.filter(trooper => !trooper.dead).map(trooper => ({
+      point: trooper.particle('W').position.clone().lerp(trooper.particle('N').position, 0.45), shooter: trooper === bolt.owner, down: trooper.fallen,
+    }));
+    const { aim } = returnDirection({ at, incoming, precision, enemies });
+    blasters.deflect(bolt, at, aim, FEEL.blaster.speed * FEEL.deflect.speedUp);
+    // Guarding, he turns a little into the shot.
+    const toward = Math.atan2(a.x - motion.x, a.z - motion.z), turn = Math.atan2(Math.sin(toward - motion.heading), Math.cos(toward - motion.heading));
+    if (Math.abs(turn) > 0.45) motion.face(motion.heading + turn * 0.3);
+    train(FEEL.deflect.precision.gain);
+    const across = new THREE.Vector3().crossVectors(incoming, UP).normalize();
+    effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([18, 42])), speed: 3.4 });
+    effects.flash(at, 1.2);
+    effects.burst(at, { normal: incoming, power: 0.7, tint: 'red' });
+    combat.output.flare = 1;
+    stopFor(0.012, 0.035);
+    shove(aim, 0.025);
+    impactShake = Math.max(impactShake, 0.06);
+    audio.deflect();
+    noise(at, 9, { alarm: true, from: chest });
+    deflections++;
+  }
+  /** A bolt reaches the hero: it burns, nothing more (no damage yet). */
+  function burnHero(bolt, point) {
+    const incoming = bolt.velocity.clone().normalize();
+    effects.sparks(point, incoming.clone().negate().setY(0.4).normalize(), new THREE.Vector3(incoming.z, 0, -incoming.x), { count: 12, speed: 2 });
+    effects.flash(point, 0.6, { color: new THREE.Color(1, 0.06, 0.04) });
+    effects.burst(point, { power: 0.3, tint: 'red' });
+    shove(incoming, 0.018);
+    audio.sizzle();
+    burns++;
+  }
+  let deflections = 0, burns = 0, kills = 0;
+  /** Every bolt, every frame: the blade first, then the hero, then (sent back) the troopers. */
+  function boltMeets(bolt, a, b) {
+    const wall = lab.segmentHit(a, b), end = wall ? wall.point : b;
+    if (!bolt.deflected) {
+      chest.set(motion.x, 1.05, motion.z);
+      if (guardUp() && inFront(a) && closestSegments(a, end, chest, chest).distance < FEEL.deflect.reach) { deflectBolt(bolt, a, end); return 'deflected'; }
+      heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
+      const body = closestSegments(a, end, heroFeet, heroHead);
+      if (body.distance < 0.26) { burnHero(bolt, body.c1); return 'spent'; }
+      return null;
+    }
+    let best = null, struck = null;
+    for (const trooper of troopers) {
+      const hit = trooper.boltHit(a, end);
+      if (hit && (!best || hit.s < best.s)) { best = hit; struck = trooper; }
+    }
+    if (!best) return null;
+    const event = struck.shot(best, bolt.velocity);
+    train(FEEL.deflect.precision.hitGain);
+    if (event.lethal) kills++;
+    if (event.lethal || event.felled) { const [hold, recover] = FEEL.hitStop.felling; stopFor(hold * 0.8, recover); punch(FEEL.camera.punch); }
+    shove(bolt.velocity, event.lethal ? FEEL.camera.kick : 0.02);
+    audio.impact(event.lethal ? 1 : 0.6);
+    noise(struck.root.position, 9, { alarm: true, from: chest.clone(), source: struck });
+    return 'spent';
   }
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
@@ -213,7 +330,7 @@ function init() {
   resize();
 
   const keys = new Set();
-  let paused = false, time = 0, moved = false;
+  let paused = false, time = 0, moved = false, forcedGuard = false;
   const velocity = new THREE.Vector3();
   const playerPosition = new THREE.Vector3();
   const inputRight = new THREE.Vector2(10, -8).normalize();
@@ -291,12 +408,15 @@ function init() {
   $('#touch-run').addEventListener('pointercancel', () => joystick.running = false);
 
   const audio = createAudio();
+  audio.enabled = $('#audio-enabled').checked;
   $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; if (audio.enabled) audio.start(); });
+  window.addEventListener('keydown', () => { if (audio.enabled) audio.start(); });
   let lastFrame = performance.now(), fps = 60, hudTimer = 0, frameCount = 0;
-  const stateEl = $('#motion-state'), speedEl = $('#speed'), saberEl = $('#saber-state');
+  const stateEl = $('#motion-state'), speedEl = $('#speed'), saberEl = $('#saber-state'), squadEl = $('#squad-state'), precisionEl = $('#precision');
   const targetFocus = new THREE.Vector3(), shakenFocus = new THREE.Vector3();
   function frame(now, manual = false) {
-    const rawDt = (now - lastFrame) / 1000;
+    // Never backwards: a stepped check (advance) may run ahead of the display clock.
+    const rawDt = Math.max(0, (now - lastFrame) / 1000);
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
     if (!paused) {
@@ -307,7 +427,7 @@ function init() {
       let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft')) + joystick.x;
       let y = Number(keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) + joystick.y;
       let sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') || joystick.running;
-      let guard = keys.has('KeyK');
+      let guard = keys.has('KeyK') || forcedGuard;
       pullHeld = keys.has('KeyU');
       // The stick's tilt sets the pace: slow walk, brisk walk, run, then sprint.
       let analog = Math.hypot(joystick.x, joystick.y) > 0.01 && !sprint;
@@ -322,6 +442,7 @@ function init() {
         if (guardButton && !padGuard) parryPressed = true;
         padGuard = guardButton;
         guard ||= guardButton || !!gamepad.buttons[0]?.pressed;
+        if (audio.enabled && gamepad.buttons.some(button => button?.pressed)) audio.start();
         const attackButton = !!gamepad.buttons[1]?.pressed;
         if (attackButton && !padAttack) attackPressed = true;
         padAttack = attackButton;
@@ -339,6 +460,7 @@ function init() {
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       // Powers cut any strike short; a parry too; B strikes and chains.
       keepHold();
+      autoParry(guard);
       if (powerPressed) combat.power(powerPressed);
       if (parryPressed) combat.parry();
       if (attackPressed) combat.attack({ speed: motion.speed });
@@ -348,7 +470,8 @@ function init() {
       // Each move re-aims towards the stick before it lands; a power with the
       // stick at rest turns towards the trooper the hero is facing most.
       const started = combat.takeStart();
-      if (started && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
+      if (started && !started.startsWith('parry') && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       else if (started === 'forcePull' || started === 'forcePush') {
         const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
         if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
@@ -362,6 +485,9 @@ function init() {
         const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
         if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
       }
+      // Crates and barrels stop him.
+      lab.pushOut(here.set(motion.x, 0, motion.z), 0.3);
+      motion.x = here.x; motion.z = here.z;
       if (!moved && (motion.speed > 0.1 || action.engaged)) { moved = true; document.body.classList.add('playing'); }
       character.root.position.set(motion.x, 0, motion.z);
       character.root.rotation.y = motion.heading + action.spin;
@@ -369,15 +495,29 @@ function init() {
       character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
-      if (saber.update(motion.saber, time, action.flare) === 'ignite') combat.flourish();
+      if (saber.update(motion.saber, time, action.flare) === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); }
+      // Running feet and the blade's hum carry.
+      stepClock -= sim; humClock -= sim;
+      if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 7 : 4.5, { from: character.root.position }); }
+      if (motion.saber > 0.5 && humClock <= 0) { humClock = 0.6; noise(character.root.position, 2.6, { from: character.root.position, strength: 0.6 }); }
       saber.segment(bladeBase, bladeTip);
       trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
+      // The squad: senses, decisions, orders; then the shots leave the muzzles.
+      const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises });
+      noises.length = 0;
+      for (const shot of thoughts.shots) {
+        blasters.fire(shot.from, shot.direction, { owner: shot.trooper, speed: FEEL.blaster.speed });
+        audio.shot(shot.from.distanceTo(character.root.position));
+        noise(shot.from, 12, { alarm: true, from: character.root.position, source: shot.trooper });
+      }
+      for (const cue of thoughts.cues) audio.alert(cue.type === 'alert' ? '!' : '?');
       for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
       collideSquad(troopers);
       if (combat.sequence !== stoppedSequence) { stopped.clear(); stoppedSequence = combat.sequence; }
       troopers.forEach((trooper, index) => {
         const struck = saber.extension > 0.6 && bladeReady ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
+        if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {
           // Falls are reported alongside the blow that caused them.
           if (event.type === 'fall' || (event.type === 'graze' && event.speed < 1)) continue;
@@ -397,13 +537,18 @@ function init() {
         }
         // Landings, armour coming off: heard and felt in step with the physics.
         for (const item of trooper.news) {
-          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8)); impactShake = Math.max(impactShake, Math.min(0.18, item.speed * 0.025)); }
+          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8)); impactShake = Math.max(impactShake, Math.min(0.18, item.speed * 0.025)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
           if (item.type === 'armor') audio.clank();
         }
       });
       bladeReady = saber.extension > 0.6;
       lastBase.copy(bladeBase);
       lastTip.copy(bladeTip);
+      // Bolts fly: the blade, the hero, the troopers, then crates and floor.
+      for (const event of blasters.update(sim, boltMeets)) {
+        if (event.type === 'impact') audio.boltImpact(event.point.distanceTo(character.root.position));
+      }
+      alerts.update(dt, trooper => (trooper.dead ? null : trooper.particle('HT').position), screenRight);
       effects.update(sim);
       playerPosition.copy(character.root.position);
       lighting.follow(playerPosition);
@@ -436,6 +581,10 @@ function init() {
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
+      const mood = squad.mood();
+      squadEl.textContent = mood.toUpperCase();
+      squadEl.dataset.mood = mood;
+      precisionEl.textContent = `${Math.round(precision * 100)} %`;
     }
     if (++frameCount === 3) {
       $('#loading').style.opacity = '0';
@@ -448,8 +597,12 @@ function init() {
     // Game feel settings, tweakable live from the console.
     feel: FEEL,
     /** Runs the game for some seconds without waiting for the display (checks, hidden windows). */
-    advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); },
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
+    /** For checks: where the hero is put, and the squad, lab and bolts. */
+    place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
+    squad, lab, blasters, troopers,
+    set guard(value) { forcedGuard = value; },
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
@@ -529,6 +682,63 @@ function createAudio() {
       level.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
       tone.connect(level); level.connect(context.destination);
       tone.start(); tone.stop(now + 0.14);
+    },
+    /** A burst of filtered noise (a crack, a fizz, a thump of air). */
+    noiseBurst({ duration = 0.12, type = 'bandpass', frequency = 2000, q = 0.8, gain = 0.1, decay = 0.25 } = {}) {
+      const length = Math.floor(context.sampleRate * duration), buffer = context.createBuffer(1, length, context.sampleRate), data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * decay));
+      const source = context.createBufferSource(), filter = context.createBiquadFilter(), level = context.createGain();
+      source.buffer = buffer; filter.type = type; filter.frequency.value = frequency; filter.Q.value = q; level.gain.value = gain;
+      source.connect(filter); filter.connect(level); level.connect(context.destination);
+      source.start();
+    },
+    tone({ type = 'sine', from = 880, to = 440, duration = 0.15, gain = 0.05, delay = 0 } = {}) {
+      const now = context.currentTime + delay, tone = context.createOscillator(), level = context.createGain();
+      tone.type = type;
+      tone.frequency.setValueAtTime(from, now);
+      tone.frequency.exponentialRampToValueAtTime(to, now + duration);
+      level.gain.setValueAtTime(0.0001, now);
+      level.gain.exponentialRampToValueAtTime(gain, now + 0.006);
+      level.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      tone.connect(level); level.connect(context.destination);
+      tone.start(now); tone.stop(now + duration + 0.02);
+    },
+    /** A blaster shot: a bright zap falling in pitch, fainter far off. */
+    shot(distance = 5) {
+      if (!this.enabled || !context) return;
+      const near = Math.max(0.2, 1 - distance / 18);
+      this.tone({ type: 'sawtooth', from: 1500 + Math.random() * 400, to: 150, duration: 0.17, gain: 0.05 * near });
+      this.tone({ type: 'square', from: 900 + Math.random() * 200, to: 110, duration: 0.12, gain: 0.025 * near });
+      this.noiseBurst({ duration: 0.05, frequency: 3000, gain: 0.05 * near, decay: 0.3 });
+    },
+    /** The blade sends a bolt back: a crack and a ringing metallic zing. */
+    deflect() {
+      if (!this.enabled || !context) return;
+      this.noiseBurst({ duration: 0.06, type: 'highpass', frequency: 2500, gain: 0.12, decay: 0.2 });
+      this.tone({ from: 2900 + Math.random() * 500, to: 1900, duration: 0.32, gain: 0.05 });
+      this.tone({ from: 4300 + Math.random() * 400, to: 3100, duration: 0.22, gain: 0.03 });
+      this.tone({ type: 'triangle', from: 640, to: 220, duration: 0.14, gain: 0.05 });
+    },
+    /** A bolt bursting on a crate or the floor. */
+    boltImpact(distance = 5) {
+      if (!this.enabled || !context) return;
+      const near = Math.max(0.15, 1 - distance / 16);
+      this.noiseBurst({ duration: 0.14, type: 'lowpass', frequency: 1600, gain: 0.12 * near, decay: 0.2 });
+      this.tone({ from: 180, to: 60, duration: 0.12, gain: 0.06 * near });
+    },
+    /** A bolt burning the hero's robe. */
+    sizzle() {
+      if (!this.enabled || !context) return;
+      this.noiseBurst({ duration: 0.28, type: 'highpass', frequency: 3200, gain: 0.07, decay: 0.45 });
+    },
+    /** "?" — a wondering rise; "!" — the alert's sharp double sting. */
+    alert(kind) {
+      if (!this.enabled || !context) return;
+      if (kind === '!') {
+        this.tone({ type: 'square', from: 1320, to: 1300, duration: 0.07, gain: 0.04 });
+        this.tone({ type: 'square', from: 1760, to: 1740, duration: 0.16, gain: 0.04, delay: 0.07 });
+        this.noiseBurst({ duration: 0.04, type: 'highpass', frequency: 4000, gain: 0.04, decay: 0.3 });
+      } else this.tone({ type: 'triangle', from: 480, to: 760, duration: 0.2, gain: 0.05 });
     },
     update(saber, speed, turn) {
       if (!context) return;

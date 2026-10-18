@@ -9,7 +9,9 @@ import * as THREE from 'three';
  * of the shared particle, so a limb comes free with the velocity it had.
  * Simulated particles fall, collide with the floor and with other limbs; a
  * particle may carry its own floor bounce and friction (a light, hard piece
- * clatters and skids where a body lies still).
+ * clatters and skids where a body lies still). Obstacles on the floor —
+ * axis-aligned boxes in `boxes` — stop them too: a body thrown into a crate
+ * hits it, bounces off and slides down its side.
  * A body drives its mesh from the frame of its three particles.
  */
 const STEP = 1 / 120;
@@ -28,6 +30,9 @@ export class Ragdoll {
     this.frameMatrix = new THREE.Matrix4();
     // Muscles: callbacks run every step after integration (an active ragdoll).
     this.drivers = [];
+    // Obstacles: { min, max } boxes (crates, barrels, barriers).
+    this.boxes = [];
+    this.near = [];
   }
   addParticle({ position, radius = 0.05, mass = 1, name = '' }) {
     const particle = { name, position: position.clone(), previous: position.clone(), radius, inverseMass: 1 / mass, kinematic: true, bodies: [] };
@@ -144,10 +149,61 @@ export class Ragdoll {
       position.x += vx; position.y += vy + this.gravity * h * h; position.z += vz;
     }
     for (const driver of this.drivers) driver(h);
+    this.findNearBoxes();
     for (let iteration = 0; iteration < 10; iteration++) {
       for (const constraint of this.constraints) this.solve(constraint);
       this.collideFloor();
+      if (this.near.length && iteration % 2 === 1) this.collideBoxes();
       if (iteration % 3 === 2) this.collideBodies();
+    }
+  }
+  /** The boxes the simulated particles might touch this step. */
+  findNearBoxes() {
+    this.near.length = 0;
+    if (!this.boxes.length) return;
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity, any = false;
+    for (const { kinematic, position } of this.particles) {
+      if (kinematic) continue;
+      any = true;
+      minX = Math.min(minX, position.x); maxX = Math.max(maxX, position.x);
+      minZ = Math.min(minZ, position.z); maxZ = Math.max(maxZ, position.z);
+    }
+    if (!any) return;
+    for (const box of this.boxes) {
+      if (box.min.x > maxX + 0.5 || box.max.x < minX - 0.5 || box.min.z > maxZ + 0.5 || box.max.z < minZ - 0.5) continue;
+      this.near.push(box);
+    }
+  }
+  collideBoxes() {
+    for (const particle of this.particles) {
+      if (particle.kinematic) continue;
+      const { position, previous, radius } = particle;
+      for (const { min, max } of this.near) {
+        const cx = Math.max(min.x, Math.min(position.x, max.x)), cy = Math.max(min.y, Math.min(position.y, max.y)), cz = Math.max(min.z, Math.min(position.z, max.z));
+        let nx = position.x - cx, ny = position.y - cy, nz = position.z - cz;
+        let distance = Math.sqrt(nx * nx + ny * ny + nz * nz), depth;
+        if (distance >= radius) continue;
+        if (distance > 1e-6) { nx /= distance; ny /= distance; nz /= distance; depth = radius - distance; }
+        else {
+          // The centre went in: out through the nearest face.
+          const faces = [[min.x - position.x, -1, 0, 0], [max.x - position.x, 1, 0, 0], [max.y - position.y, 0, 1, 0], [min.z - position.z, 0, 0, -1], [max.z - position.z, 0, 0, 1]];
+          let best = faces[0];
+          for (const face of faces) if (Math.abs(face[0]) < Math.abs(best[0])) best = face;
+          [, nx, ny, nz] = best;
+          depth = Math.abs(best[0]) + radius;
+        }
+        position.x += nx * depth; position.y += ny * depth; position.z += nz * depth;
+        // Bounce off the face, rub along it.
+        const vx = position.x - previous.x, vy = position.y - previous.y, vz = position.z - previous.z;
+        const into = vx * nx + vy * ny + vz * nz;
+        if (into >= 0) continue;
+        const friction = particle.friction ?? this.friction, bounce = (particle.bounce ?? this.bounce) * (into < -0.004 ? 1.4 : 0);
+        const tx = vx - into * nx, ty = vy - into * ny, tz = vz - into * nz;
+        const keep = 1 - friction * 0.6;
+        previous.x = position.x - (tx * keep - into * bounce * nx);
+        previous.y = position.y - (ty * keep - into * bounce * ny);
+        previous.z = position.z - (tz * keep - into * bounce * nz);
+      }
     }
   }
   solve({ a, b, min, max }) {

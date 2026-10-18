@@ -115,7 +115,8 @@ function step(dt) {
   effects.update(dt);
   lighting.follow(character.root.position);
   for (const view of views) {
-    focus.copy(character.root.position).add(new THREE.Vector3(0, 0.8, 0));
+    // The cameras follow the hero, or the stormtrooper (set({ follow: 'trooper' })).
+    focus.copy(state.follow === 'trooper' ? trooper.root.position : character.root.position).add(new THREE.Vector3(0, 0.8, 0));
     view.camera.position.copy(focus).add(view.offset);
     view.camera.lookAt(focus);
   }

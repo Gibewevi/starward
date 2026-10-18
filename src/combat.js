@@ -490,6 +490,21 @@ export class CombatController {
     this.start(name);
     return true;
   }
+  /**
+   * RB held and a bolt about to arrive: the blade snaps out to meet it on its
+   * side ('left', 'right', 'high'; null: either side). A parry still going
+   * out covers it already.
+   */
+  deflect(side = null) {
+    if (this.action?.power) return false;
+    if (this.action?.role.includes('parry') && this.time / this.action.duration < 0.45) return true;
+    const name = side === 'left' ? 'parryLeft' : side === 'right' ? 'parryRight' : side === 'high' ? 'parryHigh'
+      : this.lastParry === 'parryLeft' ? 'parryRight' : 'parryLeft';
+    this.lastParry = name;
+    this.interrupt();
+    this.start(name);
+    return true;
+  }
   takeForce() { const name = this.fired; this.fired = null; return name; }
   /** The ignition twirl; it never interrupts a strike or the guard. */
   flourish() {

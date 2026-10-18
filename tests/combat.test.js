@@ -285,3 +285,21 @@ test('holding a trooper up with the Force keeps the free hand out, even through 
   run(combat, 1.5);
   assert.ok(combat.output.weight < 0.05, 'let go, the arms return to the captured motion');
 });
+
+test('guarding, a bolt about to arrive makes the blade snap out on its side, and a parry going out covers the next', () => {
+  const combat = new CombatController({ random: () => 0.3 });
+  run(combat, 0.4, { guard: true });
+  assert.ok(combat.guarding);
+  assert.ok(combat.deflect('left'));
+  run(combat, 1 / 60, { guard: true });
+  assert.equal(combat.output.name, 'parryLeft', 'the blade goes out to his left');
+  const started = combat.action;
+  combat.deflect('right');
+  assert.equal(combat.action, started, 'already out: no restart');
+  run(combat, 0.3, { guard: true });
+  combat.deflect('right');
+  run(combat, 1 / 60, { guard: true });
+  assert.equal(combat.output.name, 'parryRight', 'then to his right');
+  run(combat, 0.5, { guard: true });
+  assert.equal(combat.output.name, 'guard', 'and back on guard');
+});
