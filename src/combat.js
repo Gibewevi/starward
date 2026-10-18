@@ -326,6 +326,10 @@ export const MOVES = {
 export const GUARD_SPEED = 2.2;
 const PARRIES = ['parryHigh', 'parryLeft', 'parryRight'];
 const GUARD = key(0, [-0.04, 0.98, 0.3], [0.15, 0.96, 0.22], { grip: 1, yaw: 0.2, pitch: 0.04, crouch: 0.55, left: [-0.02, 0.92, 0.3] });
+// Holding a trooper up with the Force: the free hand stays out towards him,
+// the blade ready to strike.
+const HOLD = key(0, [-0.26, 0.98, 0.1], [-0.35, 0.5, 0.79], { left: [0.12, 1.15, 0.48], yaw: -0.2, pitch: 0.05, crouch: 0.6 });
+const HOLD_LEFT = new THREE.Vector3(0.12, 1.15, 0.48);
 
 const clamp01 = value => Math.max(0, Math.min(1, value));
 const ease = value => value * value * (3 - 2 * value);
@@ -393,6 +397,8 @@ export class CombatController {
     this.random = random;
     this.output = { ...createPose(), weight: 0, guard: 0, lift: 0, spin: 0, drive: 0, inputScale: 1, turnScale: 1, maxSpeed: Infinity, trail: 0, flare: 0, shake: 0, name: null, engaged: false };
     this.guardPose = poseOf(GUARD);
+    this.holdPose = poseOf(HOLD);
+    this.force = 0;
     this.actionPose = createPose();
     this.fromPose = createPose();
     this.lastPose = createPose();
@@ -509,9 +515,11 @@ export class CombatController {
     this.impacted = false;
     this.started = name;
   }
-  update(dt, { guard = false, speed = 0 } = {}) {
+  /** guard: RB held; hold: a trooper held up by the Force (the free hand stays out, even while striking). */
+  update(dt, { guard = false, speed = 0, hold = false } = {}) {
     const out = this.output;
     this.clock += dt;
+    this.force += ((hold ? 1 : 0) - this.force) * (1 - Math.exp(-12 * dt));
     this.cooldown = Math.max(0, this.cooldown - dt);
     out.shake = Math.max(0, out.shake - dt * 4);
     out.flare = Math.max(0, out.flare - dt * 5);
@@ -552,28 +560,37 @@ export class CombatController {
       this.guard += ((guard ? 1 : 0) - this.guard) * (1 - Math.exp(-14 * dt));
       // Out of a strike the arms ease back to the captured motion, unless the
       // guard takes over the pose.
-      out.weight = Math.max(this.guard, out.weight - dt / 0.3);
-      // A held guard is alive: the hands breathe and the blade wavers.
-      const guardPose = copyPose(this.swayPose, this.guardPose);
+      const steady = Math.max(this.guard, this.force);
+      out.weight = Math.max(steady, out.weight - dt / 0.3);
+      // A held guard (or Force hold) is alive: the hands breathe and the blade wavers.
+      const guardPose = copyPose(this.swayPose, this.guard >= this.force ? this.guardPose : this.holdPose);
       guardPose.hand.x += Math.sin(this.clock * 1.7) * 0.008;
       guardPose.hand.y += Math.sin(this.clock * 2.3) * 0.006;
       guardPose.blade.x += Math.sin(this.clock * 1.3) * 0.05;
       guardPose.blade.normalize();
-      mixPose(this.mixed, this.lastPose, guardPose, out.weight > 0 ? clamp01(this.guard / out.weight) : 1);
+      mixPose(this.mixed, this.lastPose, guardPose, out.weight > 0 ? clamp01(steady / out.weight) : 1);
       copyPose(this.actionPose, this.mixed);
       copyPose(this.lastPose, this.mixed);
-      out.name = this.guard > 0.5 ? 'guard' : null;
+      out.name = this.guard > 0.5 ? 'guard' : this.force > 0.5 ? 'forceHold' : null;
     } else if (!this.action.free) {
       this.guard = 0;
     }
     copyPose(out, this.actionPose);
+    // While the Force holds a trooper, the free hand stays out towards him,
+    // trembling with the effort, through every strike.
+    if (this.force > 0.01) {
+      out.left.lerp(HOLD_LEFT, this.force);
+      out.left.x += Math.sin(this.clock * 17) * 0.005 * this.force;
+      out.left.y += Math.sin(this.clock * 13) * 0.005 * this.force;
+      out.grip *= 1 - this.force;
+    }
     out.guard = this.guard;
     const striking = this.busy;
     // Powers and parries let the hero keep moving a little; strikes commit him.
     out.inputScale = striking ? (this.action.utility ? 0.5 : 0.15) : 1;
     out.turnScale = striking ? 0 : this.guard > 0.5 ? 0.6 : 1;
-    out.maxSpeed = striking ? Infinity : this.guard > 0.1 ? GUARD_SPEED + (1 - this.guard) * 3 : Infinity;
-    out.engaged = Boolean(this.action) || this.guard > 0.1;
+    out.maxSpeed = striking ? Infinity : this.guard > 0.1 ? GUARD_SPEED + (1 - this.guard) * 3 : this.force > 0.1 ? 2.8 : Infinity;
+    out.engaged = Boolean(this.action) || this.guard > 0.1 || this.force > 0.1;
     return out;
   }
   finish() {

@@ -9,11 +9,11 @@ import { createSaber, IGNITE_TIME } from '../src/saber.js';
 function seeded(seed) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 }
-function run(combat, seconds, { press = () => false, guard = false, speed = 0 } = {}) {
+function run(combat, seconds, { press = () => false, guard = false, speed = 0, hold = false } = {}) {
   const started = [];
   for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
     if (press(frame)) combat.attack({ speed });
-    combat.update(1 / 60, { guard, speed });
+    combat.update(1 / 60, { guard, speed, hold });
     const name = combat.takeStart();
     if (name) started.push(name);
   }
@@ -270,4 +270,18 @@ test('strikes are quicker and cover every direction', () => {
   combat.attack();
   const first = combat.takeStart();
   assert.ok(combat.action.duration < MOVES[first].duration, 'played faster than written');
+});
+
+test('holding a trooper up with the Force keeps the free hand out, even through strikes', () => {
+  const combat = new CombatController({ random: seeded(29) });
+  run(combat, 0.4, { hold: true });
+  assert.equal(combat.output.name, 'forceHold');
+  assert.ok(combat.output.weight > 0.95 && combat.output.left.z > 0.4 && combat.output.grip < 0.05, 'the free hand reaches out');
+  combat.attack();
+  for (let frame = 0; frame < 20; frame++) {
+    const out = combat.update(1 / 60, { hold: true });
+    assert.ok(out.left.z > 0.4, 'still out mid-strike');
+  }
+  run(combat, 1.5);
+  assert.ok(combat.output.weight < 0.05, 'let go, the arms return to the captured motion');
 });

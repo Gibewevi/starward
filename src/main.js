@@ -146,6 +146,15 @@ function init() {
     }
     return best;
   }
+  // LT / U kept down: the pulled trooper hangs before the hero; let go, he drops.
+  let pullHeld = false, held = null;
+  const holdPoint = () => new THREE.Vector3(motion.x + Math.sin(motion.heading) * FEEL.pull.hold.distance, FEEL.pull.hold.height, motion.z + Math.cos(motion.heading) * FEEL.pull.hold.distance);
+  function keepHold() {
+    if (!held) return;
+    if (!pullHeld || held.dead) { held.drop(); held = null; return; }
+    const point = holdPoint();
+    held.hold(point, Math.atan2(motion.x - point.x, motion.z - point.z));
+  }
   function unleash(kind) {
     character.rig.bones.LeftHand.getWorldPosition(leftHand);
     here.set(motion.x, 0, motion.z);
@@ -167,7 +176,10 @@ function init() {
       const trooper = target(FEEL.pull.range, FEEL.pull.cone);
       const toward = trooper ? whereIs(trooper).sub(here) : facing.clone().multiplyScalar(3);
       const distance = Math.max(0.1, toward.length());
-      if (trooper) trooper.forcePull(here.clone().addScaledVector(toward.clone().normalize(), Math.min(FEEL.pull.stop, distance)));
+      if (trooper && pullHeld) {
+        if (held && held !== trooper) held.drop();
+        if (trooper.forcePull(holdPoint(), { hold: true })) held = trooper;
+      } else if (trooper) trooper.forcePull(here.clone().addScaledVector(toward.clone().normalize(), Math.min(FEEL.pull.stop, distance)));
       effects.wave(leftHand, toward, { kind: 'pull', length: distance });
       shove(toward.clone().negate(), FEEL.camera.kick);
       audio.force('pull');
@@ -296,6 +308,7 @@ function init() {
       let y = Number(keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) + joystick.y;
       let sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') || joystick.running;
       let guard = keys.has('KeyK');
+      pullHeld = keys.has('KeyU');
       // The stick's tilt sets the pace: slow walk, brisk walk, run, then sprint.
       let analog = Math.hypot(joystick.x, joystick.y) > 0.01 && !sprint;
       const gamepad = navigator.getGamepads?.()?.find(pad => pad?.connected);
@@ -316,6 +329,7 @@ function init() {
         if (pull && !padPull) powerPressed = 'forcePull';
         if (push && !padPush) powerPressed = 'forcePush';
         padPull = pull; padPush = push;
+        pullHeld ||= pull;
         // Y puts the stormtrooper back on his feet.
         const resetButton = !!gamepad.buttons[3]?.pressed;
         if (resetButton && !padReset) resetTrooper();
@@ -324,12 +338,13 @@ function init() {
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       // Powers cut any strike short; a parry too; B strikes and chains.
+      keepHold();
       if (powerPressed) combat.power(powerPressed);
       if (parryPressed) combat.parry();
       if (attackPressed) combat.attack({ speed: motion.speed });
       attackPressed = parryPressed = false;
       powerPressed = null;
-      const action = combat.update(sim, { guard, speed: motion.speed });
+      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held) });
       // Each move re-aims towards the stick before it lands; a power with the
       // stick at rest turns towards the trooper the hero is facing most.
       const started = combat.takeStart();
@@ -417,7 +432,7 @@ function init() {
     if (hudTimer > 0.15) {
       hudTimer = 0;
       const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      stateEl.textContent = paused ? 'EN PAUSE' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;

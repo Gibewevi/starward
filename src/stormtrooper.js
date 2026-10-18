@@ -21,9 +21,13 @@ import { FEEL, curve, pick } from './feel.js';
  * comes apart progressively: helmet, plates, pauldrons and guards come off
  * under the blade and in hard landings, and fly as physical pieces.
  *
+ * Blows move him: each one shoves him back along the blade and turns him
+ * away from it, and a felled body carries the blow's momentum and slides.
+ *
  * The Force moves him. A push throws him off his feet — it never kills — to
  * tumble, bounce, roll and slide; a pull drags him in, explosive at first and
- * slowing on arrival. Knocked down unhurt, he lies stunned, gets up (muscles
+ * slowing on arrival. Held, he hangs in the air before the hero, legs
+ * kicking, following him; let go, he drops onto his feet and runs away. Knocked down unhurt, he lies stunned, gets up (muscles
  * drive the ragdoll into a crouch, then upright), sways, and fetches his
  * rifle if it lies close by.
  *
@@ -272,6 +276,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   // Knocked down unhurt and getting back up; dragged by the Force; fetching
   // the rifle; a slippery spell on the floor; landings; news for the game.
   let recover = null, towing = null, pickup = null, slick = null, mounts = null, landed = 0;
+  // Held up by the Force, dropping back down, running away, turning back.
+  let levitating = null, dropping = null, flee = null, turnBack = null;
   const feed = [];
   const reaction = {};
   const tweens = createTweens(), flashes = new Map();
@@ -369,7 +375,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     scene.add(root, debris);
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
-    collapse = crawl = spasm = recover = towing = pickup = slick = null;
+    collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = null;
     feed.length = 0;
     twitches = [];
     muscles = [];
@@ -382,6 +388,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       press: null, pressAt: null, pressHand: null, pressing: 0, limp: 0,
       linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
       kneel: 0, yank: 0, daze: 0, reachFor: null,
+      knock: new THREE.Vector3(), spin: 0, run: 0, dangle: 0, stride: 0,
     });
     base = joints.pelvis.position.clone();
     // Where his feet stand: leg IK keeps them planted while the body sways.
@@ -465,26 +472,31 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     r.daze = Math.max(0, r.daze - dt);
     const dazed = Math.min(1, r.daze / 0.6), sway = Math.sin(time * 2.6) * 0.1 * dazed, loll = Math.sin(time * 3.1 + 1) * 0.16 * dazed;
     const kneel = r.kneel, yank = r.yank;
+    // Held in the air the legs dangle and kick; running, they stride.
+    r.dangle += ((levitating ? 1 : 0) - r.dangle) * (1 - Math.exp(-8 * dt));
+    const run = r.run, dangle = r.dangle;
     const breathe = Math.sin(time * 1.7), look = (Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08) * (1 - r.hurt) * (1 - r.pressing * 0.7) * (1 - dazed) * (1 - kneel);
     const dip = r.dipL + r.dipR, tilt = r.dipR - r.dipL;
-    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04 - dip * 0.06 - r.limp * 0.17 - kneel * 0.48 - dazed * 0.03, base.z + r.offset.z - kneel * 0.05);
+    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04 - dip * 0.06 - r.limp * 0.17 - kneel * 0.48 - dazed * 0.03 - Math.abs(Math.sin(r.stride)) * 0.05 * run, base.z + r.offset.z - kneel * 0.05);
     joints.pelvis.rotation.set(r.pitch * 0.3 + yank * 0.15, r.yaw * 0.4, r.roll * 0.4 + tilt * 0.22);
-    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway);
+    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 + run * 0.28 - dangle * 0.1, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway);
     joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 + dazed * 0.15, look - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3, r.roll * -0.3 + r.headRoll + loll);
     for (const [side, sign] of SIDES) {
-      joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5 - r.hurt * 0.22, 0, sign * 0.06);
-      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38 + yank * 0.6, 0, 0);
-      joints[`ankle${side}`].rotation.set(-0.06, 0, -sign * 0.06);
+      const phase = r.stride + (side === 'L' ? 0 : Math.PI), kick = Math.sin(time * 4.6 + sign * 1.3) * 0.3 * dangle;
+      joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5 - r.hurt * 0.22 - Math.sin(phase) * 0.75 * run - 0.25 * dangle + kick, 0, sign * 0.06);
+      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38 + yank * 0.6 + Math.max(0, Math.sin(phase + 1.2)) * 1.3 * run + (0.45 + kick) * dangle, 0, 0);
+      joints[`ankle${side}`].rotation.set(-0.06 + 0.2 * run + 0.55 * dangle, 0, -sign * 0.06);
       // Without the rifle the arms hang, flung by the hits — back while he
       // is dragged, forward towards the floor while he crouches.
-      joints[`shoulder${side}`].rotation.set(-0.15 + r[`arm${side}`] + yank * 0.9 - kneel * 0.9, 0, sign * (0.12 + Math.abs(r[`arm${side}`]) * 0.5 + yank * 0.35) + r[`flare${side}`]);
+      joints[`shoulder${side}`].rotation.set(-0.15 + r[`arm${side}`] + yank * 0.9 - kneel * 0.9 + Math.sin(phase) * 0.6 * run - Math.sin(time * 3.7 + sign) * 0.35 * dangle, 0, sign * (0.12 + Math.abs(r[`arm${side}`]) * 0.5 + yank * 0.35) + r[`flare${side}`]);
       joints[`elbow${side}`].rotation.set(-0.35 - r.limp * 0.4 - kneel * 0.4, 0, 0);
       joints[`wrist${side}`].rotation.set(0, 0, 0);
     }
     trooper.root.updateMatrixWorld(true);
-    // Feet stay planted: the knees take up every dip and sway.
+    // Feet stay planted: the knees take up every dip and sway (unless he is
+    // off the ground or running).
     const rootQuaternion = trooper.root.quaternion;
-    for (const [side, sign] of SIDES) {
+    if (Math.max(run, dangle) < 0.5) for (const [side, sign] of SIDES) {
       const knee = joints[`knee${side}`], ankle = joints[`ankle${side}`];
       solveTwoBone(joints[`hip${side}`], knee, ankle, trooper.root.localToWorld(temp.copy(feet[side].position)), trooper.root.localToWorld(temp2.set(sign * 0.12, 0.5, 0.8)));
       knee.getWorldQuaternion(quaternion).invert();
@@ -771,6 +783,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       r.varmR += (random() - 0.5) * 6 * force;
     }
     r.push.addScaledVector(world(push), 0.22 * force * (region === 'arm' ? 0.4 : region === 'head' ? 0.6 : 1));
+    // Shoved back along the blow and turned away from it, around where it landed.
+    r.knock.addScaledVector(world(push), FEEL.hit.knockback * force * (region === 'arm' ? 0.55 : region === 'head' ? 0.7 : 1));
+    r.spin += (at.z * push.x - at.x * push.z) / Math.max(0.12, Math.hypot(at.x, at.z)) * FEEL.hit.spin * force + (random() - 0.5) * 0.5 * force;
     r.imbalance += (region === 'leg' ? 0.3 : 0.2) * force;
     // Too many blows: his legs go and he falls, still alive.
     if (r.imbalance > 1) fall('imbalance', velocity);
@@ -829,6 +844,20 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const twist = forward.clone().cross(UP).multiplyScalar((random() - 0.5) * 2.2);
     ragdoll.push([particleIndex.SL], twist);
     ragdoll.push([particleIndex.SR], twist.clone().negate());
+    // A body felled by the blade carries the blow and the shove already under
+    // way: it does not drop where it was struck, it is thrown and slides.
+    if (cause !== 'force' && cause !== 'pull') {
+      const carry = new THREE.Vector3().copy(velocity).setY(0).multiplyScalar(FEEL.hit.carry).clampLength(0, FEEL.hit.maxCarry).add(reaction.knock);
+      if (carry.lengthSq() > 0.04) {
+        carry.y = 0.35 + carry.length() * 0.12;
+        const indices = joinedIndices();
+        ragdoll.push(indices, carry);
+        slip(indices, FEEL.hit.slide);
+      }
+    }
+    levitating = dropping = flee = turnBack = null;
+    reaction.run = reaction.dangle = 0;
+    reaction.knock.set(0, 0, 0);
     if (!trooper.dead) {
       // Knocked down unhurt, he will get back up; with a leg gone, he crawls.
       if (injured()) startCrawl();
@@ -859,6 +888,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (trooper.dead) return;
     trooper.dead = true;
     crawl = recover = null;
+    flee = turnBack = null;
+    reaction.run = 0;
     if (towing?.kind === 'stand') towing = null;
     muscles = [];
     if (pickup) dropPickup();
@@ -1209,6 +1240,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   function forcePush(velocity) {
     const v = velocity.clone();
     if (pickup) dropPickup();
+    levitating = dropping = flee = turnBack = null;
     if (!trooper.fallen) {
       towing = null;
       reaction.yank = 0;
@@ -1241,25 +1273,28 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
    * off his feet and lands staggering, maybe disarmed or felled; on the floor,
    * the body is hauled along.
    */
-  function forcePull(to, { duration = pick(FEEL.pull.duration, random) } = {}) {
+  function forcePull(to, { duration = pick(FEEL.pull.duration, random), hold = false } = {}) {
     if (trooper.dead && !trooper.fallen) return false;
     if (pickup) dropPickup();
+    flee = turnBack = dropping = null;
+    reaction.run = 0;
     if (!trooper.fallen) {
-      const from = trooper.root.position.clone().setY(0), target = to.clone().setY(0);
-      const toward = new THREE.Vector3().subVectors(target, from);
-      if (toward.length() < 0.2) return false;
+      const from = trooper.root.position.clone(), target = to.clone().setY(hold ? to.y : 0);
+      const toward = new THREE.Vector3().subVectors(target, from).setY(0);
+      if (toward.length() < 0.2 && !hold) return false;
       // The curve peaks at about 3.2 × the mean speed: keep it under the top speed.
       duration = Math.max(duration, 3.2 * toward.length() / FEEL.pull.topSpeed);
       towing = {
         kind: 'stand', from, to: target, age: 0, duration, lift: pick(FEEL.pull.lift, random),
         fromHeading: trooper.root.rotation.y, toHeading: Math.atan2(toward.x, toward.z) + (random() - 0.5) * FEEL.pull.spin,
-        disarm: trooper.holding && random() < FEEL.pull.dropChance, falls: random() < FEEL.pull.fallChance, direction: toward.normalize(),
+        disarm: trooper.holding && random() < FEEL.pull.dropChance, falls: random() < FEEL.pull.fallChance, direction: toward.normalize(), hold,
       };
+      levitating = null;
       reaction.varmL += 3 + random() * 3;
       reaction.varmR += 3 + random() * 3;
     } else {
       const indices = joinedIndices(), from = centroid(indices);
-      towing = { kind: 'body', indices, from, to: to.clone().setY(from.y), age: 0, duration: duration * 1.15, lift: 0.35, last: from.clone(), velocity: null };
+      towing = { kind: 'body', indices, from, to: to.clone().setY(hold ? to.y + 0.3 : from.y), age: 0, duration: duration * 1.15, lift: 0.35, last: from.clone(), velocity: null, hold };
       if (crawl) { crawl.pause = Math.max(crawl.pause, duration + 0.8); crawl.effort = 0; }
       if (recover) { muscles = []; Object.assign(recover, { stage: 'tumble', age: 0, effort: 0 }); }
     }
@@ -1273,10 +1308,19 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     t.age += dt;
     const p = Math.min(1, t.age / t.duration), e = curve(FEEL.pull.curve)(p);
     trooper.root.position.lerpVectors(t.from, t.to, e);
-    trooper.root.position.y = t.lift * Math.sin(Math.PI * p);
+    trooper.root.position.y = t.from.y + (t.to.y - t.from.y) * e + t.lift * Math.sin(Math.PI * p) * (t.hold ? 0.5 : 1);
     trooper.root.rotation.y = t.fromHeading + Math.atan2(Math.sin(t.toHeading - t.fromHeading), Math.cos(t.toHeading - t.fromHeading)) * ease.outCubic(Math.min(1, p * 1.6));
     reaction.yank = Math.sin(Math.PI * Math.min(1, p * 1.15)) ** 0.6;
     if (p < 1) return;
+    if (t.hold) {
+      // Held: he stays up there, before the hero, as long as the Force holds him.
+      towing = null;
+      reaction.yank = 0;
+      levitating = { point: t.to.clone(), heading: t.toHeading, age: 0, next: 0.2 };
+      if (t.disarm) dropBlaster(t.direction.clone().multiplyScalar(1.5));
+      feed.push({ type: 'held', point: trooper.root.position.clone() });
+      return;
+    }
     // Arrival: he lands staggering — whiplash, buckled knees — maybe disarmed, maybe felled.
     towing = null;
     reaction.yank = 0;
@@ -1297,9 +1341,88 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const p = Math.min(1, t.age / t.duration), e = curve(FEEL.pull.curve)(p);
     const target = new THREE.Vector3().lerpVectors(t.from, t.to, e);
     target.y = t.from.y + t.lift * Math.sin(Math.PI * p);
+    if (t.hold && p >= 1) target.copy(t.to).y += Math.sin(t.age * 2.2) * FEEL.pull.hold.bob;
     t.velocity = new THREE.Vector3().subVectors(target, t.last).divideScalar(Math.max(dt, 1e-4)).addScaledVector(temp.subVectors(target, centroid(t.indices)), 5);
     t.last.copy(target);
-    if (p >= 1) towing = null;
+    if (p >= 1 && !t.hold) towing = null;
+  }
+
+  /** Keeps a pulled trooper (or body) up where the Force holds him; heading: where he should face. */
+  function hold(point, heading = null) {
+    if (levitating) {
+      levitating.point.copy(point);
+      if (heading !== null) levitating.heading = heading;
+    } else if (towing?.hold) {
+      towing.to.copy(point);
+      if (towing.kind === 'body') towing.to.y = point.y + 0.3;
+      if (heading !== null && towing.kind === 'stand') towing.toHeading = heading;
+    }
+  }
+  /** Let go: he drops back to the floor (a body just falls). */
+  function drop() {
+    if (towing?.hold) {
+      if (towing.kind === 'body') towing = null;
+      else { towing.hold = false; towing.to.y = 0; }
+    }
+    if (!levitating) return;
+    levitating = null;
+    dropping = { speed: 0 };
+  }
+  /** Hanging in the Force's grip: following the point, bobbing, kicking, arms flailing. */
+  function levitateStep(dt, time) {
+    const l = levitating;
+    l.age += dt;
+    const target = temp.copy(l.point);
+    target.y += Math.sin(time * 2.2) * FEEL.pull.hold.bob;
+    trooper.root.position.lerp(target, 1 - Math.exp(-FEEL.pull.hold.follow * dt));
+    const turn = Math.atan2(Math.sin(l.heading - trooper.root.rotation.y), Math.cos(l.heading - trooper.root.rotation.y));
+    trooper.root.rotation.y += turn * (1 - Math.exp(-6 * dt));
+    if ((l.next -= dt) <= 0) {
+      l.next = 0.3 + random() * 0.45;
+      reaction.varmL += (random() - 0.5) * 7;
+      reaction.varmR += (random() - 0.5) * 7;
+      reaction.vhead += (random() - 0.5) * 3;
+      reaction.vroll += (random() - 0.5) * 1.5;
+    }
+  }
+  /** Dropped: he falls onto his feet, buckles, and runs for it. */
+  function dropStep(dt) {
+    dropping.speed += 11 * dt;
+    trooper.root.position.y -= dropping.speed * dt;
+    if (trooper.root.position.y > 0) return;
+    trooper.root.position.y = 0;
+    reaction.vbuckle += 2.5 + dropping.speed * 0.6;
+    reaction.vpitch += 1.5;
+    reaction.varmL += (random() - 0.5) * 6;
+    reaction.varmR += (random() - 0.5) * 6;
+    dropping = null;
+    feed.push({ type: 'land', point: trooper.root.position.clone(), speed: 2 });
+    // Away from the hero, a little off to one side.
+    const away = trooper.root.position.clone().sub(trooper.focus ?? temp.set(0, 0, 0)).setY(0);
+    if (away.lengthSq() < 1e-4) away.set(Math.sin(trooper.root.rotation.y + Math.PI), 0, Math.cos(trooper.root.rotation.y + Math.PI));
+    away.normalize().applyAxisAngle(UP, (random() - 0.5) * 1.1);
+    flee = { direction: away, speed: pick(FEEL.flee.speed, random), left: pick(FEEL.flee.time, random), age: 0, delay: 0.25 };
+  }
+  /** Running away: a quick start, a stride, then he slows, stops and turns back. */
+  function fleeStep(dt) {
+    const f = flee;
+    f.age += dt;
+    if (f.age < f.delay) return;
+    f.left -= dt;
+    const pace = f.left > 0 ? smooth(Math.min(1, (f.age - f.delay) / 0.3)) : Math.max(0, 1 + f.left / 0.5);
+    const speed = f.speed * pace;
+    const heading = Math.atan2(f.direction.x, f.direction.z);
+    trooper.root.rotation.y += Math.atan2(Math.sin(heading - trooper.root.rotation.y), Math.cos(heading - trooper.root.rotation.y)) * (1 - Math.exp(-10 * dt));
+    trooper.root.position.addScaledVector(f.direction, speed * dt);
+    trooper.root.position.x = THREE.MathUtils.clamp(trooper.root.position.x, -30, 30);
+    trooper.root.position.z = THREE.MathUtils.clamp(trooper.root.position.z, -30, 30);
+    reaction.run = pace;
+    reaction.stride += speed * dt / FEEL.flee.stride * Math.PI * 2;
+    if (pace > 0) return;
+    flee = null;
+    reaction.run = 0;
+    // He stops and turns back to face the hero, warily.
+    if (trooper.focus) turnBack = Math.atan2(trooper.focus.x - trooper.root.position.x, trooper.focus.z - trooper.root.position.z);
   }
 
   /** On the floor unhurt: tumbling to a stop, lying stunned, then getting up. */
@@ -1440,10 +1563,27 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     dt = Math.min(dt, 0.05);
     clock += dt;
     tweens.update(dt);
-    if (!trooper.fallen) {
-      if (towing?.kind === 'stand' && dt > 0) towStanding(dt);
-      if (pickup && dt > 0) pickupStep(dt);
-      else if (dt > 0) lookForRifle();
+    if (!trooper.fallen && dt > 0) {
+      if (towing?.kind === 'stand') towStanding(dt);
+      else if (levitating) levitateStep(dt, time);
+      else if (dropping) dropStep(dt);
+      else if (flee) fleeStep(dt);
+      else if (turnBack !== null) {
+        const turn = Math.atan2(Math.sin(turnBack - trooper.root.rotation.y), Math.cos(turnBack - trooper.root.rotation.y));
+        trooper.root.rotation.y += turn * (1 - Math.exp(-5 * dt));
+        if (Math.abs(turn) < 0.05) turnBack = null;
+      }
+      if (pickup) pickupStep(dt);
+      else if (!levitating && !dropping && !flee && !towing) lookForRifle();
+      // Shoved by the blows: he slides back, turning away, then catches himself.
+      const r = reaction;
+      if (!towing) {
+        trooper.root.position.x += r.knock.x * dt;
+        trooper.root.position.z += r.knock.z * dt;
+        trooper.root.rotation.y += r.spin * dt;
+      }
+      r.knock.multiplyScalar(Math.exp(-5.5 * dt));
+      r.spin *= Math.exp(-6 * dt);
     }
     if (!trooper.fallen) {
       pose(time, dt);
@@ -1636,7 +1776,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   /** Where the threat is (the hero), so that he gets up facing it. */
   trooper.focus = null;
   build();
-  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull });
+  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
     crawl: { get: () => crawl },
@@ -1648,13 +1788,13 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     /** Armour still on him. */
     armour: { get: () => Object.values(pieces).filter(piece => !piece.userData.loose).length },
     /**
-     * 'standing', 'wounded', 'pulled', 'dazed', 'rearming', 'stunned',
-     * 'rising', 'down', 'crawling' or 'dead'.
+     * 'standing', 'wounded', 'pulled', 'held', 'dropping', 'fleeing', 'dazed',
+     * 'rearming', 'stunned', 'rising', 'down', 'crawling' or 'dead'.
      */
     state: {
       get: () => {
         if (trooper.dead) return 'dead';
-        if (!trooper.fallen) return towing ? 'pulled' : pickup ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
+        if (!trooper.fallen) return towing ? 'pulled' : levitating ? 'held' : dropping ? 'dropping' : flee ? 'fleeing' : pickup ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
         if (recover) return recover.stage === 'rising' ? 'rising' : 'stunned';
         return crawl?.stage === 'crawl' ? 'crawling' : 'down';
       },

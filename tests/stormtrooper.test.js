@@ -193,7 +193,7 @@ test('ragdoll joints stay attached and limbs keep their length', () => {
   assert.ok(p(free).distanceTo(p(b)) > 0.05, 'a severed joint lets go');
 });
 
-test('the saber cuts like butter: the arm comes away and lands near him while he stays where he stands', () => {
+test('the saber cuts like butter: the arm comes away and lands near him while he staggers back on his feet', () => {
   const state = fixture(21);
   state.run(0.5);
   const { trooper } = state;
@@ -208,7 +208,7 @@ test('the saber cuts like butter: the arm comes away and lands near him while he
   state.run(3);
   assert.ok(!trooper.dead, 'one arm lost does not fell him');
   const after = trooper.joints.pelvis.getWorldPosition(new THREE.Vector3());
-  assert.ok(before.distanceTo(after) < 0.1, `he stays in place (${before.distanceTo(after).toFixed(2)} m)`);
+  assert.ok(before.distanceTo(after) > 0.05 && before.distanceTo(after) < 0.8, `the blow shoves him back a little, he is not thrown (${before.distanceTo(after).toFixed(2)} m)`);
   for (const name of ['upperArmL', 'forearmL', 'handL']) {
     for (const index of trooper.bodies[name].indices) {
       const p = trooper.ragdoll.particles[index].position;
@@ -583,4 +583,83 @@ test('a body thrown into a standing trooper knocks him over', () => {
   thrown.forcePush(new THREE.Vector3(0, 2.5, 7));
   run(1.5);
   assert.ok(standing.fallen && !standing.dead, 'bowled over, alive');
+});
+
+// A blade swept straight across at `height`, moving along +x at about 7 m/s.
+function sweepAcross(trooper, clock, height, frames = 8) {
+  const events = [];
+  for (let frame = 0; frame < frames; frame++) {
+    const x0 = -0.5 + frame * 0.12, x1 = x0 + 0.12;
+    clock.time += 1 / 60;
+    trooper.update(1 / 60, clock.time);
+    events.push(...trooper.strike(new THREE.Vector3(x0, height, -0.5), new THREE.Vector3(x0, height, 0.5), new THREE.Vector3(x1, height, -0.5), new THREE.Vector3(x1, height, 0.5), 1 / 60, clock.time));
+  }
+  return events;
+}
+
+test('blows move him: a hit shoves him back and turns him, a felled body is thrown along the blade', () => {
+  const clock = { time: 0 };
+  const trooper = createStormtrooper({ scene: new THREE.Scene(), position: new THREE.Vector3(0, 0, 0), heading: 0, random: seeded(53) });
+  const run = seconds => { for (let frame = 0; frame < Math.round(seconds * 60); frame++) { clock.time += 1 / 60; trooper.update(1 / 60, clock.time); } };
+  run(0.3);
+  // A slash across his chest, short of killing: he is shoved along it.
+  const events = [];
+  for (let frame = 0; frame < 4; frame++) {
+    const x0 = 0.02 + frame * 0.05, x1 = x0 + 0.05;
+    clock.time += 1 / 60;
+    trooper.update(1 / 60, clock.time);
+    events.push(...trooper.strike(new THREE.Vector3(x0, 1.15, 0.25), new THREE.Vector3(x0, 1.15, -0.2), new THREE.Vector3(x1, 1.15, 0.25), new THREE.Vector3(x1, 1.15, -0.2), 1 / 60, clock.time));
+  }
+  assert.ok(events.some(event => event.type === 'slash') && !trooper.fallen, events.map(event => event.type).join());
+  const heading = trooper.root.rotation.y;
+  run(0.8);
+  assert.ok(trooper.root.position.x > 0.2, `shoved along the blade (${trooper.root.position.x.toFixed(2)} m)`);
+  assert.ok(Math.abs(trooper.root.rotation.y - heading) > 0.02 || Math.abs(trooper.root.rotation.y) > 0.02, 'and turned');
+  // Cut down at the knees by the same sweep: the body goes with the blow.
+  const felled = createStormtrooper({ scene: new THREE.Scene(), position: new THREE.Vector3(0, 0, 0), heading: 0, random: seeded(55) });
+  const clock2 = { time: 0 };
+  for (let frame = 0; frame < 18; frame++) { clock2.time += 1 / 60; felled.update(1 / 60, clock2.time); }
+  const cuts = sweepAcross(felled, clock2, 0.6);
+  assert.ok(cuts.some(event => event.type === 'cut') && felled.fallen);
+  for (let frame = 0; frame < 180; frame++) { clock2.time += 1 / 60; felled.update(1 / 60, clock2.time); }
+  const body = felled.particle('W').position;
+  assert.ok(body.x > 1, `not where it was struck: thrown ${body.x.toFixed(2)} m along the blow`);
+  assert.ok(body.x < 4, 'nor across the room');
+});
+
+test('held by the Force he hangs before the hero, following him; let go, he drops onto his feet and runs away', () => {
+  const { trooper, run, states } = standAlone(9, 5);
+  const point = new THREE.Vector3(0, 0.5, 1.25);
+  assert.ok(trooper.forcePull(point.clone(), { hold: true }));
+  for (let frame = 0; frame < 60; frame++) { trooper.hold(point, Math.PI); run(1 / 60); }
+  assert.equal(trooper.state, 'held');
+  assert.ok(trooper.root.position.distanceTo(point) < 0.15 && trooper.root.position.y > 0.35, 'up in the air before the hero');
+  // The hero moves: the trooper follows, still held.
+  for (let frame = 0; frame < 40; frame++) { point.x = Math.min(1, frame / 20); trooper.hold(point, Math.PI); run(1 / 60); }
+  assert.ok(trooper.root.position.distanceTo(point) < 0.2, `he follows (${trooper.root.position.distanceTo(point).toFixed(2)} m off)`);
+  // Struck while held, he reacts but stays in the Force's grip.
+  const blade = trooper.particle('W').position.clone().lerp(trooper.particle('N').position, 0.5);
+  const events = [];
+  for (let frame = 0; frame < 3; frame++) {
+    trooper.hold(point, Math.PI);
+    run(1 / 60);
+    const x0 = blade.x - 0.12 + frame * 0.04;
+    events.push(...trooper.strike(new THREE.Vector3(x0, blade.y, blade.z - 0.4), new THREE.Vector3(x0, blade.y, blade.z + 0.4), new THREE.Vector3(x0 + 0.04, blade.y, blade.z - 0.4), new THREE.Vector3(x0 + 0.04, blade.y, blade.z + 0.4), 1 / 60, 99 + frame));
+  }
+  assert.ok(events.length > 0, 'the blade reaches him');
+  for (let frame = 0; frame < 30; frame++) { trooper.hold(point, Math.PI); run(1 / 60); }
+  assert.equal(trooper.state, 'held');
+  // Let go.
+  trooper.drop();
+  const start = trooper.root.position.clone().setY(0);
+  run(0.6);
+  assert.ok(trooper.root.position.y === 0 && !trooper.fallen, 'back on his feet');
+  run(2.5);
+  assert.ok(states.includes('fleeing'), states.join(' > '));
+  const away = trooper.root.position.clone().setY(0).sub(start);
+  assert.ok(away.length() > 2.5 && away.dot(start.clone().normalize()) > 0, `he ran away from the hero (${away.length().toFixed(2)} m)`);
+  run(2);
+  assert.ok(['standing', 'dazed', 'wounded'].includes(trooper.state), trooper.state);
+  const toHero = Math.atan2(-trooper.root.position.x, -trooper.root.position.z);
+  assert.ok(Math.abs(Math.atan2(Math.sin(toHero - trooper.root.rotation.y), Math.cos(toHero - trooper.root.rotation.y))) < 0.4, 'then turns back to face the hero');
 });

@@ -27,6 +27,13 @@ export const FEEL = {
     pushAt: 0.42,
     pullAt: 0.3,
   },
+  hit: {
+    knockback: 3.4, // m/s per unit of blow: a hit shoves a standing trooper back
+    spin: 2.6, // rad/s per unit of blow: and turns him away from it
+    carry: 0.38, // share of the blade's speed a felled body carries away
+    maxCarry: 4.5, // m/s
+    slide: 1.3, // seconds the floor stays slippery under a felled body
+  },
   pull: {
     range: 8.5, cone: 0.75, // metres, half-angle (rad) of the cone of aim
     duration: [0.4, 0.52], curve: 'outSnap', // explosive start, slowing right down on arrival
@@ -34,6 +41,11 @@ export const FEEL = {
     stop: 1.15, // how far in front of the hero he lands
     lift: [0.18, 0.34], spin: 0.6,
     dropChance: 0.55, fallChance: 0.22,
+    // Held (LT kept down): he hangs in the air before the hero, following him.
+    hold: { distance: 1.25, height: 0.5, follow: 9, bob: 0.05 },
+  },
+  flee: {
+    speed: [3.2, 4], time: [1.2, 1.9], stride: 1.3, // m/s, seconds, metres per running cycle
   },
   push: {
     range: 5.8, cone: 0.95,
