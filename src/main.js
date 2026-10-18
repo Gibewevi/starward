@@ -22,6 +22,10 @@ import { createBlasters, closestSegments } from './blasters.js';
 import { createAlerts } from './alerts.js';
 import { createSquadMind } from './trooper-ai.js';
 import { returnDirection } from './deflect.js';
+import { createExplosions } from './explosions.js';
+import { createDebris } from './debris.js';
+import { createGrenades } from './grenades.js';
+import { createHeroRagdoll } from './hero-ragdoll.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -116,6 +120,18 @@ function init() {
   for (const post of POSTS) post.heading ??= towards(post.route[0], post.route[1]);
   const troopers = POSTS.map(post => createStormtrooper({ scene, effects, lab, position: post.position, heading: post.heading }));
   const alerts = createAlerts(scene);
+  // Grenades and explosions. The fireball is a Blender flipbook (public/fx),
+  // laid over the iso view; everything around it is live.
+  const explosions = createExplosions(scene);
+  camera.layers.enable(1);
+  new THREE.TextureLoader().load('fx/explosion.png', texture => {
+    Object.assign(texture, { colorSpace: THREE.SRGBColorSpace, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
+    fetch('fx/explosion.json').then(response => response.json()).then(data => explosions.configure({ texture, data })).catch(() => explosions.configure({ texture }));
+  });
+  const debris = createDebris(scene, { lab });
+  debris.scatter();
+  const grenades = createGrenades(scene, { lab, reach: FEEL.grenade.reach, onBeep: (grenade, progress) => audio.beep(progress, grenade.position.distanceTo(character.root.position)) });
+  const knockdown = createHeroRagdoll(character, { lab });
   const blasters = createBlasters(scene, { effects, lab });
   const squad = createSquadMind({ troopers, lab, alerts, posts: POSTS, cameraRight: screenRight });
   // What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
@@ -148,7 +164,11 @@ function init() {
     Object.assign(cameraKick, { amplitude, age: 0 });
   }
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
-  function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); blasters.clear(); squad.reset(); }
+  function resetTrooper() {
+    for (const trooper of troopers) trooper.reset();
+    effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear();
+    debris.clear(); debris.scatter();
+  }
   // Hit stops: at most one per enemy and per attack sequence.
   const stopped = new Set();
   let stoppedSequence = -1;
@@ -198,6 +218,8 @@ function init() {
       }
       effects.wave(leftHand, facing, { kind: 'push', length: FEEL.push.range * 0.8 });
       noise(here, 8.5, { alarm: true, from: here });
+      grenades.push(here, facing, { range: FEEL.push.range, cone: FEEL.push.cone });
+      debris.blast(here.clone().addScaledVector(facing, -0.6), { radius: FEEL.push.range * 0.7, strength: 0.45 });
       shove(facing, FEEL.camera.kickPush);
       punch(FEEL.camera.punchPush);
       audio.force('push');
@@ -314,6 +336,53 @@ function init() {
     return 'spent';
   }
 
+  // ---- Grenades and explosions ---------------------------------------------------
+  /** A grenade goes off at `at`: fire, light, sparks, debris; bodies are thrown, the hero too. */
+  function detonate(at) {
+    const blast = FEEL.blast;
+    explosions.spawn(at);
+    effects.blast(at.clone().setY(0.25), { sparks: 230, embers: 120, speed: 15 });
+    debris.blast(at);
+    debris.fragments(at, 12 + Math.round(Math.random() * 6));
+    for (const trooper of troopers) {
+      const offset = whereIs(trooper).sub(at).setY(0), distance = offset.length();
+      if (distance > blast.radius) continue;
+      const falloff = (1 - distance / blast.radius) ** 1.2;
+      if (distance < 1e-3) offset.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+      offset.normalize();
+      if (!trooper.dead && distance < blast.lethal) trooper.die('blast', offset.clone().multiplyScalar(6));
+      trooper.forcePush(offset.multiplyScalar(pick(blast.speed) * falloff).setY(pick(blast.lift) * falloff));
+    }
+    if (held && held.dead) { held = null; }
+    // The hero: knocked off his feet close by, rocked further off.
+    const toHero = here.set(motion.x, 0, motion.z).sub(at), reach = toHero.length();
+    if (reach < blast.radius) {
+      const falloff = (1 - reach / blast.radius) ** 1.1;
+      const direction = reach > 1e-3 ? toHero.clone().divideScalar(reach) : new THREE.Vector3(1, 0, 0);
+      if (reach < blast.knock && !knockdown.active) knockHero(direction, Math.max(0.45, falloff));
+      else if (reach < blast.knock) knockdown.knock(direction.clone().multiplyScalar(3 * falloff).setY(2 * falloff));
+      else { motion.vx += direction.x * 6 * falloff; motion.vz += direction.z * 6 * falloff; }
+    }
+    const near = Math.max(0, 1 - reach / 14);
+    impactShake = Math.max(impactShake, blast.shake * (0.35 + 0.65 * near));
+    shove(new THREE.Vector3(0, -1, 0), blast.kick * (0.4 + 0.6 * near));
+    punch(blast.punch * near);
+    stopFor(0.012, 0.05);
+    audio.boom(reach);
+    noise(at, 15, { alarm: true, from: character.root.position });
+  }
+  function knockHero(direction, falloff) {
+    const velocity = direction.clone().setY(0).normalize().multiplyScalar(pick(FEEL.blast.speed) * falloff).setY(pick(FEEL.blast.lift) * falloff);
+    velocity.x += motion.vx * 0.5;
+    velocity.z += motion.vz * 0.5;
+    combat.reset();
+    trail.clear();
+    if (held) { held.drop(); held = null; }
+    character.root.updateMatrixWorld(true);
+    knockdown.knock(velocity, { spin: pick(FEEL.blast.tumble) });
+    bladeReady = false;
+  }
+
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
   // The final canvas is then enlarged with nearest-neighbour, never blurred.
   const composer = new EffectComposer(renderer);
@@ -377,6 +446,7 @@ function init() {
   }, { passive: false });
   function setPause(value) { paused = value; clearInput(); $('#pause-overlay').hidden = !paused; if (!paused) renderer.domElement.focus(); }
   function reset() {
+    knockdown.stop();
     motion.reset(); character.root.position.set(0, 0, 0); character.root.rotation.y = motion.heading;
     character.update({ dt: 0, time, speed: 0, runBlend: 0, turnRate: 0 });
     combat.reset(); trail.clear(); cape.reset(); bladeReady = false; cameraFocus.set(0, 0.6, 0);
@@ -469,6 +539,9 @@ function init() {
       }
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
+      // Thrown by a blast: no control until he is back on his feet.
+      const down = knockdown.active;
+      if (down) { attackPressed = parryPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0; }
       // Powers cut any strike short; a parry too; B strikes and chains.
       keepHold();
       autoParry(guard);
@@ -489,21 +562,33 @@ function init() {
       }
       const released = combat.takeForce();
       if (released) unleash(released);
-      motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+      if (down) {
+        const at = knockdown.position, moving = knockdown.velocity;
+        motion.x = at.x; motion.z = at.z; motion.vx = moving.x; motion.vz = moving.z; motion.speed = 0;
+      } else motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
       for (const trooper of troopers) {
         const blocker = trooper.blocker();
-        if (!blocker) continue;
+        if (!blocker || down) continue;
         const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
         if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
       }
       // Crates and barrels stop him.
-      lab.pushOut(here.set(motion.x, 0, motion.z), 0.3);
-      motion.x = here.x; motion.z = here.z;
+      if (!down) {
+        lab.pushOut(here.set(motion.x, 0, motion.z), 0.3);
+        motion.x = here.x; motion.z = here.z;
+      }
       if (!moved && (motion.speed > 0.1 || action.engaged)) { moved = true; document.body.classList.add('playing'); }
-      character.root.position.set(motion.x, 0, motion.z);
-      character.root.rotation.y = motion.heading + action.spin;
       velocity.set(motion.vx, 0, motion.vz);
-      character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
+      if (down) {
+        // The ragdoll lays his skeleton out; once up, the motion capture takes over again.
+        const up = knockdown.update(sim, time);
+        if (up) { motion.x = up.x; motion.z = up.z; motion.heading = up.heading; motion.vx = motion.vz = motion.speed = 0; bladeReady = false; }
+      } else {
+        character.root.position.set(motion.x, 0, motion.z);
+        character.root.rotation.y = motion.heading + action.spin;
+        character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
+        debris.kick(character.root.position, velocity);
+      }
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
       if (saber.update(motion.saber, time, action.flare) === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); }
@@ -527,7 +612,8 @@ function init() {
       collideSquad(troopers);
       if (combat.sequence !== stoppedSequence) { stopped.clear(); stoppedSequence = combat.sequence; }
       troopers.forEach((trooper, index) => {
-        const struck = saber.extension > 0.6 && bladeReady ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
+        const struck = saber.extension > 0.6 && bladeReady && !down ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
+        if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
         if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {
           // Falls are reported alongside the blow that caused them.
@@ -550,6 +636,12 @@ function init() {
         for (const item of trooper.news) {
           if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8)); impactShake = Math.max(impactShake, Math.min(0.18, item.speed * 0.025)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
           if (item.type === 'armor') audio.clank();
+          // A grenade leaves his hand (or drops at his feet if he was knocked over).
+          if (item.type === 'grenade') {
+            if (item.dropped) grenades.drop(item.from);
+            else grenades.throwAt(item.from, item.target, { fuse: pick(FEEL.grenade.fuse) });
+            audio.whoosh?.();
+          }
         }
       });
       bladeReady = saber.extension > 0.6;
@@ -559,6 +651,9 @@ function init() {
       for (const event of blasters.update(sim, boltMeets)) {
         if (event.type === 'impact') audio.boltImpact(event.point.distanceTo(character.root.position));
       }
+      for (const at of grenades.update(sim)) detonate(at);
+      explosions.update(sim, camera);
+      debris.update(sim);
       alerts.update(dt, trooper => (trooper.dead ? null : trooper.particle('HT').position), screenRight);
       effects.update(sim);
       playerPosition.copy(character.root.position);
@@ -588,7 +683,7 @@ function init() {
     if (hudTimer > 0.15) {
       hudTimer = 0;
       const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      stateEl.textContent = paused ? 'EN PAUSE' : knockdown.active ? 'À TERRE' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
@@ -611,9 +706,12 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, blasters, troopers,
+    squad, lab, blasters, troopers, grenades, explosions, debris, knockdown,
+    /** For checks: a grenade thrown by trooper `index` (or dropped) at (x, z). */
+    grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
+    explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },
     set guard(value) { forcedGuard = value; },
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
@@ -741,6 +839,26 @@ function createAudio() {
     sizzle() {
       if (!this.enabled || !context) return;
       this.noiseBurst({ duration: 0.28, type: 'highpass', frequency: 3200, gain: 0.07, decay: 0.45 });
+    },
+    /** An explosion: a crack, a deep thump and a long rumble, quieter far off. */
+    boom(distance = 5) {
+      if (!this.enabled || !context) return;
+      const near = Math.max(0.25, 1 - distance / 26);
+      this.noiseBurst({ duration: 0.14, type: 'highpass', frequency: 1500, gain: 0.3 * near, decay: 0.16 });
+      this.tone({ from: 85, to: 26, duration: 1.2, gain: 0.42 * near });
+      this.tone({ type: 'triangle', from: 140, to: 40, duration: 0.5, gain: 0.18 * near });
+      this.noiseBurst({ duration: 2.2, type: 'lowpass', frequency: 360, q: 0.4, gain: 0.55 * near, decay: 0.33 });
+      this.noiseBurst({ duration: 1.2, type: 'bandpass', frequency: 2400, q: 0.6, gain: 0.05 * near, decay: 0.5 });
+    },
+    /** The grenade's countdown: a short beep, higher as time runs out. */
+    beep(progress = 0, distance = 5) {
+      if (!this.enabled || !context) return;
+      const near = Math.max(0.2, 1 - distance / 16), pitch = 1700 + progress * 900;
+      this.tone({ type: 'square', from: pitch, to: pitch * 0.98, duration: 0.05, gain: 0.035 * near });
+    },
+    whoosh() {
+      if (!this.enabled || !context) return;
+      this.noiseBurst({ duration: 0.25, type: 'bandpass', frequency: 900, q: 1.2, gain: 0.05, decay: 0.5 });
     },
     /** "?" — a wondering rise; "!" — the alert's sharp double sting. */
     alert(kind) {

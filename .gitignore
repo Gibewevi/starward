@@ -2,3 +2,5 @@ node_modules/
 dist/
 .playwright/
 *.log
+# Mantaflow noise cache written by scripts/explosion-blender.py
+waveletNoiseTile.bin

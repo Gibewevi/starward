@@ -61,6 +61,10 @@ const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0), X_AXI
 // The rifle at low ready across the belly; shouldered, its stock against the right shoulder.
 const LOW_READY = { position: new THREE.Vector3(-0.02, 0.1, 0.24), quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, 0.4, 0, 'YXZ')) };
 const SHOULDERED = new THREE.Vector3(-0.125, 0.27, 0.23);
+// Throwing a grenade, the left hand's path in the spine's frame: from the
+// rifle's foregrip, wound up behind the shoulder, swung over the top, released
+// in front, following through across the body.
+const THROW = { grip: new THREE.Vector3(0.05, 0.12, 0.3), wind: new THREE.Vector3(0.2, 0.56, -0.2), release: new THREE.Vector3(0.11, 0.6, 0.3), follow: new THREE.Vector3(-0.03, 0.06, 0.34) };
 // The muzzle, in the rifle's frame.
 const MUZZLE = new THREE.Vector3(0, 0.012, 0.37);
 // The soles in the ankle's frame: heel and toe.
@@ -336,6 +340,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   let levitating = null, dropping = null, flee = null, turnBack = null;
   // Down but alive and pulled: the Force first hauls him upright.
   let lifting = null;
+  // Throwing a grenade (the left hand), and the grenade in that hand.
+  let throwing = null, heldGrenade = null;
   // Walking over to his rifle.
   let fetching = null;
   // Motion capture drives his steps; inertia carries his body.
@@ -373,6 +379,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     joints.spine.add(holder);
     joints.holder = holder;
     ({ parts, pieces } = buildParts());
+    heldGrenade = add(parts.handL, new THREE.SphereGeometry(0.062, 8, 6), materials.shade, [0, -0.1, 0.035], [0, 0, 0], 'Grenade in hand');
+    heldGrenade.visible = false;
     mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
     for (const side of ['L', 'R']) Object.assign(mounts, { [`upperArm${side}`]: `shoulder${side}`, [`forearm${side}`]: `elbow${side}`, [`hand${side}`]: `wrist${side}`, [`thigh${side}`]: `hip${side}`, [`shin${side}`]: `knee${side}`, [`foot${side}`]: `ankle${side}` });
     for (const [name, mount] of Object.entries(mounts)) joints[mount].add(parts[name]);
@@ -443,7 +451,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     scene.add(root, debris);
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
-    collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = null;
+    collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = null;
     feed.length = 0;
     twitches = [];
     muscles = [];
@@ -539,7 +547,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const grips = {};
     for (const side of ['L', 'R']) {
       r.letGo[side] = Math.max(0, r.letGo[side] - dt);
-      grips[side] = !armCut(side) && !r.wound && r.letGo[side] <= 0 && !(r.press && r.pressHand === side);
+      grips[side] = !armCut(side) && !r.wound && r.letGo[side] <= 0 && !(r.press && r.pressHand === side) && !(throwing && side === 'L');
     }
     if (trooper.holding && !grips.L && !grips.R) dropBlaster(new THREE.Vector3());
     glide('holdL', trooper.holding && grips.L ? 1 : 0, 0.25, ease.inOutSine);
@@ -619,6 +627,28 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       lookYaw = THREE.MathUtils.clamp(Math.atan2(temp.x, temp.z) - aimYaw, -1.2, 1.2);
       lookPitch = THREE.MathUtils.clamp(-Math.atan2(temp.y - 1.5, Math.hypot(temp.x, temp.z)) - aimPitch, -0.5, 0.6);
     }
+    // Throwing: the torso winds up (left shoulder back), whips round as the
+    // arm comes over, and follows through; the hand travels its path.
+    let throwYaw = 0, throwPitch = 0, throwWeight = 0;
+    const throwHand = new THREE.Vector3();
+    if (throwing) {
+      const p = Math.min(1, throwing.age / throwing.duration);
+      if (p < 0.38) {
+        const u = ease.inOutCubic(p / 0.38);
+        throwHand.lerpVectors(THROW.grip, THROW.wind, u);
+        throwYaw = 0.5 * u; throwPitch = -0.12 * u;
+      } else if (p < 0.52) {
+        const u = ease.inQuad((p - 0.38) / 0.14);
+        throwHand.lerpVectors(THROW.wind, THROW.release, u);
+        throwYaw = 0.5 - 0.95 * u; throwPitch = -0.12 + 0.36 * u;
+      } else {
+        const u = ease.outCubic((p - 0.52) / 0.48);
+        throwHand.lerpVectors(THROW.release, THROW.follow, u);
+        throwYaw = -0.45 * (1 - u); throwPitch = 0.24 * (1 - u);
+      }
+      throwWeight = p < 0.85 ? Math.min(1, p / 0.08) : Math.max(0, 1 - (p - 0.85) / 0.15);
+    }
+    heldGrenade.visible = Boolean(throwing && !throwing.released);
     // Reactions on top, in each joint's own frame.
     const off = (joint, x, y, z) => joint.quaternion.multiply(offsetQuaternion.setFromEuler(euler.set(x, y, z)));
     joints.pelvis.position.x += Math.sin(time * 0.5) * 0.008 + r.offset.x;
@@ -626,8 +656,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     joints.pelvis.position.z += r.offset.z - kneel * 0.05 - crouch * 0.05;
     // Choking, the hips swing and thrust as he fights the grip.
     off(joints.pelvis, r.pitch * 0.3 + yank * 0.15 + crouch * 0.22 + writhe(4.3, 7.1, 2.3) * 0.28, r.yaw * 0.4 + writhe(3.7, 6.3, 1.9) * 0.34, r.roll * 0.4 + tilt * 0.22 + writhe(4.1, 6.9, 2.7) * 0.24);
-    off(joints.spine, -0.03 * keep + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 - dangle * 0.1 - choke * 0.14 + writhe(5.1, 8.3, 2.9) * 0.24 + crouch * 0.18 + loco.lean + aimPitch * 0.6 - r.recoil * 0.05,
-      r.yaw * 0.6 + toward * r.hurt * 0.2 + writhe(4.3, 7.7, 2.1) * 0.32 + aimYaw, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway + writhe(4.9, 8.1, 3.1) * 0.26 + loco.bank);
+    off(joints.spine, -0.03 * keep + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 - dangle * 0.1 - choke * 0.14 + writhe(5.1, 8.3, 2.9) * 0.24 + crouch * 0.18 + loco.lean + aimPitch * 0.6 - r.recoil * 0.05 + throwPitch * throwWeight,
+      r.yaw * 0.6 + toward * r.hurt * 0.2 + writhe(4.3, 7.7, 2.1) * 0.32 + aimYaw + throwYaw * throwWeight, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway + writhe(4.9, 8.1, 3.1) * 0.26 + loco.bank);
     // Aiming, his cheek goes down onto the stock.
     off(joints.neck, 0.05 * keep + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 * (1 - choke) + dazed * 0.15 - choke * 0.5 + writhe(19.7, 29.3, 9.1) * 0.18 + ((lookPitch - aimPitch * 0.4) * attend + aim * 0.12 - crouch * 0.28) * (1 - choke),
       (look + lookYaw * attend - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3) * (1 - choke) + writhe(16.3, 25.9, 7.7) * 0.32, r.roll * -0.3 + r.headRoll + loll - aim * 0.14 + writhe(17.3, 27.1, 8.9) * 0.2);
@@ -670,6 +700,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       if (armCut(side)) continue;
       reach(side, holder.localToWorld(temp.copy(grip)), joints[`shoulder${side}`].localToWorld(temp2.set(sign * 0.35, -0.3, -0.3)), r[`hold${side}`]);
     }
+    // The throwing hand on its path, elbow out and back.
+    if (throwWeight > 0.01 && !armCut('L')) reach('L', joints.spine.localToWorld(throwHand), joints.shoulderL.localToWorld(temp2.set(0.45, -0.05, -0.35)), throwWeight);
     // The wounded arm is drawn in — a forearm across the belly, an upper arm
     // tucked to his side — and the other hand holds the stump, trembling.
     const wound = r.wound;
@@ -975,8 +1007,35 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   }
 
   /** From standing to the floor; the impulses depend on the cause. Alive, he will crawl. */
+  /** Knocked out of a throw before letting go: the grenade drops at his feet. */
+  function abortThrow() {
+    if (throwing && !throwing.released && heldGrenade) {
+      trooper.root.updateMatrixWorld(true);
+      feed.push({ type: 'grenade', from: heldGrenade.getWorldPosition(new THREE.Vector3()), dropped: true });
+    }
+    throwing = null;
+    if (heldGrenade) heldGrenade.visible = false;
+  }
+  /** Pulls the pin and throws at `target` (left hand, rifle kept in the right). */
+  function throwGrenade(target) {
+    if (!free() || throwing || armCut('L') || reaction.wound) return false;
+    throwing = { age: 0, duration: 0.95, target: target.clone(), released: false };
+    return true;
+  }
+  function throwStep(dt) {
+    const t = throwing;
+    t.age += dt;
+    if (!t.released && t.age >= t.duration * 0.5) {
+      t.released = true;
+      trooper.root.updateMatrixWorld(true);
+      feed.push({ type: 'grenade', from: heldGrenade.getWorldPosition(new THREE.Vector3()), target: t.target.clone() });
+    }
+    if (t.age >= t.duration) throwing = null;
+  }
+
   function fall(cause, velocity = new THREE.Vector3(), cutChild = null) {
     if (trooper.fallen) return;
+    abortThrow();
     trooper.fallen = true;
     collapse = null;
     if (trooper.holding) dropBlaster(velocity);
@@ -1451,6 +1510,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
    */
   function forcePull(to, { duration = pick(FEEL.pull.duration, random), hold = false } = {}) {
     if (trooper.dead && !trooper.fallen) return false;
+    abortThrow();
     if (pickup) dropPickup();
     flee = turnBack = dropping = fetching = null;
     reaction.run = 0;
@@ -1890,6 +1950,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         if (Math.abs(wrap(turnBack - headingOf())) < 0.05) turnBack = null;
       } else if (!pickup) obey(dt);
       if (towing || levitating || dropping) loco.velocity.set(0, 0, 0);
+      if (throwing) throwStep(dt);
       if (pickup) pickupStep(dt);
       else if (!levitating && !dropping && !flee && !towing && !fetching) lookForRifle();
       // Shoved by the blows: he slides back, turning away, then catches himself.
@@ -2182,9 +2243,11 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   /** Where the threat is (the hero), so that he gets up facing it. */
   trooper.focus = null;
   build();
-  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop, fire, boltHit, shot });
+  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop, fire, boltHit, shot, throwGrenade });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
+    /** In the middle of throwing a grenade. */
+    throwing: { get: () => Boolean(throwing) },
     /** On his feet and his own master: his brain can move him. */
     free: { get: free },
     /** How he is moving (world, m/s). */

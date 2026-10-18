@@ -1,0 +1,11 @@
+{
+  "image": "explosion.png",
+  "frames": 56,
+  "columns": 8,
+  "rows": 7,
+  "size": 192,
+  "fps": 30,
+  "width": 6.6,
+  "centre": 1.7,
+  "source": "scripts/explosion-blender.py (Blender Mantaflow + Cycles)"
+}

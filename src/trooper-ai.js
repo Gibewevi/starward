@@ -30,18 +30,19 @@ const CHEST = 1.05, HEAD = 1.55, MUZZLE = 1.1;
 
 export function createSquadMind({ troopers, lab, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
-  let firing = 0;
+  let firing = 0, grenadeClock = Infinity;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
 
   function reset() {
     firing = 0;
+    grenadeClock = Infinity;
     for (const mind of minds) {
       const { trooper, post } = mind;
       Object.assign(mind, {
         mode: 'calm', awareness: 0, interest: null, lastKnown: new THREE.Vector3(), seen: Infinity, sees: false,
         tactic: null, timer: 0, cover: null, previousCover: null, burst: 0, gap: 0, cycles: 0, maxCycles: 3, token: false,
         startle: 0, callout: null, routeIndex: 0, wait: 0, strafe: random() < 0.5 ? 1 : -1, step: 0, glance: 0, heard: 0,
-        aimPoint: new THREE.Vector3(), progress: { at: new THREE.Vector3(), time: 0 }, searchTime: 0, side: 1,
+        aimPoint: new THREE.Vector3(), progress: { at: new THREE.Vector3(), time: 0 }, searchTime: 0, side: 1, grenadeClock: Infinity, thrown: false,
         home: (post.position ?? trooper.root.position).clone(), homeHeading: post.heading ?? trooper.heading, route: post.route ?? null,
       });
     }
@@ -308,6 +309,14 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     shots.push({ from: shot.from, direction, trooper: t });
     return true;
   }
+  /** A grenade now? Not too often, at a fair range, never onto a squadmate; likelier when the hero hides. */
+  function wantsGrenade(mind, threat, distance) {
+    const g = FEEL.grenade, t = mind.trooper;
+    if (!t.holding || t.reaction.wound || grenadeClock < g.squadCooldown || mind.grenadeClock < g.cooldown) return false;
+    if (distance < g.range[0] || distance > g.range[1]) return false;
+    if (troopers.some(other => other !== t && !other.dead && flat(other.root.position).distanceTo(flat(threat)) < g.safe)) return false;
+    return random() < (mind.sees ? g.chance : g.chanceHidden);
+  }
   function fight(mind, dt, hero, heroVelocity, shots) {
     const t = mind.trooper, o = t.order, at = t.root.position;
     const threat = mind.sees ? hero : mind.lastKnown;
@@ -369,6 +378,7 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         if (mind.timer > 0) break;
         if (!t.holding) break;
         if (mind.cycles >= mind.maxCycles) { mind.tactic = null; break; }
+        if (wantsGrenade(mind, threat, distance)) { mind.tactic = 'throw'; mind.timer = 0; mind.thrown = false; break; }
         if (take(mind)) {
           // Up behind the crate if his rifle clears it, else out past its edge.
           const spot = peekFrom(mind, threat);
@@ -466,6 +476,25 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         if (distance > FEEL.ai.close + 1.6 || mind.timer > 2.5) mind.tactic = null;
         break;
       }
+      case 'throw': {
+        // Up from cover, square to the hero, and over it goes.
+        release(mind);
+        o.face = headingTo(at, threat);
+        if (!mind.thrown) {
+          mind.timer += dt;
+          const facing = Math.abs(wrap(headingTo(at, threat) - t.heading)) < 0.35;
+          if (t.reaction.crouch < 0.25 && facing) {
+            const target = flat(threat).addScaledVector(flat(heroVelocity), 0.7).add(new THREE.Vector3((random() - 0.5) * 1.4, 0, (random() - 0.5) * 1.4));
+            if (t.throwGrenade(target)) { mind.thrown = true; grenadeClock = 0; mind.grenadeClock = 0; }
+          }
+          if (mind.timer > 2) mind.tactic = mind.cover ? 'hide' : 'open';
+        } else if (!t.throwing) {
+          mind.thrown = false;
+          mind.tactic = mind.cover ? 'hide' : 'open';
+          mind.timer = pick(FEEL.ai.hide, random) * 0.6;
+        }
+        break;
+      }
       case 'cower': {
         // Unarmed with nowhere better: crouched, away from the hero.
         release(mind);
@@ -479,6 +508,8 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
 
   function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [] }) {
     const shots = [], cues = [];
+    grenadeClock += dt;
+    for (const mind of minds) mind.grenadeClock += dt;
     const heroSpeed = Math.hypot(heroVelocity.x, heroVelocity.z);
     for (const mind of minds) {
       const t = mind.trooper, o = t.order;

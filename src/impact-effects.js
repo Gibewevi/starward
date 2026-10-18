@@ -142,6 +142,27 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6);
     }
   }
+  /**
+   * An explosion's spray: sparks shot out in every direction — mostly outwards
+   * and up, a few skimming the floor — long fast streaks among them, drops of
+   * molten metal, and embers carried up on the heat to drift and die out.
+   */
+  function blast(at, { sparks: count = 220, embers = 110, speed = 14 } = {}) {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < count; i++) {
+      const theta = random() * Math.PI * 2, rise = 0.08 + random() ** 0.8 * 0.95, flat = Math.sqrt(1 - Math.min(0.98, rise * rise));
+      const pace = speed * (0.3 + random() ** 1.6 * 1.1);
+      v.set(Math.cos(theta) * flat, rise, Math.sin(theta) * flat).multiplyScalar(pace);
+      start.copy(at).add(point.set((random() - 0.5) * 0.4, random() * 0.35, (random() - 0.5) * 0.4));
+      const drop = i % 5 === 4;
+      emit(start, v, drop ? DROP : SPARK, 0.8 + random() * 0.18, drop ? 0.18 + random() * 0.1 : 0.2 + random() * 0.32, drop ? 2.6 + random() * 0.8 : 1.6 + random() * 0.8);
+    }
+    for (let i = 0; i < embers; i++) {
+      v.set((random() - 0.5) * 3, 1.2 + random() * 3.2, (random() - 0.5) * 3);
+      start.copy(at).add(point.set((random() - 0.5) * 1.6, 0.2 + random() * 1.2, (random() - 0.5) * 1.6));
+      emit(start, v, EMBER, 0.62 + random() * 0.2, 0.16 + random() * 0.2, 1.5 + random() * 0.9);
+    }
+  }
   /** The impact lights its surroundings: white at once, cooling to orange as it fades. */
   function flash(at, power = 1, { color = null } = {}) {
     const slot = lights[nextLight];
@@ -317,7 +338,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
   return {
-    points: beads, beads, streaks, sparks, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
+    points: beads, beads, streaks, sparks, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
     /** Flares and rings currently shown. */
     get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },

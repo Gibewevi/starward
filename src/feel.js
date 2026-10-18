@@ -86,6 +86,21 @@ export const FEEL = {
     forget: 0.1, // awareness lost per second without news
     callout: 10, // m: a trooper who spots the hero alerts his squad this far
   },
+  grenade: {
+    squadCooldown: 6, cooldown: 12, // s between grenades, for the squad and for each trooper
+    range: [3.5, 11], // m from the hero
+    safe: 2.6, // m: never onto a squadmate this close to the target
+    chance: 0.16, chanceHidden: 0.5, // at each pause behind cover (the hero out of sight: more likely)
+    fuse: [1.9, 2.4], // s
+    reach: 3.4, // m: the red circle on the floor
+  },
+  blast: {
+    radius: 4.6, // m: bodies are thrown within this
+    speed: [5.5, 8.5], lift: [3.2, 5.2], tumble: [3, 7], // at point blank: m/s, m/s, rad/s
+    lethal: 0.9, // m: a trooper this close does not survive it
+    knock: 2.9, // m: the hero is knocked off his feet this close; further, he staggers
+    shake: 0.42, kick: 0.09, punch: 0.035, // camera
+  },
   ai: {
     startle: [0.28, 0.5], // s from "!" to acting on it
     hide: [0.7, 1.7], // s crouched behind cover between bursts
