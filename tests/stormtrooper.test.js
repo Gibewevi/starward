@@ -314,7 +314,7 @@ test('a corpse still reacts to the blade', () => {
   state.run(0.5);
   const { trooper } = state;
   horizontal(state, 1.38);
-  state.run(7);
+  state.run(9);
   assert.ok(state.fastest() < 0.15, 'at rest');
   const torso = state.particle('W').lerp(state.particle('N'), 0.5);
   const before = state.particle('W');
@@ -662,4 +662,37 @@ test('held by the Force he hangs before the hero, following him; let go, he drop
   assert.ok(['standing', 'dazed', 'wounded'].includes(trooper.state), trooper.state);
   const toHero = Math.atan2(-trooper.root.position.x, -trooper.root.position.z);
   assert.ok(Math.abs(Math.atan2(Math.sin(toHero - trooper.root.rotation.y), Math.cos(toHero - trooper.root.rotation.y))) < 0.4, 'then turns back to face the hero');
+});
+
+test('caught by the Force pull he drops his rifle, clutches his throat and struggles frantically', () => {
+  const { trooper, run } = standAlone(61, 5);
+  const point = new THREE.Vector3(0, 0.5, 1.25);
+  assert.ok(trooper.holding);
+  trooper.forcePull(point.clone(), { hold: true });
+  assert.equal(trooper.holding, false, 'the rifle falls as his hands go to his throat');
+  run(1);
+  assert.equal(trooper.state, 'held');
+  const throat = trooper.joints.spine.localToWorld(new THREE.Vector3(0, 0.29, 0.1));
+  for (const side of ['L', 'R']) {
+    const wrist = trooper.joints[`wrist${side}`].getWorldPosition(new THREE.Vector3());
+    assert.ok(wrist.distanceTo(throat) < 0.16, `${side} hand at his throat (${wrist.distanceTo(throat).toFixed(2)} m)`);
+  }
+  // He fights: head, body and legs keep moving, fast and irregularly.
+  const samples = { hip: [], knee: [], neck: [], spine: [] };
+  for (let frame = 0; frame < 60; frame++) {
+    run(1 / 60);
+    samples.hip.push(trooper.joints.hipL.rotation.x);
+    samples.knee.push(trooper.joints.kneeR.rotation.x);
+    samples.neck.push(trooper.joints.neck.rotation.y);
+    samples.spine.push(trooper.joints.spine.rotation.z);
+  }
+  const range = values => Math.max(...values) - Math.min(...values);
+  const reversals = values => values.slice(2).filter((value, i) => Math.sign(value - values[i + 1]) !== Math.sign(values[i + 1] - values[i])).length;
+  assert.ok(range(samples.hip) > 0.4 && range(samples.knee) > 0.3, `the legs kick (${range(samples.hip).toFixed(2)}, ${range(samples.knee).toFixed(2)} rad)`);
+  assert.ok(reversals(samples.hip) >= 7, `fast: ${reversals(samples.hip)} changes of direction in a second`);
+  assert.ok(range(samples.neck) > 0.15 && range(samples.spine) > 0.1, 'the head jerks and the body writhes');
+  // Let go: the hands leave his throat.
+  trooper.drop();
+  run(1.2);
+  assert.ok(trooper.reaction.choke < 0.05, 'he breathes again');
 });

@@ -26,8 +26,10 @@ import { FEEL, curve, pick } from './feel.js';
  *
  * The Force moves him. A push throws him off his feet — it never kills — to
  * tumble, bounce, roll and slide; a pull drags him in, explosive at first and
- * slowing on arrival. Held, he hangs in the air before the hero, legs
- * kicking, following him; let go, he drops onto his feet and runs away. Knocked down unhurt, he lies stunned, gets up (muscles
+ * slowing on arrival. Caught by it, he drops his rifle and clutches at his
+ * throat, choking, head thrown back, writhing and kicking frantically. Held,
+ * he hangs in the air before the hero, following him; let go, he drops onto
+ * his feet and runs away. Knocked down unhurt, he lies stunned, gets up (muscles
  * drive the ragdoll into a crouch, then upright), sways, and fetches his
  * rifle if it lies close by.
  *
@@ -281,6 +283,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   const feed = [];
   const reaction = {};
   const tweens = createTweens(), flashes = new Map();
+  const seed = random() * 100;
+  // Struggle noise: a few unrelated sines, so the movement never repeats or looks mechanical.
+  const jitter = (t, a, b, c) => Math.sin(t * a + seed) * 0.5 + Math.sin(t * b + seed * 1.7 + 1.3) * 0.3 + Math.sin(t * c + seed * 2.3 + 2.1) * 0.2;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3(), quaternion = new THREE.Quaternion();
   const goal = new THREE.Vector3(), stride = new THREE.Vector3(), motion = new THREE.Vector3(), kick = new THREE.Vector3();
   const forward = new THREE.Vector3(), leftward = new THREE.Vector3(), basis = new THREE.Matrix4(), roll = new THREE.Quaternion();
@@ -388,7 +393,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       press: null, pressAt: null, pressHand: null, pressing: 0, limp: 0,
       linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
       kneel: 0, yank: 0, daze: 0, reachFor: null,
-      knock: new THREE.Vector3(), spin: 0, run: 0, dangle: 0, stride: 0,
+      knock: new THREE.Vector3(), spin: 0, run: 0, dangle: 0, stride: 0, choke: 0,
     });
     base = joints.pelvis.position.clone();
     // Where his feet stand: leg IK keeps them planted while the body sways.
@@ -475,14 +480,22 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // Held in the air the legs dangle and kick; running, they stride.
     r.dangle += ((levitating ? 1 : 0) - r.dangle) * (1 - Math.exp(-8 * dt));
     const run = r.run, dangle = r.dangle;
+    // Choked by the Force while it pulls or holds him: the hands fly to the
+    // throat at once and let go slowly. He fights in bursts.
+    const choking = Boolean(levitating || towing?.kind === 'stand');
+    r.choke += ((choking ? 1 : 0) - r.choke) * (1 - Math.exp(-(choking ? 14 : 4) * dt));
+    const choke = r.choke, fight = choke * (0.7 + 0.3 * Math.sin(time * 1.9 + seed) * Math.sin(time * 0.83 + seed));
+    const writhe = (a, b, c) => jitter(time, a, b, c) * fight;
     const breathe = Math.sin(time * 1.7), look = (Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08) * (1 - r.hurt) * (1 - r.pressing * 0.7) * (1 - dazed) * (1 - kneel);
     const dip = r.dipL + r.dipR, tilt = r.dipR - r.dipL;
     joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04 - dip * 0.06 - r.limp * 0.17 - kneel * 0.48 - dazed * 0.03 - Math.abs(Math.sin(r.stride)) * 0.05 * run, base.z + r.offset.z - kneel * 0.05);
     joints.pelvis.rotation.set(r.pitch * 0.3 + yank * 0.15, r.yaw * 0.4, r.roll * 0.4 + tilt * 0.22);
-    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 + run * 0.28 - dangle * 0.1, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway);
-    joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 + dazed * 0.15, look - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3, r.roll * -0.3 + r.headRoll + loll);
+    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 + run * 0.28 - dangle * 0.1 - choke * 0.14 + writhe(14.1, 22.3, 8.2) * 0.14, r.yaw * 0.6 + toward * r.hurt * 0.2 + writhe(11.3, 18.9, 6.1) * 0.16, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway + writhe(12.2, 20.7, 5.3) * 0.2);
+    joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 * (1 - choke) + dazed * 0.15 - choke * 0.5 + writhe(19.7, 29.3, 9.1) * 0.18, (look - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3) * (1 - choke) + writhe(16.3, 25.9, 7.7) * 0.32, r.roll * -0.3 + r.headRoll + loll + writhe(17.3, 27.1, 8.9) * 0.2);
     for (const [side, sign] of SIDES) {
-      const phase = r.stride + (side === 'L' ? 0 : Math.PI), kick = Math.sin(time * 4.6 + sign * 1.3) * 0.3 * dangle;
+      // In the air the legs kick frantically and out of step; slower while only dangling.
+      const phase = r.stride + (side === 'L' ? 0 : Math.PI);
+      const kick = (Math.sin(time * 4.6 + sign * 1.3) * 0.3 * (1 - choke) + jitter(time + sign * 3.1, 18.7, 27.3, 41.1) * 0.6 * fight) * dangle;
       joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5 - r.hurt * 0.22 - Math.sin(phase) * 0.75 * run - 0.25 * dangle + kick, 0, sign * 0.06);
       joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38 + yank * 0.6 + Math.max(0, Math.sin(phase + 1.2)) * 1.3 * run + (0.45 + kick) * dangle, 0, 0);
       joints[`ankle${side}`].rotation.set(-0.06 + 0.2 * run + 0.55 * dangle, 0, -sign * 0.06);
@@ -531,6 +544,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         }
         target.add(shiver(time, 0.006));
         reach(healthy, target, joints[`shoulder${healthy}`].localToWorld(temp2.set(-sign * 0.4, -0.35, kind === 'wrist' ? -0.2 : 0.1)), r.clutch);
+      }
+    }
+    // Choking: both hands at his throat, tugging at the grip he cannot see.
+    if (choke > 0.01) {
+      for (const [side, sign] of SIDES) {
+        if (armCut(side)) continue;
+        const tug = jitter(time + sign * 1.7, 24.1, 37.7, 15.3) * 0.022 * (0.4 + fight);
+        const target = joints.spine.localToWorld(new THREE.Vector3(sign * (0.075 + tug * 0.4), 0.25 + tug, 0.13 + tug * 0.6));
+        reach(side, target, joints[`shoulder${side}`].localToWorld(temp2.set(sign * 0.45, -0.35, 0.05)), choke);
       }
     }
     // Fetching the rifle: the right hand goes to it.
@@ -1290,8 +1312,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         disarm: trooper.holding && random() < FEEL.pull.dropChance, falls: random() < FEEL.pull.fallChance, direction: toward.normalize(), hold,
       };
       levitating = null;
-      reaction.varmL += 3 + random() * 3;
-      reaction.varmR += 3 + random() * 3;
+      // His hands go to his throat: the rifle falls where he stood.
+      if (trooper.holding) dropBlaster(toward.clone().multiplyScalar(0.6));
+      towing.disarm = false;
     } else {
       const indices = joinedIndices(), from = centroid(indices);
       towing = { kind: 'body', indices, from, to: to.clone().setY(hold ? to.y + 0.3 : from.y), age: 0, duration: duration * 1.15, lift: 0.35, last: from.clone(), velocity: null, hold };
@@ -1368,21 +1391,25 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     levitating = null;
     dropping = { speed: 0 };
   }
-  /** Hanging in the Force's grip: following the point, bobbing, kicking, arms flailing. */
+  /** Hanging in the Force's grip: following the point, choking, writhing and jerking. */
   function levitateStep(dt, time) {
     const l = levitating;
     l.age += dt;
+    // The whole body jerks with his struggle, on top of a slow bob.
     const target = temp.copy(l.point);
-    target.y += Math.sin(time * 2.2) * FEEL.pull.hold.bob;
+    target.y += Math.sin(time * 2.2) * FEEL.pull.hold.bob + jitter(time, 7.3, 11.1, 17.9) * 0.035;
+    target.x += jitter(time + 5, 6.1, 9.7, 15.3) * 0.02;
+    target.z += jitter(time + 9, 5.3, 10.9, 14.1) * 0.02;
     trooper.root.position.lerp(target, 1 - Math.exp(-FEEL.pull.hold.follow * dt));
-    const turn = Math.atan2(Math.sin(l.heading - trooper.root.rotation.y), Math.cos(l.heading - trooper.root.rotation.y));
+    const heading = l.heading + jitter(time, 2.3, 4.1, 7.7) * 0.25;
+    const turn = Math.atan2(Math.sin(heading - trooper.root.rotation.y), Math.cos(heading - trooper.root.rotation.y));
     trooper.root.rotation.y += turn * (1 - Math.exp(-6 * dt));
+    // Now and then a convulsion runs through him.
     if ((l.next -= dt) <= 0) {
-      l.next = 0.3 + random() * 0.45;
-      reaction.varmL += (random() - 0.5) * 7;
-      reaction.varmR += (random() - 0.5) * 7;
-      reaction.vhead += (random() - 0.5) * 3;
-      reaction.vroll += (random() - 0.5) * 1.5;
+      l.next = 0.25 + random() * 0.5;
+      reaction.vpitch += (random() - 0.4) * 3;
+      reaction.vroll += (random() - 0.5) * 2.5;
+      reaction.vbuckle += random() * 2;
     }
   }
   /** Dropped: he falls onto his feet, buckles, and runs for it. */
