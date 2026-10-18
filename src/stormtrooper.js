@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Ragdoll } from './ragdoll.js';
 import { aimBone, solveTwoBone } from './ik.js';
 import { approach, createTweens, ease } from './tween.js';
+import { FEEL, curve, pick } from './feel.js';
 
 /**
  * Stormtrooper training dummy. A low-poly trooper in white armour over a black
@@ -16,7 +17,15 @@ import { approach, createTweens, ease } from './tween.js';
  * and glow, nothing gory. A severed piece is thrown with the blade's momentum
  * — along its sweep, up into an arc, spinning about the cut — then simply
  * simulated: it tumbles, bounces, skids and comes to rest near the body.
- * Every hit flashes the struck armour white for an instant.
+ * Every hit flashes the struck armour white for an instant, and his armour
+ * comes apart progressively: helmet, plates, pauldrons and guards come off
+ * under the blade and in hard landings, and fly as physical pieces.
+ *
+ * The Force moves him. A push throws him off his feet — it never kills — to
+ * tumble, bounce, roll and slide; a pull drags him in, explosive at first and
+ * slowing on arrival. Knocked down unhurt, he lies stunned, gets up (muscles
+ * drive the ragdoll into a crouch, then upright), sways, and fetches his
+ * rifle if it lies close by.
  *
  * He feels what happens to him, alive or dead:
  * - standing, each hit is answered where it lands (the head snaps, an arm is
@@ -160,49 +169,63 @@ function buildParts() {
   const { armor, shade, black, lens } = materials;
   const parts = {}, pieces = {};
   const part = name => (parts[name] = Object.assign(new THREE.Group(), { name }));
+  // A detachable piece of armour: a group of meshes that can come off whole.
+  const plate = (owner, name) => {
+    const group = Object.assign(new THREE.Group(), { name });
+    group.userData.armour = true;
+    owner.add(group);
+    pieces[name] = group;
+    return group;
+  };
 
   const head = part('head');
   add(head, cylinder(0.05, 0.055, 0.1), black, [0, 0.03, 0]);
+  // Under the helmet, a black balaclava.
+  add(head, new THREE.SphereGeometry(0.105, 8, 6), black, [0, 0.19, 0.01]);
+  const helmet = plate(head, 'helmet');
   const dome = new THREE.LatheGeometry([[0.11, 0.075], [0.128, 0.1], [0.136, 0.15], [0.138, 0.21], [0.128, 0.26], [0.1, 0.3], [0.06, 0.32], [0.001, 0.325]].map(([x, y]) => new THREE.Vector2(x, y)), 10);
-  add(head, dome, armor).scale.set(1, 1, 1.07);
-  add(head, frustum(0.19, 0.15, 0.07, 0.06, 0.12), armor, [0, 0.125, 0.095]);
+  add(helmet, dome, armor).scale.set(1, 1, 1.07);
+  add(helmet, frustum(0.19, 0.15, 0.07, 0.06, 0.12), armor, [0, 0.125, 0.095]);
   for (const sign of [-1, 1]) {
-    add(head, new THREE.BoxGeometry(0.055, 0.04, 0.03), lens, [sign * 0.043, 0.19, 0.126], [0, 0, sign * 0.25]);
-    add(head, cylinder(0.011, 0.011, 0.05, 6), shade, [sign * 0.064, 0.125, 0.12], [0.3, 0, 0]);
-    add(head, cylinder(0.03, 0.03, 0.02, 8), shade, [sign * 0.137, 0.18, 0], [0, 0, Math.PI / 2]);
+    add(helmet, new THREE.BoxGeometry(0.055, 0.04, 0.03), lens, [sign * 0.043, 0.19, 0.126], [0, 0, sign * 0.25]);
+    add(helmet, cylinder(0.011, 0.011, 0.05, 6), shade, [sign * 0.064, 0.125, 0.12], [0.3, 0, 0]);
+    add(helmet, cylinder(0.03, 0.03, 0.02, 8), shade, [sign * 0.137, 0.18, 0], [0, 0, Math.PI / 2]);
   }
-  add(head, new THREE.BoxGeometry(0.2, 0.018, 0.03), shade, [0, 0.226, 0.125]);
-  add(head, new THREE.BoxGeometry(0.07, 0.03, 0.03), shade, [0, 0.115, 0.13]);
+  add(helmet, new THREE.BoxGeometry(0.2, 0.018, 0.03), shade, [0, 0.226, 0.125]);
+  add(helmet, new THREE.BoxGeometry(0.07, 0.03, 0.03), shade, [0, 0.115, 0.13]);
 
   const torso = part('torso');
   add(torso, frustum(0.3, 0.26, 0.2, 0.18, 0.35), black, [0, 0.175, 0]);
-  add(torso, frustum(0.42, 0.34, 0.25, 0.22, 0.17), armor, [0, 0.255, 0.005]);
-  add(torso, frustum(0.3, 0.28, 0.21, 0.2, 0.1), armor, [0, 0.1, 0.01]);
-  for (const sign of [-1, 1]) add(torso, new THREE.BoxGeometry(0.06, 0.035, 0.012), shade, [sign * 0.075, 0.27, 0.133]);
-  add(torso, new THREE.BoxGeometry(0.3, 0.2, 0.03), armor, [0, 0.24, -0.125]);
-  add(torso, new THREE.BoxGeometry(0.17, 0.1, 0.045), shade, [0, 0.24, -0.15]);
+  const chest = plate(torso, 'chestPlate');
+  add(chest, frustum(0.42, 0.34, 0.25, 0.22, 0.17), armor, [0, 0.255, 0.005]);
+  for (const sign of [-1, 1]) add(chest, new THREE.BoxGeometry(0.06, 0.035, 0.012), shade, [sign * 0.075, 0.27, 0.133]);
+  add(plate(torso, 'abPlate'), frustum(0.3, 0.28, 0.21, 0.2, 0.1), armor, [0, 0.1, 0.01]);
+  const back = plate(torso, 'backPlate');
+  add(back, new THREE.BoxGeometry(0.3, 0.2, 0.03), armor, [0, 0.24, -0.125]);
+  add(back, new THREE.BoxGeometry(0.17, 0.1, 0.045), shade, [0, 0.24, -0.15]);
   add(torso, cylinder(0.08, 0.085, 0.04, 10), black, [0, 0.345, -0.01]);
 
   const pelvis = part('pelvis');
   add(pelvis, frustum(0.28, 0.24, 0.19, 0.17, 0.18), black, [0, 0.02, 0]);
-  add(pelvis, new THREE.BoxGeometry(0.34, 0.065, 0.235), armor, [0, 0.085, 0]);
-  add(pelvis, new THREE.BoxGeometry(0.1, 0.045, 0.012), shade, [0, 0.085, 0.121]);
+  const belt = plate(pelvis, 'belt');
+  add(belt, new THREE.BoxGeometry(0.34, 0.065, 0.235), armor, [0, 0.085, 0]);
+  add(belt, new THREE.BoxGeometry(0.1, 0.045, 0.012), shade, [0, 0.085, 0.121]);
   for (const sign of [-1, 1]) {
-    add(pelvis, new THREE.BoxGeometry(0.05, 0.05, 0.03), armor, [sign * 0.12, 0.085, 0.115]);
-    add(pelvis, new THREE.BoxGeometry(0.03, 0.05, 0.05), armor, [sign * 0.172, 0.085, 0.02]);
+    add(belt, new THREE.BoxGeometry(0.05, 0.05, 0.03), armor, [sign * 0.12, 0.085, 0.115]);
+    add(belt, new THREE.BoxGeometry(0.03, 0.05, 0.05), armor, [sign * 0.172, 0.085, 0.02]);
   }
-  add(pelvis, frustum(0.18, 0.09, 0.05, 0.04, 0.11), armor, [0, -0.01, 0.1]);
-  add(pelvis, frustum(0.24, 0.18, 0.05, 0.04, 0.12), armor, [0, 0, -0.1]);
+  add(plate(pelvis, 'codPlate'), frustum(0.18, 0.09, 0.05, 0.04, 0.11), armor, [0, -0.01, 0.1]);
+  add(plate(pelvis, 'rearPlate'), frustum(0.24, 0.18, 0.05, 0.04, 0.12), armor, [0, 0, -0.1]);
 
   for (const [side, sign] of SIDES) {
     const upperArm = part(`upperArm${side}`);
-    add(upperArm, new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI * 0.55), armor, [sign * 0.008, -0.005, 0]).scale.set(0.085, 0.065, 0.09);
+    add(plate(upperArm, `pauldron${side}`), new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI * 0.55), armor, [sign * 0.008, -0.005, 0]).scale.set(0.085, 0.065, 0.09);
     add(upperArm, cylinder(0.05, 0.05, 0.27), black, [0, -0.135, 0]);
-    add(upperArm, cylinder(0.058, 0.054, 0.14), armor, [0, -0.13, 0]);
+    add(plate(upperArm, `bicep${side}`), cylinder(0.058, 0.054, 0.14), armor, [0, -0.13, 0]);
 
     const forearm = part(`forearm${side}`);
     add(forearm, new THREE.SphereGeometry(0.05, 8, 6), black);
-    add(forearm, cylinder(0.056, 0.046, 0.17), armor, [0, -0.13, 0]);
+    add(plate(forearm, `bracer${side}`), cylinder(0.056, 0.046, 0.17), armor, [0, -0.13, 0]);
     add(forearm, cylinder(0.044, 0.044, 0.04), black, [0, -0.225, 0]);
 
     const hand = part(`hand${side}`);
@@ -211,14 +234,14 @@ function buildParts() {
 
     const thigh = part(`thigh${side}`);
     add(thigh, cylinder(0.07, 0.068, 0.37), black, [0, -0.185, 0]);
-    add(thigh, cylinder(0.086, 0.072, 0.27), armor, [0, -0.17, 0]);
+    add(plate(thigh, `thighPlate${side}`), cylinder(0.086, 0.072, 0.27), armor, [0, -0.17, 0]);
     if (side === 'R') add(thigh, new THREE.BoxGeometry(0.05, 0.12, 0.06), black, [-0.09, -0.12, 0.01]);
 
     const shin = part(`shin${side}`);
     add(shin, new THREE.SphereGeometry(0.06, 8, 6), black);
     add(shin, cylinder(0.056, 0.05, 0.34), black, [0, -0.17, 0]);
-    pieces[`kneePad${side}`] = add(shin, frustum(0.09, 0.085, 0.05, 0.05, 0.085), armor, [0, -0.03, 0.055], [0, 0, 0], `Knee pad ${side}`);
-    pieces[`shinPlate${side}`] = add(shin, cylinder(0.07, 0.058, 0.22), armor, [0, -0.19, 0.004], [0, 0, 0], `Shin plate ${side}`);
+    add(plate(shin, `kneePad${side}`), frustum(0.09, 0.085, 0.05, 0.05, 0.085), armor, [0, -0.03, 0.055]);
+    add(plate(shin, `shinPlate${side}`), cylinder(0.07, 0.058, 0.22), armor, [0, -0.19, 0.004]);
 
     const foot = part(`foot${side}`);
     add(foot, new THREE.BoxGeometry(0.11, 0.12, 0.23), armor, [0, -0.03, 0.05]);
@@ -246,6 +269,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   let clock = 0, collapse = null, crawl = null, spasm = null, twitches = [];
   // Crawl muscles: per particle, where it should be over the current frame.
   let muscles = [], muscleState = new Map(), driveClock = 0, driveSpan = 1 / 60;
+  // Knocked down unhurt and getting back up; dragged by the Force; fetching
+  // the rifle; a slippery spell on the floor; landings; news for the game.
+  let recover = null, towing = null, pickup = null, slick = null, mounts = null, landed = 0;
+  const feed = [];
   const reaction = {};
   const tweens = createTweens(), flashes = new Map();
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3(), quaternion = new THREE.Quaternion();
@@ -273,7 +300,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     joints.spine.add(holder);
     joints.holder = holder;
     ({ parts, pieces } = buildParts());
-    const mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
+    mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
     for (const side of ['L', 'R']) Object.assign(mounts, { [`upperArm${side}`]: `shoulder${side}`, [`forearm${side}`]: `elbow${side}`, [`hand${side}`]: `wrist${side}`, [`thigh${side}`]: `hip${side}`, [`shin${side}`]: `knee${side}`, [`foot${side}`]: `ankle${side}` });
     for (const [name, mount] of Object.entries(mounts)) joints[mount].add(parts[name]);
     root.updateMatrixWorld(true);
@@ -342,7 +369,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     scene.add(root, debris);
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
-    collapse = crawl = spasm = null;
+    collapse = crawl = spasm = recover = towing = pickup = slick = null;
+    feed.length = 0;
     twitches = [];
     muscles = [];
     muscleState = new Map();
@@ -353,6 +381,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       holdL: 1, holdR: 1, letGo: { L: 0, R: 0 }, hurt: 0, clutch: 0, wound: null, woundAge: 0,
       press: null, pressAt: null, pressHand: null, pressing: 0, limp: 0,
       linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
+      kneel: 0, yank: 0, daze: 0, reachFor: null,
     });
     base = joints.pelvis.position.clone();
     // Where his feet stand: leg IK keeps them planted while the body sways.
@@ -432,19 +461,24 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const gasp = Math.sin(time * 4.2) * 0.025 * r.hurt, rock = Math.sin(time * 1.3) * 0.035 * r.hurt;
     const pressSide = r.pressHand === 'L' ? 1 : -1;
 
-    const breathe = Math.sin(time * 1.7), look = (Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08) * (1 - r.hurt) * (1 - r.pressing * 0.7);
+    // Dazed after getting up: he sways and his head lolls for a moment.
+    r.daze = Math.max(0, r.daze - dt);
+    const dazed = Math.min(1, r.daze / 0.6), sway = Math.sin(time * 2.6) * 0.1 * dazed, loll = Math.sin(time * 3.1 + 1) * 0.16 * dazed;
+    const kneel = r.kneel, yank = r.yank;
+    const breathe = Math.sin(time * 1.7), look = (Math.sin(time * 0.33) * 0.22 + Math.sin(time * 0.71) * 0.08) * (1 - r.hurt) * (1 - r.pressing * 0.7) * (1 - dazed) * (1 - kneel);
     const dip = r.dipL + r.dipR, tilt = r.dipR - r.dipL;
-    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04 - dip * 0.06 - r.limp * 0.17, base.z + r.offset.z);
-    joints.pelvis.rotation.set(r.pitch * 0.3, r.yaw * 0.4, r.roll * 0.4 + tilt * 0.22);
-    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16);
-    joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32, look - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3, r.roll * -0.3 + r.headRoll);
+    joints.pelvis.position.set(base.x + Math.sin(time * 0.5) * 0.008 + r.offset.x, base.y - 0.015 - r.buckle * 0.08 - r.hurt * 0.04 - dip * 0.06 - r.limp * 0.17 - kneel * 0.48 - dazed * 0.03, base.z + r.offset.z - kneel * 0.05);
+    joints.pelvis.rotation.set(r.pitch * 0.3 + yank * 0.15, r.yaw * 0.4, r.roll * 0.4 + tilt * 0.22);
+    joints.spine.rotation.set(-0.03 + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12, r.yaw * 0.6 + toward * r.hurt * 0.2, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway);
+    joints.neck.rotation.set(0.05 + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 + dazed * 0.15, look - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3, r.roll * -0.3 + r.headRoll + loll);
     for (const [side, sign] of SIDES) {
       joints[`hip${side}`].rotation.set(-0.06 - r.buckle * 0.5 - r.hurt * 0.22, 0, sign * 0.06);
-      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38, 0, 0);
+      joints[`knee${side}`].rotation.set(0.12 + r.buckle * 0.9 + r.hurt * 0.38 + yank * 0.6, 0, 0);
       joints[`ankle${side}`].rotation.set(-0.06, 0, -sign * 0.06);
-      // Without the rifle the arms hang, flung by the hits.
-      joints[`shoulder${side}`].rotation.set(-0.15 + r[`arm${side}`], 0, sign * (0.12 + Math.abs(r[`arm${side}`]) * 0.5) + r[`flare${side}`]);
-      joints[`elbow${side}`].rotation.set(-0.35 - r.limp * 0.4, 0, 0);
+      // Without the rifle the arms hang, flung by the hits — back while he
+      // is dragged, forward towards the floor while he crouches.
+      joints[`shoulder${side}`].rotation.set(-0.15 + r[`arm${side}`] + yank * 0.9 - kneel * 0.9, 0, sign * (0.12 + Math.abs(r[`arm${side}`]) * 0.5 + yank * 0.35) + r[`flare${side}`]);
+      joints[`elbow${side}`].rotation.set(-0.35 - r.limp * 0.4 - kneel * 0.4, 0, 0);
       joints[`wrist${side}`].rotation.set(0, 0, 0);
     }
     trooper.root.updateMatrixWorld(true);
@@ -487,6 +521,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         reach(healthy, target, joints[`shoulder${healthy}`].localToWorld(temp2.set(-sign * 0.4, -0.35, kind === 'wrist' ? -0.2 : 0.1)), r.clutch);
       }
     }
+    // Fetching the rifle: the right hand goes to it.
+    if (r.reachFor) reach('R', r.reachFor.point, joints.shoulderR.localToWorld(temp2.set(-0.35, -0.3, 0.2)), r.reachFor.weight);
     // A fresh scorch: a hand presses on it for a moment.
     if (r.pressing > 0.01 && r.pressAt && !armCut(r.pressHand)) {
       const outward = new THREE.Vector3(r.pressAt.x, 0, r.pressAt.z).normalize();
@@ -627,29 +663,61 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     spin(['blaster'], 2.5);
   }
 
+  /** Bounds of an object's meshes in its own frame. */
+  function localBox(object) {
+    object.updateMatrixWorld(true);
+    const inverse = object.matrixWorld.clone().invert(), box = new THREE.Box3(), part = new THREE.Box3(), relative = new THREE.Matrix4();
+    object.traverse(child => {
+      if (!child.isMesh) return;
+      child.geometry.computeBoundingBox();
+      box.union(part.copy(child.geometry.boundingBox).applyMatrix4(relative.multiplyMatrices(inverse, child.matrixWorld)));
+    });
+    return box;
+  }
+
   function knockOff(piece, velocity) {
     if (!piece || !piece.parent || piece.userData.loose) return null;
     piece.userData.loose = true;
     trooper.root.updateMatrixWorld(true);
     trooper.debris.attach(piece);
     piece.updateMatrixWorld(true);
-    piece.geometry.computeBoundingBox();
-    const box = piece.geometry.boundingBox, size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+    const box = localBox(piece), size = box.getSize(new THREE.Vector3()), centre = box.getCenter(new THREE.Vector3());
+    // Sized to the piece, so a helmet rolls on its dome and a plate lies flat.
+    const radius = THREE.MathUtils.clamp(Math.min(size.x, size.y, size.z) * 0.5, 0.025, 0.11);
     const indices = [[0, 0, 0], [size.x * 0.5, 0, 0], [0, size.y * 0.5, 0]].map(offset => ragdoll.addParticle({
-      position: piece.localToWorld(new THREE.Vector3(...offset).add(centre)), radius: 0.025, mass: 0.3, name: piece.name,
+      position: piece.localToWorld(new THREE.Vector3(...offset).add(centre)), radius, mass: 0.3 + radius * 2, name: piece.name,
     }));
     const body = ragdoll.addBody({ name: piece.name, indices, object: piece });
     body.debris = true;
     loosen(indices);
+    for (const index of indices) ragdoll.particles[index].ghost = true;
     ragdoll.bind(body, piece.matrixWorld);
     piece.matrixAutoUpdate = false;
     for (const index of indices) ragdoll.particles[index].kinematic = false;
     body.dynamic = true;
-    ragdoll.push(indices, temp.copy(velocity).clampLength(0, 6).multiplyScalar(0.3).add(temp2.set(0, 1.1, 0)));
+    // Off and away from him: along the blow, outwards, and up.
+    const away = piece.localToWorld(centre.clone()).sub(trooper.particle('W').position).setY(0);
+    if (away.lengthSq() > 1e-6) away.normalize().multiplyScalar(1.2);
+    ragdoll.push(indices, temp.copy(velocity).clampLength(0, 6).multiplyScalar(0.3).add(away).add(temp2.set(0, 1.1, 0)));
     const axis = new THREE.Vector3(random() - 0.5, random() - 0.5, random() - 0.5).normalize().multiplyScalar(9);
     const middle = ragdoll.particles[indices[0]].position;
     for (const index of indices) ragdoll.push([index], temp.subVectors(ragdoll.particles[index].position, middle).cross(axis).negate());
+    feed.push({ type: 'armor', piece: piece.name, point: ragdoll.particles[indices[0]].position.clone() });
     return body;
+  }
+
+  /** Progressive destruction: the plate nearest the blow may come away. */
+  function chip(body, point, velocity, chance) {
+    if (!body?.object || random() >= chance) return null;
+    let best = null, nearest = 0.28;
+    const centre = new THREE.Vector3();
+    body.object.traverse(child => {
+      if (!child.userData.armour || child.userData.loose || child === body.object) return;
+      localBox(child).getCenter(centre);
+      const distance = child.localToWorld(centre).distanceTo(point);
+      if (distance < nearest) { nearest = distance; best = child; }
+    });
+    return best ? knockOff(best, velocity) : null;
   }
 
   /** Staggers the standing trooper where and as hard as he was hit (once per sweep). */
@@ -750,6 +818,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         ragdoll.push(indicesOf(upper), along.clone().multiplyScalar(topple * 0.8).add(temp2.set(0, 0.4, 0)));
         ragdoll.push(knees, buckle);
         break;
+      case 'force':
+      case 'pull':
+        break;
       default:
         ragdoll.push(indicesOf(upper), along.clone().multiplyScalar(topple));
         ragdoll.push(knees, buckle);
@@ -759,12 +830,25 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     ragdoll.push([particleIndex.SL], twist);
     ragdoll.push([particleIndex.SR], twist.clone().negate());
     if (!trooper.dead) {
-      // Alive on the floor: a moment of agony, then he tries to crawl.
-      crawl = { age: 0, stage: 'down', effort: 0, stamina: 9 + random() * 5, origin: new THREE.Vector3(), heading: 0, roll: 0, turn: 0, stroke: null, plant: {}, hand: {}, pause: 0, strain: 0, lean: 0, look: 0, slump: 1, kick: { L: 0, R: 0 } };
-      crawl.staminaTotal = crawl.stamina;
-      spasm = { left: 1.2, total: 1.2, amplitude: 0.6, next: 0.1 };
+      // Knocked down unhurt, he will get back up; with a leg gone, he crawls.
+      if (injured()) startCrawl();
+      else startRecovery();
     }
     trooper.events.push({ type: 'fall', cause });
+  }
+  const injured = () => [...trooper.severed].some(name => /^(shoulder|elbow|wrist|hip|knee|ankle)/.test(name));
+  function startCrawl() {
+    // Alive on the floor: a moment of agony, then he tries to crawl.
+    recover = null;
+    crawl = { age: 0, stage: 'down', effort: 0, stamina: 9 + random() * 5, origin: new THREE.Vector3(), heading: 0, roll: 0, turn: 0, stroke: null, plant: {}, hand: {}, pause: 0, strain: 0, lean: 0, look: 0, slump: 1, kick: { L: 0, R: 0 } };
+    crawl.staminaTotal = crawl.stamina;
+    spasm = { left: 1.2, total: 1.2, amplitude: 0.6, next: 0.1 };
+  }
+  function startRecovery() {
+    crawl = null;
+    muscles = [];
+    recover = { stage: 'tumble', age: 0, stun: pick(FEEL.recovery.stun, random), effort: 0 };
+    if (!spasm || spasm.left < 0.6) spasm = { left: 0.7, total: 0.7, amplitude: 0.4, next: 0.25 };
   }
 
   /**
@@ -774,8 +858,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   function die(cause, velocity = new THREE.Vector3(), cutChild = null, { delay = 0 } = {}) {
     if (trooper.dead) return;
     trooper.dead = true;
-    crawl = null;
+    crawl = recover = null;
+    if (towing?.kind === 'stand') towing = null;
     muscles = [];
+    if (pickup) dropPickup();
     const headless = cause === 'neck', spent = cause === 'exhaustion';
     spasm = { left: headless ? 3.8 : spent ? 1.2 : 1.6, amplitude: headless ? 2.2 : spent ? 0.5 : 1.1, next: headless ? 0.3 : 0.15 };
     spasm.total = spasm.left;
@@ -790,8 +876,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     } else fall(cause, velocity, cutChild);
   }
 
-  /** On the floor and alive: a hit makes him writhe and stop crawling for a moment. */
+  /** On the floor and alive: a hit makes him writhe and stop crawling (or getting up) for a moment. */
   function suffer(strength) {
+    if (recover) {
+      if (injured()) { startCrawl(); return; }
+      muscles = [];
+      Object.assign(recover, { stage: 'stunned', age: 0, stun: Math.max(recover.stun, 0.5) + 0.4 * strength, effort: 0 });
+      if (!spasm || spasm.left < 0.5) spasm = { left: 0.5, total: 0.5, amplitude: 0.7 * strength, next: 0 };
+      return;
+    }
     if (!crawl) return;
     crawl.pause = Math.max(crawl.pause, 0.5 + random() * 0.5);
     crawl.stamina -= 1.5 * strength;
@@ -831,6 +924,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       const armLost = childBodies.some(child => /^(upperArm|forearm|hand)/.test(child));
       const legLost = childBodies.some(child => /^(thigh|shin|foot)/.test(child));
       if (armLost) dropBlaster(hit.velocity);
+      if (pickup) dropPickup();
       if (definition.lethal) die(name.replace(/[LR]$/, ''), hit.velocity, childBodies, { delay: name === 'neck' && !trooper.fallen ? 0.3 : 0 });
       else if (trooper.fallen) suffer(1);
       else if (legLost) fall('leg', hit.velocity, childBodies);
@@ -996,8 +1090,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     }
   }
 
-  /** Muscle targets for every particle of his body: the crawl pose, frame to frame. */
-  function aimMuscles(dt) {
+  /** Muscle targets for every particle of his body: the crawl or the rise, frame to frame. */
+  function aimMuscles(dt, strong = false) {
     muscles = [];
     const seen = new Set();
     for (const name of living()) {
@@ -1008,13 +1102,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         const [particleName, joint, offset] = spec;
         let muscle = muscleState.get(index);
         if (!muscle) {
-          muscle = { index, weight: MUSCLE[particleName] ?? 0.5, from: new THREE.Vector3(), to: joints[joint].localToWorld(new THREE.Vector3(...offset)) };
+          muscle = { index, weight: 0, from: new THREE.Vector3(), to: joints[joint].localToWorld(new THREE.Vector3(...offset)) };
           muscle.from.copy(muscle.to);
           muscleState.set(index, muscle);
         } else {
           muscle.from.copy(muscle.to);
           joints[joint].localToWorld(muscle.to.fromArray(offset));
         }
+        // Getting up takes every muscle; crawling lets the legs drag.
+        muscle.weight = strong ? 3 : MUSCLE[particleName] ?? 0.5;
         muscles.push(muscle);
       }
     }
@@ -1028,7 +1124,17 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
    * overshoot), and twitches add short pulses of velocity.
    */
   function drive(h) {
-    const effort = crawl && !trooper.dead ? crawl.effort : 0;
+    const effort = trooper.dead ? 0 : crawl ? crawl.effort : recover?.stage === 'rising' ? recover.effort : 0;
+    // A body hauled by the Force: steered towards where the pull carries it, weightless.
+    if (towing?.kind === 'body' && towing.velocity) {
+      for (const index of towing.indices) {
+        const particle = ragdoll.particles[index];
+        if (particle.kinematic) continue;
+        particle.position.y -= ragdoll.gravity * h * h;
+        motion.subVectors(particle.position, particle.previous).lerp(stride.copy(towing.velocity).multiplyScalar(h), 0.35);
+        particle.previous.subVectors(particle.position, motion);
+      }
+    }
     if (effort > 0.01 && muscles.length) {
       driveClock += h;
       const f = Math.min(1, driveClock / driveSpan);
@@ -1077,19 +1183,282 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (random() < 0.3 * life && joined.has('torso')) twitch([particleIndex.W, particleIndex.N], temp.set(random() - 0.5, 1, random() - 0.5), strength * 0.5, 0.05);
   }
 
+  // ---- The Force, and getting back up ----------------------------------------
+
+  /** Bodies still joined to him (whatever has not been cut away). */
+  const joinedBodies = () => [...new Set([...subtree('torso'), ...subtree('pelvis')])];
+  const joinedIndices = () => [...new Set(indicesOf(joinedBodies()))];
+  const centroid = indices => indices.reduce((sum, index) => sum.add(ragdoll.particles[index].position), new THREE.Vector3()).divideScalar(indices.length);
+
+  /** Thrown or shoved on the floor: slippery and bouncy for a while, so he slides, rolls and bounces. */
+  function slip(indices, seconds) {
+    if (slick) settle();
+    slick = { indices, until: clock + seconds };
+    for (const index of indices) Object.assign(ragdoll.particles[index], { friction: FEEL.push.friction, bounce: FEEL.push.bounce });
+  }
+  function settle() {
+    if (!slick) return;
+    for (const index of slick.indices) { delete ragdoll.particles[index].friction; delete ragdoll.particles[index].bounce; }
+    slick = null;
+  }
+
+  /**
+   * Force push (velocity in m/s): thrown off his feet with a tumble — never
+   * killed by it — or, already down, shoved along the floor.
+   */
+  function forcePush(velocity) {
+    const v = velocity.clone();
+    if (pickup) dropPickup();
+    if (!trooper.fallen) {
+      towing = null;
+      reaction.yank = 0;
+      fall('force', v);
+    } else {
+      if (towing?.kind === 'body') towing = null;
+      v.multiplyScalar(0.75);
+      if (crawl) { crawl.pause = Math.max(crawl.pause, 1.4); crawl.effort = 0; }
+      if (recover) { muscles = []; Object.assign(recover, { stage: 'tumble', age: 0, effort: 0 }); }
+    }
+    // Hit in the chest: the upper body flies a touch faster, the whole body
+    // tumbles about an axis across the push, each throw a little different.
+    const flat = temp.copy(v).setY(0);
+    const across = new THREE.Vector3().crossVectors(UP, flat.lengthSq() > 1e-6 ? flat.normalize() : temp.set(1, 0, 0));
+    const tumble = across.multiplyScalar(pick(FEEL.push.tumble, random) * (random() < 0.7 ? 1 : -0.6));
+    const indices = joinedIndices(), centre = centroid(indices);
+    const upper = new Set(indicesOf(['head', 'torso', 'upperArmL', 'upperArmR', 'forearmL', 'forearmR', 'handL', 'handR'].filter(name => joinedBodies().includes(name))));
+    for (const index of indices) {
+      const particle = ragdoll.particles[index];
+      ragdoll.push([index], temp2.copy(v).multiplyScalar((upper.has(index) ? 1.1 : 0.85) * (0.92 + random() * 0.16))
+        .add(temp.crossVectors(tumble, new THREE.Vector3().subVectors(particle.position, centre))));
+    }
+    slip(indices, 3.2);
+    feed.push({ type: 'pushed', point: centre });
+  }
+
+  /**
+   * Force pull towards `to` (a point before the hero): explosive at first,
+   * very fast, slowing right down on arrival — eased. Standing, he is dragged
+   * off his feet and lands staggering, maybe disarmed or felled; on the floor,
+   * the body is hauled along.
+   */
+  function forcePull(to, { duration = pick(FEEL.pull.duration, random) } = {}) {
+    if (trooper.dead && !trooper.fallen) return false;
+    if (pickup) dropPickup();
+    if (!trooper.fallen) {
+      const from = trooper.root.position.clone().setY(0), target = to.clone().setY(0);
+      const toward = new THREE.Vector3().subVectors(target, from);
+      if (toward.length() < 0.2) return false;
+      // The curve peaks at about 3.2 × the mean speed: keep it under the top speed.
+      duration = Math.max(duration, 3.2 * toward.length() / FEEL.pull.topSpeed);
+      towing = {
+        kind: 'stand', from, to: target, age: 0, duration, lift: pick(FEEL.pull.lift, random),
+        fromHeading: trooper.root.rotation.y, toHeading: Math.atan2(toward.x, toward.z) + (random() - 0.5) * FEEL.pull.spin,
+        disarm: trooper.holding && random() < FEEL.pull.dropChance, falls: random() < FEEL.pull.fallChance, direction: toward.normalize(),
+      };
+      reaction.varmL += 3 + random() * 3;
+      reaction.varmR += 3 + random() * 3;
+    } else {
+      const indices = joinedIndices(), from = centroid(indices);
+      towing = { kind: 'body', indices, from, to: to.clone().setY(from.y), age: 0, duration: duration * 1.15, lift: 0.35, last: from.clone(), velocity: null };
+      if (crawl) { crawl.pause = Math.max(crawl.pause, duration + 0.8); crawl.effort = 0; }
+      if (recover) { muscles = []; Object.assign(recover, { stage: 'tumble', age: 0, effort: 0 }); }
+    }
+    feed.push({ type: 'pulled', point: trooper.particle('W').position.clone() });
+    return true;
+  }
+
+  /** Dragged on his feet along the eased path, leaning into it, legs trailing. */
+  function towStanding(dt) {
+    const t = towing;
+    t.age += dt;
+    const p = Math.min(1, t.age / t.duration), e = curve(FEEL.pull.curve)(p);
+    trooper.root.position.lerpVectors(t.from, t.to, e);
+    trooper.root.position.y = t.lift * Math.sin(Math.PI * p);
+    trooper.root.rotation.y = t.fromHeading + Math.atan2(Math.sin(t.toHeading - t.fromHeading), Math.cos(t.toHeading - t.fromHeading)) * ease.outCubic(Math.min(1, p * 1.6));
+    reaction.yank = Math.sin(Math.PI * Math.min(1, p * 1.15)) ** 0.6;
+    if (p < 1) return;
+    // Arrival: he lands staggering — whiplash, buckled knees — maybe disarmed, maybe felled.
+    towing = null;
+    reaction.yank = 0;
+    trooper.root.position.y = 0;
+    Object.assign(reaction, { vpitch: reaction.vpitch - 3.5 - random() * 2, vbuckle: reaction.vbuckle + 3, vhead: reaction.vhead - 4 });
+    reaction.varmL += (random() - 0.5) * 8;
+    reaction.varmR += (random() - 0.5) * 8;
+    reaction.imbalance += 0.45;
+    if (t.disarm) dropBlaster(t.direction.clone().multiplyScalar(2.5));
+    feed.push({ type: 'arrived', point: trooper.root.position.clone() });
+    if (t.falls) fall('pull', t.direction.clone().multiplyScalar(2.2));
+  }
+
+  /** A body on the floor hauled by the Force. */
+  function towBody(dt) {
+    const t = towing;
+    t.age += dt;
+    const p = Math.min(1, t.age / t.duration), e = curve(FEEL.pull.curve)(p);
+    const target = new THREE.Vector3().lerpVectors(t.from, t.to, e);
+    target.y = t.from.y + t.lift * Math.sin(Math.PI * p);
+    t.velocity = new THREE.Vector3().subVectors(target, t.last).divideScalar(Math.max(dt, 1e-4)).addScaledVector(temp.subVectors(target, centroid(t.indices)), 5);
+    t.last.copy(target);
+    if (p >= 1) towing = null;
+  }
+
+  /** On the floor unhurt: tumbling to a stop, lying stunned, then getting up. */
+  function recoverStep(dt, time) {
+    const r = recover;
+    r.age += dt;
+    if (r.stage === 'tumble') {
+      if ((r.age > 0.45 && restlessness() < 0.3) || r.age > 4) { settle(); Object.assign(r, { stage: 'stunned', age: 0 }); }
+    } else if (r.stage === 'stunned') {
+      if (r.age >= r.stun && !towing) beginRise();
+    } else if (r.stage === 'rising') {
+      const p = r.age / r.duration;
+      // From a deep crouch up to standing, eased; the muscles do the work.
+      reaction.kneel = 1 - curve(FEEL.recovery.riseCurve)(THREE.MathUtils.clamp((p - 0.15) / 0.85, 0, 1));
+      trooper.root.position.copy(r.at);
+      trooper.root.quaternion.setFromAxisAngle(UP, r.heading);
+      pose(time, dt);
+      aimMuscles(dt, true);
+      r.effort = ease.outCubic(Math.min(1, r.age / 0.22));
+      let error = 0;
+      for (const muscle of muscles) error = Math.max(error, ragdoll.particles[muscle.index].position.distanceTo(muscle.to));
+      if ((p >= 1 && error < 0.09) || p > 1.7) stand();
+    }
+  }
+  function beginRise() {
+    const hips = trooper.particle('HL').position.clone().add(trooper.particle('HR').position).multiplyScalar(0.5).setY(0);
+    // He gets up facing the threat if he knows of one, else the way his chest faces.
+    let heading;
+    if (trooper.focus) heading = Math.atan2(trooper.focus.x - hips.x, trooper.focus.z - hips.z);
+    else {
+      const front = new THREE.Vector3().subVectors(trooper.particle('SL').position, trooper.particle('SR').position).cross(temp.subVectors(trooper.particle('N').position, trooper.particle('W').position)).setY(0);
+      heading = front.lengthSq() > 1e-6 ? Math.atan2(front.x, front.z) : 0;
+    }
+    Object.assign(recover, { stage: 'rising', age: 0, duration: pick(FEEL.recovery.rise, random), at: hips, heading, effort: 0 });
+    for (const key of ['yaw', 'pitch', 'roll', 'head', 'headYaw', 'headRoll', 'buckle', 'armL', 'armR', 'flareL', 'flareR', 'dipL', 'dipR']) { reaction[key] = 0; reaction[`v${key}`] = 0; }
+    Object.assign(reaction, { kneel: 1, yank: 0, imbalance: 0, wound: null, press: null });
+    reaction.push.set(0, 0, 0); reaction.offset.set(0, 0, 0);
+    muscleState = new Map();
+  }
+  /** Back on his feet: the parts return to the skeleton and the pose drives them again. */
+  function stand() {
+    const { at, heading } = recover;
+    recover = null;
+    muscles = [];
+    muscleState = new Map();
+    twitches = [];
+    spasm = null;
+    settle();
+    trooper.fallen = false;
+    trooper.root.position.copy(at);
+    trooper.root.quaternion.setFromAxisAngle(UP, heading);
+    for (const [name, body] of Object.entries(bodies)) {
+      if (!body.dynamic || (name === 'blaster' && !trooper.holding)) continue;
+      body.dynamic = false;
+      for (const index of body.indices) ragdoll.particles[index].kinematic = true;
+      const object = body.object;
+      joints[mounts[name]].add(object);
+      object.position.set(0, 0, 0);
+      object.quaternion.identity();
+      object.scale.set(1, 1, 1);
+      object.matrixAutoUpdate = true;
+    }
+    Object.assign(reaction, { kneel: 0, daze: pick(FEEL.recovery.daze, random) });
+    pose(clock, 0);
+    trooper.root.updateMatrixWorld(true);
+    placeParticles(1 / 60);
+    placeParticles(1 / 60);
+    feed.push({ type: 'up', point: at.clone() });
+  }
+
+  /** Up and unarmed: he bends down for his rifle if it lies close enough. */
+  function lookForRifle() {
+    if (trooper.holding || pickup || trooper.dead || towing || reaction.daze > 0.25 || reaction.wound || armCut('L') || armCut('R')) return;
+    const blaster = bodies.blaster;
+    if (!blaster.dynamic) return;
+    const at = centroid(blaster.indices);
+    if (at.clone().setY(0).distanceTo(trooper.root.position) > FEEL.recovery.reach || blaster.indices.some(index => ragdoll.velocity(index, temp).length() > 0.3)) return;
+    // The rifle leaves the physics: it is carried by the hand from here.
+    blaster.dynamic = false;
+    for (const index of blaster.indices) ragdoll.particles[index].kinematic = true;
+    const from = new THREE.Matrix4().copy(blaster.object.matrixWorld);
+    pickup = { age: 0, duration: FEEL.recovery.pickup, position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), scale: new THREE.Vector3() };
+    from.decompose(pickup.position, pickup.quaternion, pickup.scale);
+  }
+  function pickupStep(dt) {
+    const k = pickup;
+    k.age += dt;
+    const p = Math.min(1, k.age / k.duration);
+    reaction.kneel = 0.62 * Math.sin(Math.PI * Math.min(1, p * 1.1));
+    trooper.root.updateMatrixWorld(true);
+    holder.updateMatrixWorld(true);
+    const goalPosition = new THREE.Vector3(), goalQuaternion = new THREE.Quaternion();
+    holder.matrixWorld.decompose(goalPosition, goalQuaternion, temp);
+    // Lifted from the floor in an arc, eased, into his hands.
+    const q = ease.inOutCubic(THREE.MathUtils.clamp((p - 0.3) / 0.65, 0, 1));
+    const position = k.position.clone().lerp(goalPosition, q).addScaledVector(UP, 0.12 * Math.sin(Math.PI * q));
+    const turn = k.quaternion.clone().slerp(goalQuaternion, q);
+    parts.blaster.matrix.compose(position, turn, temp.set(1, 1, 1));
+    parts.blaster.matrixWorldNeedsUpdate = true;
+    reaction.reachFor = { point: position, weight: Math.sin(Math.PI * Math.min(1, p * 1.3)) * (1 - q * 0.6) };
+    if (p < 1) return;
+    pickup = null;
+    reaction.reachFor = null;
+    reaction.kneel = 0;
+    holder.add(parts.blaster);
+    parts.blaster.position.set(0, 0, 0);
+    parts.blaster.quaternion.identity();
+    parts.blaster.matrixAutoUpdate = true;
+    trooper.holding = true;
+    reaction.letGo.L = reaction.letGo.R = 0;
+    feed.push({ type: 'rearmed', point: position });
+  }
+  /** Interrupted while fetching the rifle: it falls again. */
+  function dropPickup() {
+    if (!pickup) return;
+    pickup = null;
+    reaction.reachFor = null;
+    reaction.kneel = 0;
+    bodies.blaster.dynamic = false;
+    release(['blaster']);
+  }
+
+  /** Hard landings: a piece of armour may come away where he hits the floor. */
+  function landings(before) {
+    if (clock - landed < 0.12) return;
+    for (const [index, vy] of before) {
+      const particle = ragdoll.particles[index];
+      if (vy > -FEEL.armor.landingSpeed || particle.position.y > particle.radius + 0.006) continue;
+      landed = clock;
+      const body = particle.bodies.find(owner => !owner.debris && owner.name !== 'blaster');
+      chip(body, particle.position, ragdoll.velocity(index, temp).setY(1.5), FEEL.armor.landing);
+      feed.push({ type: 'land', point: particle.position.clone(), speed: -vy });
+      return;
+    }
+  }
+
   function update(dt, time) {
     dt = Math.min(dt, 0.05);
     clock += dt;
     tweens.update(dt);
     if (!trooper.fallen) {
+      if (towing?.kind === 'stand' && dt > 0) towStanding(dt);
+      if (pickup && dt > 0) pickupStep(dt);
+      else if (dt > 0) lookForRifle();
+    }
+    if (!trooper.fallen) {
       pose(time, dt);
       placeParticles(dt);
       if (collapse && clock >= collapse.at) { const { cause, velocity, cutChild } = collapse; fall(cause, velocity, cutChild); }
     } else {
+      if (towing?.kind === 'body' && dt > 0) towBody(dt);
       if (crawl && !trooper.dead && dt > 0) crawlStep(dt, time);
+      else if (recover && !trooper.dead && dt > 0) recoverStep(dt, time);
       convulse(dt);
     }
+    const before = trooper.fallen && dt > 0 ? joinedIndices().map(index => [index, ragdoll.velocity(index, temp).y]) : null;
     if (dt > 0) ragdoll.step(dt);
+    if (before) landings(before);
+    if (slick && clock > slick.until) settle();
     twitches = twitches.filter(entry => entry.t < entry.duration);
     syncObjects();
   }
@@ -1174,16 +1543,15 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const wasDead = trooper.dead, wasStanding = !trooper.fallen && !trooper.dead;
     const alive = !trooper.dead, standing = !trooper.fallen;
     if (speed < CUT_SPEED) {
-      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: speed < 0.6 ? 6 : 18, speed: 1.5 + speed });
+      // Never twice the same spray.
+      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.graze, random) * (speed < 0.6 ? 0.4 : 1)), speed: 1.5 + speed });
       if (speed > 0.6) flashPart(body, 0.35);
       if (speed > 0.6) {
         if (alive && standing) react(hit.velocity, hit.point, 0.35, name);
         else if (alive) suffer(0.4);
         else if (speed > 1.2) jolt(body, hit);
       }
-      if (/^shin/.test(name) && speed > 1.2) {
-        if (knockOff(pieces[`kneePad${side}`], hit.velocity) || knockOff(pieces[`shinPlate${side}`], hit.velocity)) event.type = 'armor';
-      }
+      if (speed > 1.2 && chip(body, hit.point, hit.velocity, FEEL.armor.graze)) event.type = 'armor';
       trooper.events.push(event);
       return;
     }
@@ -1197,8 +1565,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     else if (/^thigh/.test(name)) joint = hit.s < 0.35 ? `hip${side}` : `knee${side}`;
     else if (/^shin/.test(name)) joint = hit.s < 0.45 ? `knee${side}` : `ankle${side}`;
     else if (/^foot/.test(name)) joint = `ankle${side}`;
-    // The faster the blade, the bigger the spray.
-    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(THREE.MathUtils.clamp(30 + speed * 6, 40, 95)), speed: 2 + Math.min(speed, 8) * 0.5 });
+    // The faster the blade, the bigger the spray — never twice the same.
+    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.cut, random) * THREE.MathUtils.clamp(0.5 + speed / 12, 0.6, 1.2)), speed: 2 + Math.min(speed, 8) * 0.5 });
     effects?.flash(hit.point, Math.min(1.2, speed / 5));
     flashPart(body, 1);
     if (name === 'blaster') {
@@ -1210,19 +1578,25 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       event.joint = joint;
       flashPart(bodies[CUTS[joint].child], 1);
       effects?.burst(hit.point, { normal: hit.normal, power: 0.5 + speed / 10 });
+      chip(bodies[CUTS[joint].parent], hit.point, hit.velocity, FEEL.armor.cut);
       if (trooper.fallen) ragdoll.push(body.indices, hit.velocity.clone().clampLength(0, 6).multiplyScalar(0.1));
     } else if (name === 'torso' || name === 'pelvis') {
       event.type = 'slash';
       scorch(body, hit);
       effects?.burst(hit.point, { normal: hit.normal, power: 0.3 });
+      effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.slash, random)), speed: 1.5 + Math.min(speed, 8) * 0.4 });
+      chip(body, hit.point, hit.velocity, FEEL.armor.slash);
       if (alive && standing) {
         if (speed > SLASH_LETHAL_SPEED) die('slash', hit.velocity);
         else { react(hit.velocity, hit.point, 1.2, name); pressWound(hit.point); }
       } else if (alive) die('slash');
       if (trooper.fallen) jolt(body, hit);
-    } else if (alive && standing) react(hit.velocity, hit.point, 0.8, name);
-    else if (alive) { suffer(0.7); jolt(body, hit); }
-    else jolt(body, hit);
+    } else {
+      chip(body, hit.point, hit.velocity, FEEL.armor.graze);
+      if (alive && standing) react(hit.velocity, hit.point, 0.8, name);
+      else if (alive) { suffer(0.7); jolt(body, hit); }
+      else jolt(body, hit);
+    }
     if (!wasDead && trooper.dead) event.lethal = true;
     if (wasStanding && trooper.fallen) event.felled = true;
     trooper.events.push(event);
@@ -1251,14 +1625,85 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   }
 
   trooper.particle = name => ragdoll.particles[particleIndex[name]];
+  trooper.indexOf = name => particleIndex[name];
+  /** Slows his flying body (it hit something). */
+  trooper.slow = factor => {
+    for (const index of joinedIndices()) {
+      const particle = ragdoll.particles[index];
+      if (!particle.kinematic) particle.previous.lerp(particle.position, 1 - factor);
+    }
+  };
+  /** Where the threat is (the hero), so that he gets up facing it. */
+  trooper.focus = null;
   build();
-  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall });
+  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
     crawl: { get: () => crawl },
+    recovery: { get: () => recover },
+    towing: { get: () => towing },
     spasm: { get: () => spasm },
-    /** 'standing', 'wounded', 'down' (fallen, alive), 'crawling' or 'dead'. */
-    state: { get: () => (trooper.dead ? 'dead' : !trooper.fallen ? (reaction.wound ? 'wounded' : 'standing') : crawl?.stage === 'crawl' ? 'crawling' : 'down') },
+    /** News for the game since the last call: landings, armour lost, pulled, up, rearmed. */
+    news: { get: () => feed.splice(0) },
+    /** Armour still on him. */
+    armour: { get: () => Object.values(pieces).filter(piece => !piece.userData.loose).length },
+    /**
+     * 'standing', 'wounded', 'pulled', 'dazed', 'rearming', 'stunned',
+     * 'rising', 'down', 'crawling' or 'dead'.
+     */
+    state: {
+      get: () => {
+        if (trooper.dead) return 'dead';
+        if (!trooper.fallen) return towing ? 'pulled' : pickup ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
+        if (recover) return recover.stage === 'rising' ? 'rising' : 'stunned';
+        return crawl?.stage === 'crawl' ? 'crawling' : 'down';
+      },
+    },
   });
   return trooper;
+}
+
+/**
+ * The squad's bodies meet: a body thrown into a standing trooper knocks him
+ * over (and is slowed), and bodies on the floor shove each other aside.
+ */
+export function collideSquad(troopers) {
+  const speed = new THREE.Vector3();
+  for (const a of troopers) {
+    if (!a.fallen) continue;
+    for (const b of troopers) {
+      if (a === b) continue;
+      if (!b.fallen) {
+        const block = b.blocker();
+        if (!block || b.dead) continue;
+        for (const name of ['W', 'N', 'HT', 'HL', 'HR']) {
+          const index = a.indexOf(name), particle = a.ragdoll.particles[index];
+          if (particle.kinematic || particle.position.y > 1.7) continue;
+          if (Math.hypot(particle.position.x - block.x, particle.position.z - block.z) > block.radius + particle.radius) continue;
+          a.ragdoll.velocity(index, speed);
+          if (speed.length() < 2.2) continue;
+          b.forcePush(speed.clone().multiplyScalar(0.65).setY(1.4));
+          a.slow(0.45);
+          break;
+        }
+      } else if (troopers.indexOf(a) < troopers.indexOf(b)) {
+        for (const p of a.ragdoll.particles) {
+          if (p.kinematic) continue;
+          for (const q of b.ragdoll.particles) {
+            if (q.kinematic) continue;
+            const reach = p.radius + q.radius;
+            const dx = q.position.x - p.position.x, dy = q.position.y - p.position.y, dz = q.position.z - p.position.z;
+            const squared = dx * dx + dy * dy + dz * dz;
+            if (squared >= reach * reach || squared < 1e-10) continue;
+            const distance = Math.sqrt(squared), push = (reach - distance) * 0.5 / distance;
+            // Apart without adding speed: bodies piled up stay calm.
+            for (const [particle, sign] of [[p, -1], [q, 1]]) {
+              particle.position.x += dx * push * sign; particle.position.y += dy * push * sign; particle.position.z += dz * push * sign;
+              particle.previous.x += dx * push * sign; particle.previous.y += dy * push * sign; particle.previous.z += dz * push * sign;
+            }
+          }
+        }
+      }
+    }
+  }
 }

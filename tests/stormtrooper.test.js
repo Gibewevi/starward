@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { createStormtrooper } from '../src/stormtrooper.js';
+import { createStormtrooper, collideSquad } from '../src/stormtrooper.js';
 import { createImpactEffects } from '../src/impact-effects.js';
 import { Ragdoll } from '../src/ragdoll.js';
 
@@ -335,7 +335,7 @@ test('standing, he answers each hit where it lands', () => {
   // A slow touch of the blade's tip across his helmet: his head snaps along it.
   const helmet = head.particle('N').lerp(head.particle('HT'), 0.6).addScaledVector(side, -0.1);
   const touch = head.sweep(helmet, forward, side, 1.6, 4, { before: 0.12, length: 0.24 });
-  assert.ok(touch.some(event => event.part === 'head') && touch.every(event => event.type === 'graze'), touch.map(event => `${event.type}:${event.part}`).join());
+  assert.ok(touch.some(event => event.part === 'head') && touch.every(event => ['graze', 'armor'].includes(event.type)), touch.map(event => `${event.type}:${event.part}`).join());
   const r = head.trooper.reaction;
   assert.ok(Math.abs(r.vheadYaw) + Math.abs(r.headYaw) > 0.2, 'the head turns with the blow');
 
@@ -343,7 +343,7 @@ test('standing, he answers each hit where it lands', () => {
   arm.run(0.5);
   const target = arm.particle('SL').lerp(arm.particle('EL'), 0.5).addScaledVector(side, 0.04);
   const events = arm.sweep(target, forward, side.clone().negate(), 1.6, 4, { before: 0.12, length: 0.24 });
-  assert.ok(events.some(event => event.part === 'upperArmL') && events.every(event => event.type === 'graze'), events.map(event => `${event.type}:${event.part}`).join());
+  assert.ok(events.some(event => event.part === 'upperArmL') && events.every(event => ['graze', 'armor'].includes(event.type)), events.map(event => `${event.type}:${event.part}`).join());
   const a = arm.trooper.reaction;
   assert.ok(Math.abs(a.varmL) + Math.abs(a.vflareL) > 0.3, 'that arm is flung');
   assert.equal(a.varmR, 0, 'the other one is not');
@@ -444,4 +444,143 @@ test('every hit flashes the struck armour, and a clean cut flares', () => {
   assert.ok(effects.bursts > 0, 'a flare and a ring of light');
   state.run(0.6);
   assert.equal(effects.bursts, 0, 'gone in a blink');
+});
+
+// A trooper alone, facing the hero at the origin, with a clock and a log of his states.
+function standAlone(seed, z = 3) {
+  const trooper = createStormtrooper({ scene: new THREE.Scene(), position: new THREE.Vector3(0, 0, z), heading: Math.PI, random: seeded(seed) });
+  trooper.focus = new THREE.Vector3(0, 0, 0);
+  const state = { trooper, time: 0, states: [] };
+  state.run = seconds => {
+    for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
+      state.time += 1 / 60;
+      trooper.update(1 / 60, state.time);
+      if (state.states.at(-1) !== trooper.state) state.states.push(trooper.state);
+    }
+  };
+  state.run(0.3);
+  return state;
+}
+
+test('a Force push throws him off his feet: he tumbles, slides, lies stunned, gets up and sways — alive', () => {
+  const { trooper, run, states } = standAlone(3);
+  const start = trooper.particle('W').position.clone();
+  trooper.forcePush(new THREE.Vector3(0, 3, 7.5));
+  assert.ok(trooper.fallen && !trooper.dead, 'off his feet, not killed');
+  let peak = 0, travel = 0;
+  for (let i = 0; i < 90; i++) {
+    run(1 / 60);
+    peak = Math.max(peak, trooper.particle('W').position.y);
+  }
+  travel = trooper.particle('W').position.clone().setY(0).distanceTo(start.clone().setY(0));
+  assert.ok(peak > 0.6, `thrown up (${peak.toFixed(2)} m)`);
+  assert.ok(travel > 2, `and back (${travel.toFixed(2)} m)`);
+  run(9);
+  assert.ok(!trooper.dead && !trooper.fallen, `back on his feet: ${states.join(' > ')}`);
+  for (const state of ['stunned', 'rising', 'dazed']) assert.ok(states.includes(state), `${state} on the way: ${states.join(' > ')}`);
+  for (const [name, part] of Object.entries(trooper.parts)) if (name !== 'blaster') assert.ok(part.parent !== trooper.debris && part.matrixAutoUpdate, `${name} is his again`);
+  assert.ok(trooper.bodies.torso.indices.every(index => trooper.ragdoll.particles[index].kinematic), 'the pose drives him again');
+  const pelvis = trooper.joints.pelvis.getWorldPosition(new THREE.Vector3());
+  assert.ok(pelvis.y > 0.75, `standing tall (${pelvis.y.toFixed(2)} m)`);
+  assert.ok(trooper.ragdoll.particles.every(particle => Number.isFinite(particle.position.x + particle.position.y + particle.position.z)));
+});
+
+test('knocked down near his rifle, he gets up and picks it up', () => {
+  const { trooper, run, states } = standAlone(5);
+  trooper.forcePush(new THREE.Vector3(0, 1.6, 2.2));
+  assert.equal(trooper.holding, false, 'the rifle flies from his hands');
+  run(10);
+  assert.ok(states.includes('rearming'), states.join(' > '));
+  assert.ok(trooper.holding && trooper.parts.blaster.parent?.name === 'Blaster holder', 'the rifle is back in his hands');
+  assert.equal(trooper.state, 'standing');
+});
+
+test('a Force pull: explosive start, very fast, slowing right down in front of the hero', () => {
+  const { trooper, run } = standAlone(7, 6);
+  const stop = new THREE.Vector3(0, 0, 1.15);
+  assert.ok(trooper.forcePull(stop));
+  assert.equal(trooper.state, 'pulled');
+  const speeds = [];
+  let last = trooper.root.position.clone().setY(0);
+  for (let i = 0; i < 50; i++) {
+    run(1 / 60);
+    const now = trooper.root.position.clone().setY(0);
+    speeds.push(now.distanceTo(last) * 60);
+    last = now;
+  }
+  const top = Math.max(...speeds), at = speeds.indexOf(top);
+  assert.ok(at <= 6 && top > 12, `bursts to ${top.toFixed(1)} m/s within ${at} frames`);
+  assert.ok(speeds[0] < top * 0.5, 'but builds up over a few frames rather than jumping');
+  const moving = speeds.filter(speed => speed > 0.05);
+  assert.ok(moving.at(-1) < top * 0.1, 'slows right down on arrival');
+  for (let i = at + 1; i < moving.length; i++) assert.ok(moving[i] <= moving[i - 1] + 0.05, 'decelerating all the way');
+  run(1.5);
+  const landed = trooper.fallen ? trooper.particle('W').position.clone().setY(0) : trooper.root.position.clone().setY(0);
+  assert.ok(landed.distanceTo(stop) < (trooper.fallen ? 1.2 : 0.1), `lands before the hero (${landed.distanceTo(stop).toFixed(2)} m off)`);
+  assert.ok(!trooper.dead);
+});
+
+test('a body on the floor is hauled in by the Force', () => {
+  const state = fixture(37);
+  state.run(0.5);
+  horizontal(state, 1.38);
+  state.run(5);
+  const { trooper } = state;
+  const before = state.particle('W');
+  const to = trooper.root.position.clone().add(new THREE.Vector3(3, 0, 0));
+  assert.ok(trooper.forcePull(to));
+  state.run(2);
+  const after = state.particle('W');
+  assert.ok(after.x - before.x > 1.5, `dragged across the floor (${(after.x - before.x).toFixed(2)} m)`);
+  assert.ok(state.finite());
+});
+
+test('his armour comes apart progressively and the pieces fly, bounce and come to rest', () => {
+  const state = fixture(41);
+  state.run(0.4);
+  const { trooper } = state;
+  const full = trooper.armour;
+  assert.equal(full, 19, 'a full suit: helmet, plates, belt, pauldrons, guards');
+  const counts = [full];
+  const side = new THREE.Vector3(1, 0, 0).applyQuaternion(trooper.root.quaternion), forward = new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion);
+  for (let i = 0; i < 6; i++) {
+    // Slow touches across his chest and arms: they scorch, they do not cut.
+    const point = state.particle('W').lerp(state.particle('N'), 0.3 + i * 0.1).addScaledVector(side, (i % 3 - 1) * 0.15);
+    state.sweep(point, forward, side, 1.8, 4, { before: 0.3, length: 0.45 });
+    state.run(0.4);
+    counts.push(trooper.armour);
+  }
+  assert.ok(counts.at(-1) < full - 1, `pieces come off one blow after another (${counts.join(' → ')})`);
+  assert.ok(!trooper.dead && !trooper.fallen && trooper.severed.size === 0, 'without a cut');
+  const loose = trooper.ragdoll.bodies.filter(body => body.debris);
+  assert.ok(loose.length >= full - counts.at(-1));
+  state.run(3);
+  for (const body of loose) for (const index of body.indices) assert.ok(trooper.ragdoll.particles[index].position.y < 0.25, 'each piece lies on the floor');
+  assert.ok(state.finite());
+});
+
+test('no two sprays of sparks are alike', () => {
+  const state = fixture(43);
+  state.run(0.4);
+  const counts = [];
+  const sparks = state.effects.sparks;
+  state.effects.sparks = (...args) => { counts.push(args[3]?.count); return sparks(...args); };
+  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(state.trooper.root.quaternion), side = new THREE.Vector3(1, 0, 0).applyQuaternion(state.trooper.root.quaternion);
+  for (let i = 0; i < 6; i++) {
+    state.sweep(state.particle('W').lerp(state.particle('N'), 0.5), forward, side, 1.6, 4, { before: 0.3, length: 0.45 });
+    state.run(0.4);
+  }
+  assert.ok(counts.length >= 5 && new Set(counts).size >= 4, `spark counts: ${counts.join(', ')}`);
+});
+
+test('a body thrown into a standing trooper knocks him over', () => {
+  const scene = new THREE.Scene();
+  const thrown = createStormtrooper({ scene, position: new THREE.Vector3(0, 0, 0), heading: 0, random: seeded(4) });
+  const standing = createStormtrooper({ scene, position: new THREE.Vector3(0, 0, 1.4), heading: 0, random: seeded(6) });
+  let time = 0;
+  const run = seconds => { for (let frame = 0; frame < Math.round(seconds * 60); frame++) { time += 1 / 60; thrown.update(1 / 60, time); standing.update(1 / 60, time); collideSquad([thrown, standing]); } };
+  run(0.3);
+  thrown.forcePush(new THREE.Vector3(0, 2.5, 7));
+  run(1.5);
+  assert.ok(standing.fallen && !standing.dead, 'bowled over, alive');
 });

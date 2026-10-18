@@ -19,7 +19,7 @@ function run(combat, seconds, { press = () => false, guard = false, speed = 0 } 
   }
   return started;
 }
-const strikes = Object.keys(MOVES).filter(name => !MOVES[name].free);
+const strikes = Object.keys(MOVES).filter(name => !MOVES[name].free && !MOVES[name].utility);
 
 test('every move is well formed and every strike can follow another', () => {
   for (const [name, move] of Object.entries(MOVES)) {
@@ -224,4 +224,50 @@ test('moulinets are rolled at shoulder height in a near-vertical circle', () => 
       assert.ok(Math.abs(pose.blade.dot(normal)) < 0.02, `${name}: the blade stays in the circle`);
     }
   }
+});
+
+test('a Force power cuts a strike short, fires mid-gesture, and B picks the combo up afterwards', () => {
+  const combat = new CombatController({ random: seeded(17) });
+  combat.attack();
+  combat.takeStart();
+  run(combat, 0.15);
+  assert.ok(combat.busy);
+  assert.ok(combat.power('forcePush'));
+  assert.equal(combat.takeStart(), 'forcePush');
+  let fired = null, at = 0;
+  for (let frame = 0; frame < 60 && !fired; frame++) { combat.update(1 / 60); at += 1 / 60; fired = combat.takeForce(); }
+  assert.equal(fired, 'forcePush');
+  assert.ok(Math.abs(at / MOVES.forcePush.duration - 0.42) < 0.06, `released at the thrust (${(at / MOVES.forcePush.duration).toFixed(2)})`);
+  assert.ok(combat.output.inputScale > 0.3, 'the hero can still move a little');
+  run(combat, 0.5);
+  combat.attack();
+  const next = combat.takeStart();
+  assert.ok(MOVES[next].role.includes('link') || MOVES[next].role.includes('finisher'), `the combo goes on with ${next}`);
+  assert.ok(combat.power('forcePull') && combat.takeStart() === 'forcePull', 'and a pull can cut that one short too');
+});
+
+test('RB parries out of a strike, high, left or right, then holds the guard', () => {
+  const combat = new CombatController({ random: seeded(19) });
+  const parries = new Set();
+  for (let i = 0; i < 6; i++) {
+    combat.attack();
+    run(combat, 0.1);
+    assert.ok(combat.parry());
+    const name = combat.takeStart();
+    assert.ok(name.startsWith('parry'), name);
+    parries.add(name);
+    run(combat, 0.6, { guard: i % 2 === 0 });
+  }
+  assert.ok(parries.size >= 2, 'the parries vary');
+  combat.parry();
+  run(combat, 0.6, { guard: true });
+  assert.ok(combat.guarding, 'held, it becomes the guard');
+});
+
+test('strikes are quicker and cover every direction', () => {
+  for (const name of ['overhead', 'reverseDiagonal']) assert.ok(MOVES[name], name);
+  const combat = new CombatController({ random: seeded(23) });
+  combat.attack();
+  const first = combat.takeStart();
+  assert.ok(combat.action.duration < MOVES[first].duration, 'played faster than written');
 });

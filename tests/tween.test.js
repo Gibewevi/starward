@@ -6,7 +6,7 @@ test('easing curves start at 0, end at 1, and keep their character', () => {
   for (const [name, curve] of Object.entries(ease)) {
     assert.ok(Math.abs(curve(0)) < 1e-9 && Math.abs(curve(1) - 1) < 1e-9, name);
   }
-  for (const name of ['outQuad', 'outCubic', 'inOutCubic', 'inOutSine', 'outExpo', 'inQuad']) {
+  for (const name of ['outQuad', 'outCubic', 'outQuart', 'outSnap', 'inOutCubic', 'inOutSine', 'outExpo', 'inQuad', 'inCubic']) {
     let last = -Infinity;
     for (let t = 0; t <= 1.0001; t += 0.05) { assert.ok(ease[name](t) >= last - 1e-9, `${name} rises steadily`); last = ease[name](t); }
   }

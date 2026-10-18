@@ -10,9 +10,14 @@ export const ease = {
   inQuad: t => t * t,
   outQuad: t => 1 - (1 - t) * (1 - t),
   outCubic: t => 1 - (1 - t) ** 3,
+  outQuart: t => 1 - (1 - t) ** 4,
+  inCubic: t => t * t * t,
   inOutCubic: t => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2),
   inOutSine: t => -(Math.cos(Math.PI * t) - 1) / 2,
   outExpo: t => (t >= 1 ? 1 : 1 - 2 ** (-10 * t)),
+  // A snap: speed builds up over the first instants (no teleporting jump),
+  // peaks early, then a long ease-out.
+  outSnap: t => { const a = 0.12, u = t < a ? t * t / (2 * a) : t - a / 2; return Math.min(1, 1 - (1 - u / (1 - a / 2)) ** 3); },
   // Overshoots, then settles: a snap with some give.
   outBack: t => 1 + 2.70158 * (t - 1) ** 3 + 1.70158 * (t - 1) ** 2,
 };

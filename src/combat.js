@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FEEL } from './feel.js';
 
 /**
  * Lightsaber choreography. Each press of B plays a strike; strikes flow into
@@ -29,6 +30,9 @@ const MOULINET = [1, 0.15, 0.25], SHOULDER = [-0.24, 1.12, 0.14];
 const COCKED = (t, extra = {}) => key(t, [-0.24, 1.2, 0.05], [-0.15, 0.85, -0.5], { left: [0.24, 1.0, 0.24], yaw: -0.45, pitch: -0.05, crouch: 0.42, ...extra });
 const LOW_LEFT = (t, extra = {}) => key(t, [0.16, 0.8, 0.3], [0.75, -0.55, 0.3], { left: [0.3, 0.93, -0.12], yaw: 0.4, pitch: 0.1, crouch: 0.7, ...extra });
 const FRONT_LOW = (t, extra = {}) => key(t, [-0.12, 0.85, 0.38], [-0.3, -0.45, 0.85], { grip: 0.4, pitch: 0.1, crouch: 0.6, ...extra });
+const GUARDED = (t, extra = {}) => key(t, [-0.04, 0.98, 0.3], [0.15, 0.96, 0.22], { grip: 1, yaw: 0.2, pitch: 0.04, crouch: 0.55, left: [-0.02, 0.92, 0.3], ...extra });
+// The blade held low and back while the free hand wields the Force.
+const READY = (t, extra = {}) => key(t, [-0.28, 0.96, 0.06], [-0.55, -0.35, -0.75], { left: [0.3, 0.96, 0.05], crouch: 0.55, ...extra });
 
 export const MOVES = {
   // Diagonal cut from over the right shoulder down to the left hip.
@@ -229,6 +233,85 @@ export const MOVES = {
       LOW_LEFT(1, { crouch: 0.6 }),
     ],
   },
+  // A straight overhead chop, quick and clean.
+  overhead: {
+    role: ['opener', 'link'], from: ['R', 'F'], to: 'F', duration: 0.42, buffer: 0.15, chain: 0.6, active: [0.38, 0.68], trail: [0.26, 0.8],
+    drive: [[0.3, 0.6, 1.8]],
+    keys: [
+      COCKED(0),
+      key(0.3, [-0.08, 1.32, 0.08], [-0.05, 0.6, -0.8], { grip: 1, yaw: -0.15, pitch: -0.15, crouch: 0.35 }),
+      key(0.52, [-0.04, 1.08, 0.42], [0, 0.35, 0.94], { grip: 1, yaw: 0, pitch: 0.12, crouch: 0.75 }),
+      key(0.7, [-0.03, 0.82, 0.44], [0, -0.75, 0.66], { grip: 1, pitch: 0.3, crouch: 1 }),
+      FRONT_LOW(1, { grip: 0.6 }),
+    ],
+  },
+  // From over the left shoulder, a diagonal down to his right hip.
+  reverseDiagonal: {
+    role: ['link'], from: ['L'], to: 'F', duration: 0.48, buffer: 0.18, chain: 0.64, active: [0.4, 0.72], trail: [0.3, 0.82],
+    drive: [[0.3, 0.6, 1.6]],
+    keys: [
+      LOW_LEFT(0),
+      key(0.3, [0.12, 1.25, 0.12], [0.45, 0.8, -0.4], { left: [0.3, 1.0, -0.1], yaw: 0.55, pitch: -0.1, crouch: 0.4 }),
+      key(0.52, [-0.02, 1.05, 0.44], [-0.35, 0.3, 0.88], { left: [0.3, 0.97, 0.05], yaw: 0, pitch: 0.12, crouch: 0.75 }),
+      key(0.7, [-0.24, 0.84, 0.3], [-0.85, -0.4, 0.35], { left: [0.3, 0.95, 0.15], yaw: -0.45, pitch: 0.18, crouch: 0.9 }),
+      FRONT_LOW(1),
+    ],
+  },
+  // RB: quick parries — high, left, right — snapped out of the guard and back.
+  parryHigh: {
+    role: ['parry'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 0.28, buffer: 0.35, chain: 0.6, active: [0.1, 0.55], trail: [0.05, 0.6],
+    keys: [
+      GUARDED(0),
+      key(0.32, [-0.05, 1.28, 0.3], [0.95, 0.25, 0.15], { grip: 0.7, yaw: 0.05, pitch: -0.08, crouch: 0.65, left: [0.12, 1.24, 0.3] }),
+      key(0.55, [-0.05, 1.26, 0.3], [0.93, 0.3, 0.15], { grip: 0.7, yaw: 0.05, pitch: -0.06, crouch: 0.62, left: [0.12, 1.22, 0.3] }),
+      GUARDED(1),
+    ],
+  },
+  parryLeft: {
+    role: ['parry'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 0.26, buffer: 0.35, chain: 0.6, active: [0.1, 0.55], trail: [0.05, 0.6],
+    keys: [
+      GUARDED(0),
+      key(0.32, [0.1, 1.02, 0.32], [0.45, 0.88, 0.1], { grip: 0.8, yaw: 0.5, crouch: 0.7 }),
+      key(0.55, [0.09, 1.02, 0.32], [0.42, 0.89, 0.12], { grip: 0.8, yaw: 0.45, crouch: 0.66 }),
+      GUARDED(1),
+    ],
+  },
+  parryRight: {
+    role: ['parry'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 0.26, buffer: 0.35, chain: 0.6, active: [0.1, 0.55], trail: [0.05, 0.6],
+    keys: [
+      GUARDED(0),
+      key(0.32, [-0.3, 1.02, 0.28], [-0.45, 0.88, 0.1], { grip: 0.3, yaw: -0.35, crouch: 0.7 }),
+      key(0.55, [-0.29, 1.02, 0.28], [-0.42, 0.89, 0.12], { grip: 0.3, yaw: -0.32, crouch: 0.66 }),
+      GUARDED(1),
+    ],
+  },
+  // RT: Force push. The free hand coils back to the shoulder, then drives
+  // forward, palm out; the power leaves it at the thrust.
+  forcePush: {
+    role: ['power'], utility: true, power: 'pushAt', from: ['R', 'L', 'F'], to: 'F', duration: 0.56, buffer: 0.5, chain: 0.7, active: [2, 2], trail: [2, 2],
+    drive: [[0.38, 0.6, 1.1]],
+    keys: [
+      READY(0, { left: [0.28, 1.0, 0.1] }),
+      READY(0.3, { left: [0.2, 1.08, -0.04], yaw: 0.4, pitch: -0.06, crouch: 0.75 }),
+      READY(0.45, { left: [0.1, 1.12, 0.5], yaw: -0.32, pitch: 0.16, crouch: 0.9 }),
+      READY(0.7, { left: [0.1, 1.1, 0.47], yaw: -0.26, pitch: 0.12, crouch: 0.8 }),
+      READY(1),
+    ],
+  },
+  // LT: Force pull. The free hand reaches out, closes, and yanks back to the
+  // chest as the body leans away; the pull starts with the yank.
+  forcePull: {
+    role: ['power'], utility: true, power: 'pullAt', from: ['R', 'L', 'F'], to: 'F', duration: 0.6, buffer: 0.5, chain: 0.7, active: [2, 2], trail: [2, 2],
+    drive: [[0.32, 0.55, -0.9]],
+    keys: [
+      READY(0),
+      READY(0.22, { left: [0.1, 1.12, 0.5], yaw: -0.3, pitch: 0.12, crouch: 0.65 }),
+      READY(0.3, { left: [0.1, 1.13, 0.5], yaw: -0.32, pitch: 0.14, crouch: 0.7 }),
+      READY(0.5, { left: [0.24, 1.06, -0.02], yaw: 0.42, pitch: -0.16, crouch: 0.85 }),
+      READY(0.75, { left: [0.26, 1.02, 0.02], yaw: 0.3, pitch: -0.08, crouch: 0.7 }),
+      READY(1),
+    ],
+  },
   // Not a strike: the twirl that accompanies igniting the blade.
   draw: {
     role: ['flourish'], from: ['R', 'L', 'F'], to: 'F', duration: 0.62, buffer: 0, chain: 0, active: [2, 2], trail: [0.02, 0.78], free: true,
@@ -241,6 +324,7 @@ export const MOVES = {
   },
 };
 export const GUARD_SPEED = 2.2;
+const PARRIES = ['parryHigh', 'parryLeft', 'parryRight'];
 const GUARD = key(0, [-0.04, 0.98, 0.3], [0.15, 0.96, 0.22], { grip: 1, yaw: 0.2, pitch: 0.04, crouch: 0.55, left: [-0.02, 0.92, 0.3] });
 
 const clamp01 = value => Math.max(0, Math.min(1, value));
@@ -316,6 +400,9 @@ export class CombatController {
     this.swayPose = createPose();
     this.clock = 0;
     this.history = [];
+    // A new number for every combo, so effects can be limited per sequence.
+    this.sequence = 0;
+    this.fired = null;
     this.reset();
   }
   reset() {
@@ -345,7 +432,7 @@ export class CombatController {
     const ofRole = Object.keys(MOVES).filter(name => MOVES[name].role.includes(role));
     let candidates = fresh ? ofRole : ofRole.filter(name => MOVES[name].from.includes(this.side));
     if (!candidates.length) candidates = ofRole;
-    const recent = this.history.slice(-3);
+    const recent = this.history.slice(-FEEL.attacks.memory);
     const unused = candidates.filter(name => !recent.includes(name));
     if (unused.length) candidates = unused;
     return candidates[Math.min(candidates.length - 1, Math.floor(this.random() * candidates.length))];
@@ -360,21 +447,44 @@ export class CombatController {
     }
     // Shortly after a strike the combo goes on; otherwise a new one begins.
     if (!(this.recovery > 0 && this.hits > 0)) { this.hits = 0; this.side = null; }
-    if (this.hits === 0) this.length = 3 + Math.floor(this.random() * 4);
+    if (this.hits === 0) { this.length = 3 + Math.floor(this.random() * 4); this.sequence++; }
     this.start(this.choose({ speed }));
     return true;
   }
-  /** Drops the current move where it is (the free blade takes over). */
+  /** Drops the current move where it is. */
   cancel() {
+    this.interrupt();
     this.action = null;
     this.queued = false;
   }
-  /** Follows another pose (the free blade), so a strike launched next starts from it. */
-  adopt(pose, weight) {
-    copyPose(this.lastPose, pose);
-    copyPose(this.actionPose, pose);
-    this.output.weight = Math.max(this.output.weight, weight);
+  // A strike cut short leaves the combo open, to be picked up after a power or a parry.
+  interrupt() {
+    if (!this.action || this.action.free || this.action.utility) return;
+    this.side = this.action.to;
+    this.recovery = 0.6;
   }
+  /**
+   * LT / RT: a Force power, at once, cutting short whatever the blade was
+   * doing. takeForce() reports the moment the power leaves the hand.
+   */
+  power(name) {
+    if (!MOVES[name]?.power) return false;
+    if (this.action?.power && this.time / this.action.duration < 0.75) return false;
+    this.interrupt();
+    this.start(name);
+    return true;
+  }
+  /** RB pressed: a quick parry, high, left or right, even out of a strike. */
+  parry() {
+    if (this.action?.power) return false;
+    const options = PARRIES.filter(name => name !== this.lastParry);
+    const name = options[Math.floor(this.random() * options.length) % options.length];
+    this.lastParry = name;
+    this.interrupt();
+    this.start(name);
+    return true;
+  }
+  takeForce() { const name = this.fired; this.fired = null; return name; }
   /** The ignition twirl; it never interrupts a strike or the guard. */
   flourish() {
     if (this.action || this.guard > 0.3) return false;
@@ -385,10 +495,11 @@ export class CombatController {
     const move = MOVES[name];
     copyPose(this.fromPose, this.lastPose);
     this.blendFrom = this.output.weight > 0.5 ? 1 : 0;
-    // Each strike differs a little: tempo, twist and reach vary.
-    const tempo = move.free ? 1 : 0.92 + this.random() * 0.16;
-    this.action = { name, ...move, duration: move.duration * tempo, variation: move.free ? 1 : 0.85 + this.random() * 0.3, push: move.free ? 1 : 0.85 + this.random() * 0.35 };
-    if (!move.free) {
+    // Each strike differs a little: tempo, twist and reach vary. FEEL sets the pace.
+    const plain = move.free || move.utility;
+    const tempo = plain ? 1 : (0.92 + this.random() * 0.16) * FEEL.attacks.tempo;
+    this.action = { name, ...move, duration: move.duration * tempo, variation: plain ? 1 : 0.85 + this.random() * 0.3, push: plain ? 1 : 0.85 + this.random() * 0.35, released: false };
+    if (!plain) {
       this.hits++;
       this.history.push(name);
       if (this.history.length > 8) this.history.shift();
@@ -410,7 +521,8 @@ export class CombatController {
       this.time += dt;
       const t = this.time / action.duration;
       if (this.queued && t >= action.chain && !action.role.includes('finisher')) {
-        this.side = action.to;
+        if (!action.utility) this.side = action.to;
+        if (this.hits === 0) this.sequence++;
         this.start(this.choose({ speed }));
       } else if (guard && (action.free || t >= action.active[1])) {
         this.finish();
@@ -430,6 +542,7 @@ export class CombatController {
         if (current.spin) { const [from, to, turns] = current.spin; out.spin = ease(clamp01((time - from) / (to - from))) * turns * Math.PI * 2; }
         out.trail = inWindow(time, current.trail);
         if (current.impact && !this.impacted && time >= current.impact[0]) { this.impacted = true; out.shake = current.impact[1]; out.flare = 1; }
+        if (current.power && !current.released && time >= FEEL.force[current.power]) { current.released = true; this.fired = current.name; }
         out.name = current.name;
       }
     }
@@ -456,7 +569,8 @@ export class CombatController {
     copyPose(out, this.actionPose);
     out.guard = this.guard;
     const striking = this.busy;
-    out.inputScale = striking ? 0.15 : 1;
+    // Powers and parries let the hero keep moving a little; strikes commit him.
+    out.inputScale = striking ? (this.action.utility ? 0.5 : 0.15) : 1;
     out.turnScale = striking ? 0 : this.guard > 0.5 ? 0.6 : 1;
     out.maxSpeed = striking ? Infinity : this.guard > 0.1 ? GUARD_SPEED + (1 - this.guard) * 3 : Infinity;
     out.engaged = Boolean(this.action) || this.guard > 0.1;
@@ -465,7 +579,7 @@ export class CombatController {
   finish() {
     const ended = this.action;
     this.action = null;
-    if (ended.free) return;
+    if (ended.free || ended.utility) return;
     this.side = ended.to;
     if (ended.role.includes('finisher')) { this.hits = 0; this.recovery = 0; this.cooldown = 0.2; }
     else this.recovery = 0.34;

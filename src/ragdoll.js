@@ -186,6 +186,8 @@ export class Ragdoll {
       for (let j = i + 1; j < list.length; j++) {
         const b = list[j];
         if (a.kinematic && b.kinematic) continue;
+        // Loose pieces ('ghosts') fall through animated bodies, onto the floor.
+        if ((a.kinematic && b.ghost) || (b.kinematic && a.ghost)) continue;
         const reach = a.radius + b.radius;
         const dx = b.position.x - a.position.x, dy = b.position.y - a.position.y, dz = b.position.z - a.position.z;
         const squared = dx * dx + dy * dy + dz * dz;

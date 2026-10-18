@@ -13,9 +13,9 @@ import { createSaber } from './saber.js';
 import { MotionController, damp } from './motion.js';
 import { CombatController } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
-import { createStormtrooper } from './stormtrooper.js';
+import { createStormtrooper, collideSquad } from './stormtrooper.js';
 import { ease, hitStopScale, kick } from './tween.js';
-import { SaberControl } from './saber-control.js';
+import { FEEL, pick } from './feel.js';
 import { createImpactEffects } from './impact-effects.js';
 
 const $ = selector => document.querySelector(selector);
@@ -121,6 +121,58 @@ function init() {
   }
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
   function resetTrooper() { for (const trooper of troopers) trooper.reset(); effects.clear(); }
+  // Hit stops: at most one per enemy and per attack sequence.
+  const stopped = new Set();
+  let stoppedSequence = -1;
+
+  // The Force: where each trooper is, which one the hero means, and what the power does.
+  const leftHand = new THREE.Vector3(), here = new THREE.Vector3(), facing = new THREE.Vector3();
+  const whereIs = trooper => {
+    const block = trooper.blocker();
+    return block ? new THREE.Vector3(block.x, 0, block.z) : trooper.particle('W').position.clone().setY(0);
+  };
+  /** The trooper the hero means: closest to his line of sight, alive ones first. */
+  function target(range, cone) {
+    here.set(motion.x, 0, motion.z);
+    facing.set(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+    let best = null, score = Infinity;
+    for (const trooper of troopers) {
+      const offset = whereIs(trooper).sub(here), distance = offset.length();
+      if (distance > range || distance < 0.3) continue;
+      const angle = facing.angleTo(offset);
+      if (angle > cone) continue;
+      const value = angle * 2.2 + distance * 0.12 + (trooper.dead ? 0.6 : 0);
+      if (value < score) { score = value; best = trooper; }
+    }
+    return best;
+  }
+  function unleash(kind) {
+    character.rig.bones.LeftHand.getWorldPosition(leftHand);
+    here.set(motion.x, 0, motion.z);
+    facing.set(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+    if (kind === 'forcePush') {
+      // Everyone in the cone is thrown, the nearest hardest.
+      for (const trooper of troopers) {
+        const offset = whereIs(trooper).sub(here), distance = offset.length();
+        if (distance > FEEL.push.range || distance < 0.05 || facing.angleTo(offset) > FEEL.push.cone) continue;
+        const strength = THREE.MathUtils.lerp(1, FEEL.push.falloff, distance / FEEL.push.range);
+        const direction = offset.normalize().add(facing).normalize();
+        trooper.forcePush(direction.multiplyScalar(pick(FEEL.push.speed) * strength).setY(pick(FEEL.push.lift) * strength));
+      }
+      effects.wave(leftHand, facing, { kind: 'push', length: FEEL.push.range * 0.8 });
+      shove(facing, FEEL.camera.kickPush);
+      punch(FEEL.camera.punchPush);
+      audio.force('push');
+    } else {
+      const trooper = target(FEEL.pull.range, FEEL.pull.cone);
+      const toward = trooper ? whereIs(trooper).sub(here) : facing.clone().multiplyScalar(3);
+      const distance = Math.max(0.1, toward.length());
+      if (trooper) trooper.forcePull(here.clone().addScaledVector(toward.clone().normalize(), Math.min(FEEL.pull.stop, distance)));
+      effects.wave(leftHand, toward, { kind: 'pull', length: distance });
+      shove(toward.clone().negate(), FEEL.camera.kick);
+      audio.force('pull');
+    }
+  }
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
   // The final canvas is then enlarged with nearest-neighbour, never blurred.
@@ -155,15 +207,9 @@ function init() {
   const inputRight = new THREE.Vector2(10, -8).normalize();
   const inputForward = new THREE.Vector2(-8, -10).normalize();
   const joystick = { x: 0, y: 0, running: false, pointer: null };
-  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyE'];
-  let attackPressed = false, padAttack = false;
-  // Free saber: LT held + right stick, or the right mouse button held + the
-  // pointer around the hero (up raises the blade, down lowers it, left and
-  // right carry it to his sides); R3, E or a middle click rolls the blade.
-  const control = new SaberControl();
-  const pointer = { x: 0, y: 0, seen: false, fight: false, twirl: false };
-  let fighting = false, padTwirl = false;
-  const heroScreen = new THREE.Vector3(), socketQuaternion = new THREE.Quaternion(), bladeNow = new THREE.Vector3();
+  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyU', 'KeyI'];
+  // B / J strike, RB / K guard (a press parries), LT / U pull, RT / I push.
+  let attackPressed = false, padAttack = false, parryPressed = false, padGuard = false, powerPressed = null, padPull = false, padPush = false;
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
@@ -174,31 +220,14 @@ function init() {
       if (event.code === 'KeyF') fullscreen();
       if (event.code === 'KeyT') resetTrooper();
       if (event.code === 'KeyJ') attackPressed = true;
-      if (event.code === 'KeyE') pointer.twirl = true;
+      if (event.code === 'KeyK') parryPressed = true;
+      if (event.code === 'KeyU') powerPressed = 'forcePull';
+      if (event.code === 'KeyI') powerPressed = 'forcePush';
     }
     keys.add(event.code);
   });
   window.addEventListener('keyup', event => keys.delete(event.code));
-  function clearInput() { keys.clear(); attackPressed = false; pointer.fight = false; pointer.twirl = false; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
-  renderer.domElement.addEventListener('pointermove', event => { pointer.x = event.clientX; pointer.y = event.clientY; pointer.seen = true; });
-  renderer.domElement.addEventListener('pointerdown', event => {
-    pointer.x = event.clientX; pointer.y = event.clientY; pointer.seen = true;
-    if (event.button === 2) pointer.fight = true;
-    if (event.button === 1) { pointer.twirl = true; event.preventDefault(); }
-  });
-  window.addEventListener('pointerup', event => { if (event.button === 2) pointer.fight = false; });
-  renderer.domElement.addEventListener('contextmenu', event => event.preventDefault());
-  /** The pointer as a stick: its offset from the hero on screen, full tilt at ~16 % of the view. */
-  function pointerStick() {
-    heroScreen.set(motion.x, 1, motion.z).project(camera);
-    const rect = renderer.domElement.getBoundingClientRect();
-    const radius = Math.min(rect.width, rect.height) * 0.16;
-    let x = (pointer.x - (rect.left + (heroScreen.x + 1) / 2 * rect.width)) / radius;
-    let y = -(pointer.y - (rect.top + (1 - heroScreen.y) / 2 * rect.height)) / radius;
-    const length = Math.hypot(x, y);
-    if (length > 1) { x /= length; y /= length; }
-    return { x, y };
-  }
+  function clearInput() { keys.clear(); attackPressed = parryPressed = false; powerPressed = null; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
   window.addEventListener('blur', clearInput);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); setPause(true); } });
   $('#game').addEventListener('pointerdown', () => { renderer.domElement.focus(); if (audio.enabled) audio.start(); });
@@ -254,7 +283,7 @@ function init() {
   let lastFrame = performance.now(), fps = 60, hudTimer = 0, frameCount = 0;
   const stateEl = $('#motion-state'), speedEl = $('#speed'), saberEl = $('#saber-state');
   const targetFocus = new THREE.Vector3(), shakenFocus = new THREE.Vector3();
-  function frame(now) {
+  function frame(now, manual = false) {
     const rawDt = (now - lastFrame) / 1000;
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
@@ -274,45 +303,43 @@ function init() {
         const ax = gamepad.axes[0] || 0, ay = -(gamepad.axes[1] || 0);
         const length = Math.hypot(ax, ay);
         if (length > 0.16) { const gain = Math.min(1, (length - 0.16) / 0.8) / length; x += ax * gain; y += ay * gain; analog = true; }
-        // Standard mapping: A is button 0 (hold to guard), B is button 1 (strike).
-        guard ||= !!gamepad.buttons[0]?.pressed;
+        // Standard mapping: B (1) strikes; RB (5) guards and a press parries
+        // (A, 0, guards too); LT (6) pulls and RT (7) pushes with the Force.
+        const guardButton = !!gamepad.buttons[5]?.pressed;
+        if (guardButton && !padGuard) parryPressed = true;
+        padGuard = guardButton;
+        guard ||= guardButton || !!gamepad.buttons[0]?.pressed;
         const attackButton = !!gamepad.buttons[1]?.pressed;
         if (attackButton && !padAttack) attackPressed = true;
         padAttack = attackButton;
+        const pull = (gamepad.buttons[6]?.value ?? 0) > (padPull ? 0.3 : 0.5), push = (gamepad.buttons[7]?.value ?? 0) > (padPush ? 0.3 : 0.5);
+        if (pull && !padPull) powerPressed = 'forcePull';
+        if (push && !padPush) powerPressed = 'forcePush';
+        padPull = pull; padPush = push;
         // Y puts the stormtrooper back on his feet.
         const resetButton = !!gamepad.buttons[3]?.pressed;
         if (resetButton && !padReset) resetTrooper();
         padReset = resetButton;
       }
-      // Free saber input: LT (button 6) and the right stick, R3 (button 11).
-      let trigger = pointer.fight ? 1 : 0, aimX = 0, aimY = 0, twirl = pointer.twirl;
-      pointer.twirl = false;
-      if (pointer.fight && pointer.seen) ({ x: aimX, y: aimY } = pointerStick());
-      if (gamepad) {
-        trigger = Math.max(trigger, gamepad.buttons[6]?.value ?? 0);
-        const rx = gamepad.axes[2] || 0, ry = -(gamepad.axes[3] || 0);
-        if (Math.hypot(rx, ry) > Math.hypot(aimX, aimY)) { const length = Math.max(1, Math.hypot(rx, ry)); aimX = rx / length; aimY = ry / length; }
-        const r3 = !!gamepad.buttons[11]?.pressed;
-        if (r3 && !padTwirl) twirl = true;
-        padTwirl = r3;
-      }
-      fighting = fighting ? trigger > 0.2 : trigger > 0.35;
-      if (fighting && !control.active) combat.cancel();
-      character.saberSocket.getWorldQuaternion(socketQuaternion);
-      bladeNow.set(0, 1, 0).applyQuaternion(socketQuaternion);
-      const free = control.update(sim, {
-        active: fighting, heading: motion.heading, twirl, blade: bladeNow, stickX: aimX, stickY: aimY,
-      });
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
-      // B strikes and A guards while the blade is not held freely.
-      if (attackPressed && !control.active) combat.attack({ speed: motion.speed });
-      attackPressed = false;
-      const choreography = combat.update(sim, { guard: guard && !free.engaged, speed: motion.speed });
-      if (free.engaged) combat.adopt(free, free.weight);
-      const action = free.engaged && !combat.busy ? free : choreography;
-      // Each strike re-aims towards the stick before it lands.
-      if (combat.takeStart() && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      // Powers cut any strike short; a parry too; B strikes and chains.
+      if (powerPressed) combat.power(powerPressed);
+      if (parryPressed) combat.parry();
+      if (attackPressed) combat.attack({ speed: motion.speed });
+      attackPressed = parryPressed = false;
+      powerPressed = null;
+      const action = combat.update(sim, { guard, speed: motion.speed });
+      // Each move re-aims towards the stick before it lands; a power with the
+      // stick at rest turns towards the trooper the hero is facing most.
+      const started = combat.takeStart();
+      if (started && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      else if (started === 'forcePull' || started === 'forcePush') {
+        const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
+        if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
+      }
+      const released = combat.takeForce();
+      if (released) unleash(released);
       motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
       for (const trooper of troopers) {
         const blocker = trooper.blocker();
@@ -327,28 +354,38 @@ function init() {
       character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
-      if (saber.update(motion.saber, time, action.flare) === 'ignite' && !free.engaged) combat.flourish();
+      if (saber.update(motion.saber, time, action.flare) === 'ignite') combat.flourish();
       saber.segment(bladeBase, bladeTip);
       trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
-      for (const trooper of troopers) trooper.update(sim, time);
-      const struck = saber.extension > 0.6 && bladeReady ? troopers.flatMap(trooper => trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time)) : [];
-      for (const event of struck) {
-        // Falls are reported alongside the blow that caused them.
-        if (event.type === 'fall' || (event.type === 'graze' && event.speed < 1)) continue;
-        const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
-        // A light beat of hit stop on a clean cut, a longer one on a felling
-        // blow; the view is kicked along the swing.
-        const felling = event.lethal || event.felled;
-        if (felling) stopFor(0.06, 0.16);
-        else if (event.type === 'cut') stopFor(0.035, 0.1);
-        else if (heavy) stopFor(0.018, 0.06);
-        shove(event.velocity, felling ? 0.075 : heavy ? 0.045 : 0.015);
-        if (felling) punch(0.03);
-        else if (event.type === 'cut') punch(0.014);
-        impactShake = Math.max(impactShake, felling ? 0.35 : heavy ? 0.15 : 0.06);
-        audio.impact(heavy ? 1 : 0.35);
-      }
+      for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
+      collideSquad(troopers);
+      if (combat.sequence !== stoppedSequence) { stopped.clear(); stoppedSequence = combat.sequence; }
+      troopers.forEach((trooper, index) => {
+        const struck = saber.extension > 0.6 && bladeReady ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time) : [];
+        for (const event of struck) {
+          // Falls are reported alongside the blow that caused them.
+          if (event.type === 'fall' || (event.type === 'graze' && event.speed < 1)) continue;
+          const heavy = event.type === 'cut' || event.type === 'slash' || event.type === 'disarm';
+          // A short hit stop on a clean cut, a little longer on a felling blow
+          // — once per enemy and per attack sequence, so it never drags.
+          const felling = event.lethal || event.felled;
+          if ((felling || event.type === 'cut') && !stopped.has(index)) {
+            stopped.add(index);
+            const [hold, recover] = felling ? FEEL.hitStop.felling : FEEL.hitStop.cut;
+            stopFor(hold, recover);
+          }
+          shove(event.velocity, felling ? FEEL.camera.kickFelling : heavy ? FEEL.camera.kick : 0.012);
+          if (felling || event.type === 'cut') punch(FEEL.camera.punch * (felling ? 1.8 : 1));
+          impactShake = Math.max(impactShake, felling ? 0.3 : heavy ? 0.14 : 0.05);
+          audio.impact(heavy ? 1 : 0.35);
+        }
+        // Landings, armour coming off: heard and felt in step with the physics.
+        for (const item of trooper.news) {
+          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8)); impactShake = Math.max(impactShake, Math.min(0.18, item.speed * 0.025)); }
+          if (item.type === 'armor') audio.clank();
+        }
+      });
       bladeReady = saber.extension > 0.6;
       lastBase.copy(bladeBase);
       lastTip.copy(bladeTip);
@@ -379,7 +416,8 @@ function init() {
     hudTimer += dt;
     if (hudTimer > 0.15) {
       hudTimer = 0;
-      stateEl.textContent = paused ? 'EN PAUSE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      const move = combat.output.name ?? '';
+      stateEl.textContent = paused ? 'EN PAUSE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
@@ -388,11 +426,15 @@ function init() {
       $('#loading').style.opacity = '0';
       setTimeout(() => $('#loading').hidden = true, 550);
     }
-    requestAnimationFrame(frame);
+    if (!manual) requestAnimationFrame(frame);
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: control.engaged ? control.output.name : combat.output.name, guard: combat.guard, free: control.engaged ? { weight: control.weight, power: control.power, twirl: control.twirling, stick: control.stick } : null, troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    // Game feel settings, tweakable live from the console.
+    feel: FEEL,
+    /** Runs the game for some seconds without waiting for the display (checks, hidden windows). */
+    advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); },
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
@@ -434,6 +476,44 @@ function createAudio() {
       thudLevel.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.25);
       thud.connect(thudLevel); thudLevel.connect(context.destination);
       thud.start(); thud.stop(context.currentTime + 0.3);
+    },
+    /** A Force whoosh: a rising sweep for a push, a falling one for a pull. */
+    force(kind) {
+      if (!this.enabled || !context) return;
+      const length = Math.floor(context.sampleRate * 0.5), now = context.currentTime;
+      const buffer = context.createBuffer(1, length, context.sampleRate), data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / length) ** 2;
+      const noise = context.createBufferSource(), band = context.createBiquadFilter(), level = context.createGain();
+      noise.buffer = buffer; band.type = 'bandpass'; band.Q.value = 1.4;
+      const [from, to] = kind === 'push' ? [260, 1500] : [1500, 260];
+      band.frequency.setValueAtTime(from, now);
+      band.frequency.exponentialRampToValueAtTime(to, now + 0.4);
+      level.gain.value = 0.22;
+      noise.connect(band); band.connect(level); level.connect(context.destination);
+      noise.start();
+    },
+    /** A body hitting the floor. */
+    thud(strength) {
+      if (!this.enabled || !context) return;
+      const now = context.currentTime, thud = context.createOscillator(), level = context.createGain();
+      thud.frequency.setValueAtTime(90, now);
+      thud.frequency.exponentialRampToValueAtTime(38, now + 0.18);
+      level.gain.setValueAtTime(0.2 * strength, now);
+      level.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+      thud.connect(level); level.connect(context.destination);
+      thud.start(); thud.stop(now + 0.25);
+    },
+    /** Armour clattering off. */
+    clank() {
+      if (!this.enabled || !context) return;
+      const now = context.currentTime, tone = context.createOscillator(), level = context.createGain();
+      tone.type = 'square';
+      tone.frequency.setValueAtTime(620 + Math.random() * 300, now);
+      tone.frequency.exponentialRampToValueAtTime(240, now + 0.09);
+      level.gain.setValueAtTime(0.035, now);
+      level.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      tone.connect(level); level.connect(context.destination);
+      tone.start(); tone.stop(now + 0.14);
     },
     update(saber, speed, turn) {
       if (!context) return;

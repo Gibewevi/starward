@@ -10,7 +10,9 @@ import { createTweens, ease } from './tween.js';
  * up from cauterised cuts, an orange flash lights the impact, and glowing
  * materials cool down. A burst marks a clean cut: a flare that blooms and
  * fades, and a ring of light racing out along the cut plane — both tweened.
- * sparks()/flash()/burst()/smoulder()/glow(), then update(dt).
+ * A Force wave is a few pale rings rushing out of the hand (a push) or
+ * converging on it (a pull), eased.
+ * sparks()/flash()/burst()/wave()/smoulder()/glow(), then update(dt).
  */
 const SPARK = 0, DROP = 1, EMBER = 2;
 
@@ -91,7 +93,15 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     scene.add(mesh);
     return { mesh, tween: null };
   });
-  let nextFlare = 0, nextRing = 0;
+  let nextFlare = 0, nextRing = 0, nextWave = 0;
+  // Force waves: wide, faint rings.
+  const waveSlots = Array.from({ length: 9 }, () => {
+    const mesh = new THREE.Mesh(new THREE.RingGeometry(0.72, 1, 48), new THREE.MeshBasicMaterial({ color: 0x9fc4ff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide }));
+    mesh.name = 'Force wave';
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh, tween: null };
+  });
   const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25);
   const lightWhite = new THREE.Color(1, 0.93, 0.85), lightOrange = new THREE.Color(1, 0.54, 0.23);
   const facing = new THREE.Vector3(0, 0, 1);
@@ -195,6 +205,35 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     material.color.copy(hot);
   }
 
+  /**
+   * A Force wave from `from` along `direction` over `length` metres: a push
+   * rushes out and widens; a pull converges on `from` and narrows.
+   */
+  function wave(from, direction, { kind = 'push', length = 4, power = 1 } = {}) {
+    const along = direction.clone().setY(0);
+    if (along.lengthSq() < 1e-6) return;
+    along.normalize();
+    for (let i = 0; i < 3; i++) {
+      const slot = waveSlots[nextWave];
+      nextWave = (nextWave + 1) % waveSlots.length;
+      tweens.cancel(slot.tween);
+      const mesh = slot.mesh;
+      mesh.quaternion.setFromUnitVectors(facing, along);
+      mesh.visible = true;
+      const start = from.clone(), travel = length * (0.75 + 0.12 * i);
+      slot.tween = tweens.add({
+        delay: i * 0.045, duration: 0.34 + i * 0.04, curve: kind === 'push' ? ease.outCubic : ease.inOutCubic,
+        update: (eased, progress) => {
+          const reach = kind === 'push' ? eased : 1 - eased;
+          mesh.position.copy(start).addScaledVector(along, travel * reach);
+          mesh.scale.setScalar((kind === 'push' ? 0.15 + 1.25 * eased : 1.3 - 1.15 * eased) * (1 - i * 0.12));
+          mesh.material.opacity = 0.55 * power * Math.sin(Math.PI * Math.min(1, progress * 1.15)) * (1 - i * 0.2);
+        },
+        complete: () => { mesh.visible = false; mesh.material.opacity = 0; },
+      });
+    }
+  }
+
   function update(dt) {
     tweens.update(dt);
     for (const entry of smoulders) {
@@ -276,9 +315,10 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
   return {
-    points: beads, beads, streaks, sparks, flash, burst, smoulder, glow, update, clear, hot, cold,
+    points: beads, beads, streaks, sparks, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
     /** Flares and rings currently shown. */
     get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },
+    get waves() { return waveSlots.filter(slot => slot.mesh.visible).length; },
   };
 }
