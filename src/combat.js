@@ -285,6 +285,18 @@ export const MOVES = {
       GUARDED(1),
     ],
   },
+  // A bolt from behind: the hand goes up by the right ear and the blade drops
+  // down his back, across it, to meet the shot — then back to guard.
+  parryBack: {
+    role: ['parry'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 0.48, buffer: 0.4, chain: 0.7, active: [0.1, 0.75], trail: [0.05, 0.8],
+    keys: [
+      GUARDED(0),
+      key(0.15, [-0.16, 1.24, 0.16], [-0.2, 0.75, -0.6], { grip: 0, yaw: -0.25, pitch: 0.06, crouch: 0.66, left: [0.26, 1.0, 0.22] }),
+      key(0.3, [-0.2, 1.36, -0.02], [0.32, -0.5, -0.8], { grip: 0, yaw: -0.5, pitch: 0.14, crouch: 0.72, left: [0.3, 0.98, 0.26] }),
+      key(0.75, [-0.19, 1.37, -0.03], [0.36, -0.55, -0.75], { grip: 0, yaw: -0.52, pitch: 0.14, crouch: 0.72, left: [0.3, 0.98, 0.26] }),
+      GUARDED(1),
+    ],
+  },
   // RT: Force push. The free hand coils back to the shoulder, then drives
   // forward, palm out; the power leaves it at the thrust.
   forcePush: {
@@ -492,13 +504,14 @@ export class CombatController {
   }
   /**
    * RB held and a bolt about to arrive: the blade snaps out to meet it on its
-   * side ('left', 'right', 'high'; null: either side). A parry still going
-   * out covers it already.
+   * side ('left', 'right', 'high', 'back' — behind his back; null: either
+   * side). A parry still going out on that side covers it already.
    */
   deflect(side = null) {
     if (this.action?.power) return false;
-    if (this.action?.role.includes('parry') && this.time / this.action.duration < 0.45) return true;
-    const name = side === 'left' ? 'parryLeft' : side === 'right' ? 'parryRight' : side === 'high' ? 'parryHigh'
+    const back = side === 'back';
+    if (this.action?.role.includes('parry') && (this.action.name === 'parryBack') === back && this.time / this.action.duration < 0.45) return true;
+    const name = back ? 'parryBack' : side === 'left' ? 'parryLeft' : side === 'right' ? 'parryRight' : side === 'high' ? 'parryHigh'
       : this.lastParry === 'parryLeft' ? 'parryRight' : 'parryLeft';
     this.lastParry = name;
     this.interrupt();

@@ -303,3 +303,16 @@ test('guarding, a bolt about to arrive makes the blade snap out on its side, and
   run(combat, 0.5, { guard: true });
   assert.equal(combat.output.name, 'guard', 'and back on guard');
 });
+
+test('a bolt from behind: the blade drops down his back to meet it, then he is back on guard', () => {
+  const combat = new CombatController({ random: () => 0.3 });
+  run(combat, 0.4, { guard: true });
+  assert.ok(combat.deflect('back'));
+  run(combat, 0.17, { guard: true });
+  assert.equal(combat.output.name, 'parryBack');
+  assert.ok(combat.output.blade.z < -0.6 && combat.output.blade.y < -0.3, `blade down his back (${combat.output.blade.toArray().map(v => v.toFixed(2))})`);
+  assert.ok(combat.output.hand.y > 1.25, 'the hand up by his ear');
+  assert.ok(combat.deflect('back') && combat.output.name === 'parryBack', 'a second one from behind is already covered');
+  run(combat, 0.6, { guard: true });
+  assert.equal(combat.output.name, 'guard');
+});

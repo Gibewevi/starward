@@ -224,7 +224,10 @@ function init() {
     return offset.lengthSq() < 1e-6 || offset.angleTo(new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading))) < 1.95;
   };
   const guardUp = () => saber.extension > 0.6 && (combat.guard > 0.4 || (combat.output.name ?? '').startsWith('parry'));
-  /** RB held: a bolt about to arrive makes the blade snap to meet it, on its side. */
+  /**
+   * RB held: a bolt about to arrive — or to pass close by — makes the blade
+   * snap to meet it, on its side; from behind, the blade goes down his back.
+   */
   function autoParry(guarding) {
     if (!guarding || saber.extension < 0.6) return;
     chest.set(motion.x, 1.05, motion.z);
@@ -232,11 +235,12 @@ function init() {
       if (bolt.deflected || bolt.parried) continue;
       offset.subVectors(bolt.position, chest);
       const speed = bolt.velocity.length(), closing = -offset.dot(bolt.velocity) / speed;
-      if (closing <= 0 || !inFront(bolt.position)) continue;
+      if (closing <= 0) continue;
       const passes = offset.clone().addScaledVector(bolt.velocity, closing / speed).length();
-      if (passes > FEEL.deflect.reach + 0.2 || (closing - FEEL.deflect.reach) / speed > FEEL.deflect.react) continue;
+      const reach = Math.max(FEEL.deflect.reach, Math.min(passes, FEEL.deflect.near));
+      if (passes > FEEL.deflect.near || (closing - reach) / speed > FEEL.deflect.react) continue;
       const local = offset.clone().applyAxisAngle(UP, -motion.heading);
-      combat.deflect(local.x > 0.12 ? 'left' : local.x < -0.12 ? 'right' : bolt.position.y > 1.45 ? 'high' : null);
+      combat.deflect(!inFront(bolt.position) ? 'back' : local.x > 0.12 ? 'left' : local.x < -0.12 ? 'right' : bolt.position.y > 1.45 ? 'high' : null);
       bolt.parried = true;
     }
   }
@@ -247,11 +251,15 @@ function init() {
     const enemies = troopers.filter(trooper => !trooper.dead).map(trooper => ({
       point: trooper.particle('W').position.clone().lerp(trooper.particle('N').position, 0.45), shooter: trooper === bolt.owner, down: trooper.fallen,
     }));
-    const { aim } = returnDirection({ at, incoming, precision, enemies });
+    // Closing in on the shooter, guard up, the returns find him more and more surely.
+    const shooter = bolt.owner?.dead === false ? bolt.owner : null;
+    const [near, far] = FEEL.deflect.close;
+    const closeness = shooter ? THREE.MathUtils.clamp((far - shooter.root.position.distanceTo(here.set(motion.x, 0, motion.z))) / (far - near), 0, 1) : 0;
+    const { aim } = returnDirection({ at, incoming, precision, closeness, enemies });
     blasters.deflect(bolt, at, aim, FEEL.blaster.speed * FEEL.deflect.speedUp);
-    // Guarding, he turns a little into the shot.
+    // Guarding, he turns a little into a shot from the side (one from behind is taken behind his back).
     const toward = Math.atan2(a.x - motion.x, a.z - motion.z), turn = Math.atan2(Math.sin(toward - motion.heading), Math.cos(toward - motion.heading));
-    if (Math.abs(turn) > 0.45) motion.face(motion.heading + turn * 0.3);
+    if (Math.abs(turn) > 0.45 && Math.abs(turn) < 1.95) motion.face(motion.heading + turn * 0.3);
     train(FEEL.deflect.precision.gain);
     const across = new THREE.Vector3().crossVectors(incoming, UP).normalize();
     effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([18, 42])), speed: 3.4 });
@@ -281,7 +289,10 @@ function init() {
     const wall = lab.segmentHit(a, b), end = wall ? wall.point : b;
     if (!bolt.deflected) {
       chest.set(motion.x, 1.05, motion.z);
-      if (guardUp() && inFront(a) && closestSegments(a, end, chest, chest).distance < FEEL.deflect.reach) { deflectBolt(bolt, a, end); return 'deflected'; }
+      // Guarding, the blade takes a bolt coming at him from the front, and any
+      // bolt it has gone out to meet (from behind, or passing close by).
+      const pass = closestSegments(a, end, chest, chest).distance;
+      if (guardUp() && ((inFront(a) && pass < FEEL.deflect.reach) || (bolt.parried && pass < FEEL.deflect.near))) { deflectBolt(bolt, a, end); return 'deflected'; }
       heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
       const body = closestSegments(a, end, heroFeet, heroHead);
       if (body.distance < 0.26) { burnHero(bolt, body.c1); return 'spent'; }

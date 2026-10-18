@@ -177,7 +177,10 @@ test('in a fight the squad calls it out, takes cover behind crates, and fires in
     time += 1 / 60;
     const thought = squad.update(1 / 60, { hero });
     shots += thought.shots.length;
-    for (const shot of thought.shots) assert.ok(shot.direction.angleTo(hero.clone().setY(1.05).sub(shot.from)) < 0.35, 'shots go at the hero (or just past him)');
+    for (const shot of thought.shots) {
+      assert.ok(shot.direction.angleTo(hero.clone().setY(1.05).sub(shot.from)) < 0.35, 'shots go at the hero (or just past him)');
+      assert.ok(lab.clear(shot.from, hero.clone().setY(1.05)), 'never into a crate');
+    }
     together = Math.max(together, squad.minds.filter(mind => mind.token).length);
     for (const trooper of troopers) trooper.update(1 / 60, time);
     collideSquad(troopers);
@@ -242,4 +245,17 @@ test('a "!" pops: it bursts in oversized, overshoots and settles; it leaves by s
   assert.ok(Math.min(...sizes.slice(8, 25)) < settled * 0.97, 'and springs back past its size');
   assert.ok(Math.abs(sizes[40] - settled) < settled * 0.04, 'then settles');
   assert.equal(alerts.kindOf(owner), null, 'gone after its time');
+});
+
+test('the closer the hero is to the shooter, the surer the return goes back at him', () => {
+  const at = new THREE.Vector3(0, 1.1, 0), incoming = new THREE.Vector3(0, 0, -1);
+  const enemies = [{ point: new THREE.Vector3(0.2, 1.1, 3), shooter: true }];
+  const rate = closeness => {
+    const random = seeded(17);
+    let aimed = 0;
+    for (let i = 0; i < 400; i++) if (returnDirection({ at, incoming, precision: 0.1, closeness, enemies, random }).target) aimed++;
+    return aimed / 400;
+  };
+  const far = rate(0), half = rate(0.5), close = rate(1);
+  assert.ok(far < 0.16 && half > 0.45 && half < 0.65 && close === 1, `${far} → ${half} → ${close}`);
 });

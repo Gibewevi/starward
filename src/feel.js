@@ -71,10 +71,12 @@ export const FEEL = {
   },
   deflect: {
     reach: 0.9, // m: the blade meets a bolt this far from his chest
+    near: 1.45, // m: a bolt passing this close is caught too, from any side (behind his back as well)
     react: 0.17, // s: the parry starts this long before the bolt arrives
+    close: [2.5, 9], // m from the shooter: the closer the hero, the likelier the return goes back at him
     yaw: [0.15, 0.9], lift: [-0.04, 0.18], // scatter (rad) of a return left to chance
     speedUp: 1.3, // a sent-back bolt flies faster
-    precision: { start: 0.1, gain: 0.004, hitGain: 0.012, max: 0.95 }, // chance a return goes for an enemy: grows per deflection, more per hit
+    precision: { start: 0.1, gain: 0.003, hitGain: 0.006, max: 0.95 }, // chance a return goes for an enemy: grows per deflection, more per hit
     error: 0.14, // rad: aim error of such a return at zero precision (none at full)
   },
   senses: {

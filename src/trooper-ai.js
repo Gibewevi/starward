@@ -25,7 +25,8 @@ import { PACE } from './stormtrooper.js';
  */
 const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 const flat = vector => vector.clone().setY(0);
-const CHEST = 1.05, HEAD = 1.55;
+// Heights: the hero's chest and head; the muzzle of a shouldered rifle (a little low, to be safe).
+const CHEST = 1.05, HEAD = 1.55, MUZZLE = 1.1;
 
 export function createSquadMind({ troopers, lab, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
@@ -191,6 +192,25 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     }
     return best;
   }
+  /**
+   * Where to shoot from at his cover: standing up behind it if the rifle
+   * clears the crate, otherwise stepping out past its edge — never into it.
+   */
+  function peekFrom(mind, threat, skip = null) {
+    const cover = mind.cover, across = new THREE.Vector3(-cover.facing.z, 0, cover.facing.x);
+    const target = new THREE.Vector3().copy(threat).setY(CHEST);
+    const candidates = cover.tall ? [] : [cover.position.clone()];
+    for (const step of [0.65, 0.95, 1.25]) for (const sign of [mind.side, -mind.side]) candidates.push(cover.position.clone().addScaledVector(across, sign * step));
+    for (const spot of candidates) {
+      if (skip && spot.distanceTo(skip) < 0.2) continue;
+      if (spot.distanceTo(lab.pushOut(spot.clone(), 0.32)) > 1e-3) continue;
+      if (!lab.clear(temp.copy(spot).setY(MUZZLE), target)) continue;
+      return spot;
+    }
+    return null;
+  }
+  /** Would a bolt from his rifle reach the target, or hit a crate first? */
+  const lineOfFire = (t, target) => lab.clear(t.muzzle, target);
   function take(mind) {
     if (mind.token) return true;
     if (firing >= FEEL.blaster.firing) return false;
@@ -265,8 +285,10 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
   /** Pulls the trigger: aimed at the hero's chest, or a deliberate near miss that whizzes past. */
   function shoot(mind, hero, heroVelocity, shots) {
     const t = mind.trooper;
+    // Never into his own cover.
+    if (!lineOfFire(t, new THREE.Vector3().copy(hero).setY(CHEST))) return false;
     const shot = t.fire();
-    if (!shot) return;
+    if (!shot) return false;
     const target = new THREE.Vector3().copy(hero).setY(CHEST + (random() - 0.5) * 0.3);
     // A slight lead on a moving target, imperfect.
     target.addScaledVector(heroVelocity, shot.from.distanceTo(target) / FEEL.blaster.speed * (0.3 + random() * 0.5));
@@ -274,12 +296,17 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
       const side = new THREE.Vector3().subVectors(target, shot.from).cross(new THREE.Vector3(0, 1, 0)).normalize();
       target.addScaledVector(side, (random() < 0.5 ? -1 : 1) * (0.45 + random() * 0.5)).y += (random() - 0.3) * 0.5;
     }
+    const distance = target.distanceTo(shot.from);
     const direction = target.sub(shot.from).normalize();
     const spread = FEEL.blaster.spread;
     direction.x += (random() - 0.5) * spread * 2;
     direction.y += (random() - 0.5) * spread;
     direction.z += (random() - 0.5) * spread * 2;
-    shots.push({ from: shot.from, direction: direction.normalize(), trooper: t });
+    direction.normalize();
+    // A wide shot that would clip his own crate goes straight at the chest instead.
+    if (lab.segmentHit(shot.from, temp.copy(shot.from).addScaledVector(direction, Math.min(3, distance)))) direction.copy(hero).setY(CHEST).sub(shot.from).normalize();
+    shots.push({ from: shot.from, direction, trooper: t });
+    return true;
   }
   function fight(mind, dt, hero, heroVelocity, shots) {
     const t = mind.trooper, o = t.order, at = t.root.position;
@@ -343,17 +370,14 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         if (!t.holding) break;
         if (mind.cycles >= mind.maxCycles) { mind.tactic = null; break; }
         if (take(mind)) {
+          // Up behind the crate if his rifle clears it, else out past its edge.
+          const spot = peekFrom(mind, threat);
+          if (!spot) { release(mind); mind.tactic = null; break; }
+          mind.peekAt = spot;
+          mind.peek = spot.distanceTo(mind.cover.position) < 0.05 ? null : spot;
+          mind.retries = 0;
           mind.tactic = 'peek';
           mind.timer = 0;
-          // From a tall stack he leans out to the side that sees the hero.
-          mind.peek = null;
-          if (mind.cover.tall) {
-            const across = new THREE.Vector3(-mind.cover.facing.z, 0, mind.cover.facing.x);
-            for (const sign of [mind.side, -mind.side]) {
-              const spot = mind.cover.position.clone().addScaledVector(across, sign * 0.7);
-              if (lab.clear(temp.copy(spot).setY(1.45), temp2.copy(threat).setY(CHEST))) { mind.peek = spot; mind.side = sign; break; }
-            }
-          }
         } else mind.timer = 0.25;
         break;
       }
@@ -364,6 +388,15 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         o.face = headingTo(at, threat);
         mind.timer += dt;
         if (t.reaction.aim > 0.85 && (mind.sees || mind.timer > 0.8)) {
+          // The crate is in the way of his rifle: another spot, or another cover.
+          if (!lineOfFire(t, temp2.copy(threat).setY(CHEST))) {
+            const next = mind.retries++ < 3 ? peekFrom(mind, threat, mind.peekAt) : null;
+            if (!next) { release(mind); mind.tactic = null; break; }
+            mind.peekAt = next;
+            mind.peek = next.distanceTo(mind.cover.position) < 0.05 ? null : next;
+            mind.timer = 0;
+            break;
+          }
           mind.tactic = 'fire';
           mind.burst = Math.round(pick(FEEL.blaster.burst, random));
           mind.gap = 0.05 + random() * 0.1;
@@ -377,7 +410,8 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         if (mind.peek) steer(mind, mind.peek, PACE.walk, 0.15);
         mind.gap -= dt;
         if (mind.gap <= 0 && mind.burst > 0) {
-          if (mind.sees) shoot(mind, hero, heroVelocity, shots);
+          // Blocked (the hero moved behind something): the burst stops there.
+          if (mind.sees && !shoot(mind, hero, heroVelocity, shots)) mind.burst = 1;
           mind.burst--;
           mind.gap = pick(FEEL.blaster.gap, random);
         }

@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { FEEL, pick } from './feel.js';
 
 /**
- * Where a bolt goes once the blade has met it. With probability `precision`
- * it is sent at an enemy — roughly back where it came from, its shooter
- * first — with an aim error that shrinks as precision grows. Otherwise it is
+ * Where a bolt goes once the blade has met it. With probability `precision`,
+ * raised towards certainty by `closeness` (0 far from the shooter, 1 right on
+ * top of him), it is sent at an enemy — roughly back where it came from, its
+ * shooter first — with an aim error that shrinks as that chance grows. Otherwise it is
  * left to chance: back out, thrown off to one side by a random angle and a
  * little up, never aimed at anyone (it may still find someone by luck).
  *
@@ -12,9 +13,10 @@ import { FEEL, pick } from './feel.js';
  * Returns { aim (unit vector), target (the enemy aimed at, or null) }.
  */
 const UP = new THREE.Vector3(0, 1, 0);
-export function returnDirection({ at, incoming, precision = 0, enemies = [], random = Math.random }) {
+export function returnDirection({ at, incoming, precision = 0, closeness = 0, enemies = [], random = Math.random }) {
   const back = incoming.clone().normalize().negate();
-  if (random() < precision) {
+  const chance = precision + (1 - precision) * THREE.MathUtils.clamp(closeness, 0, 1);
+  if (random() < chance) {
     let best = null, score = Infinity;
     for (const enemy of enemies) {
       const to = enemy.point.clone().sub(at), distance = to.length();
@@ -25,7 +27,7 @@ export function returnDirection({ at, incoming, precision = 0, enemies = [], ran
       if (value < score) { score = value; best = enemy; }
     }
     if (best) {
-      const error = FEEL.deflect.error * (1 - precision);
+      const error = FEEL.deflect.error * (1 - chance);
       const aim = best.point.clone().sub(at).normalize();
       aim.x += (random() - 0.5) * error * 2;
       aim.y += (random() - 0.5) * error;

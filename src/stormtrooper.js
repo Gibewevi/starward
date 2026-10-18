@@ -2191,6 +2191,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     velocity: { get: () => loco.velocity },
     /** His heading (rad). */
     heading: { get: headingOf },
+    /** Where a bolt would leave his rifle. */
+    muzzle: { get: () => { holder.updateWorldMatrix(true, false); return holder.localToWorld(MUZZLE.clone()); } },
     /** Where his eyes are. */
     eye: { get: () => joints.neck.localToWorld(new THREE.Vector3(0, 0.19, 0.09)) },
     /** Where his rifle lies, if it is on the floor (null in his hands, or when he cannot hold one). */
