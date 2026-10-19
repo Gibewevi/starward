@@ -44,22 +44,62 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
 
+  /** A mind as at the start: calm, at his post. */
+  function fresh(mind) {
+    const { trooper, post } = mind;
+    Object.assign(mind, {
+      mode: 'calm', awareness: 0, interest: null, lastKnown: new THREE.Vector3(), seen: Infinity, sees: false,
+      tactic: null, timer: 0, cover: null, previousCover: null, burst: 0, gap: 0, cycles: 0, maxCycles: 3, token: false,
+      startle: 0, callout: null, routeIndex: 0, wait: 0, strafe: random() < 0.5 ? 1 : -1, step: 0, glance: 0, heard: 0,
+      aimPoint: new THREE.Vector3(), progress: { at: new THREE.Vector3(), time: 0 }, searchTime: 0, side: 1, grenadeClock: Infinity, thrown: false,
+      home: (post.position ?? trooper.root.position).clone(), homeHeading: post.heading ?? trooper.heading, route: post.route ?? null,
+      role: null, path: null, stance: 'stand', detour: 0, detourSide: new THREE.Vector3(), stuck: { at: new THREE.Vector3(), time: 0, stamp: -1 }, stuckCount: 0, advanceTo: null,
+      entering: null,
+    });
+  }
   function reset() {
     firing = 0;
     grenadeClock = Infinity;
     roleClock = Infinity;
-    for (const mind of minds) {
-      const { trooper, post } = mind;
-      Object.assign(mind, {
-        mode: 'calm', awareness: 0, interest: null, lastKnown: new THREE.Vector3(), seen: Infinity, sees: false,
-        tactic: null, timer: 0, cover: null, previousCover: null, burst: 0, gap: 0, cycles: 0, maxCycles: 3, token: false,
-        startle: 0, callout: null, routeIndex: 0, wait: 0, strafe: random() < 0.5 ? 1 : -1, step: 0, glance: 0, heard: 0,
-        aimPoint: new THREE.Vector3(), progress: { at: new THREE.Vector3(), time: 0 }, searchTime: 0, side: 1, grenadeClock: Infinity, thrown: false,
-        home: (post.position ?? trooper.root.position).clone(), homeHeading: post.heading ?? trooper.heading, route: post.route ?? null,
-        role: null, path: null, stance: 'stand', detour: 0, detourSide: new THREE.Vector3(), stuck: { at: new THREE.Vector3(), time: 0, stamp: -1 }, stuckCount: 0, advanceTo: null,
-      });
-    }
+    for (const mind of minds) fresh(mind);
     alerts?.clear();
+  }
+  /**
+   * A newcomer: marched in along `entering` (points), then on his own — into
+   * the fight at once if the squad is fighting, else calm at his post.
+   */
+  function add(trooper, post = {}, { entering = null } = {}) {
+    if (!troopers.includes(trooper)) troopers.push(trooper);
+    const mind = { trooper, post };
+    fresh(mind);
+    mind.entering = entering?.map(point => point.clone()) ?? null;
+    minds.push(mind);
+    return mind;
+  }
+  /** Out of the squad for good (a body cleared away). */
+  function remove(trooper) {
+    const index = minds.findIndex(mind => mind.trooper === trooper);
+    if (index >= 0) { release(minds[index]); alerts?.hide(trooper); minds.splice(index, 1); }
+    const at = troopers.indexOf(trooper);
+    if (at >= 0) troopers.splice(at, 1);
+  }
+  /** Marching in through the door, rifle at low ready; at the end of the way (or too long on it), his own man. */
+  function march(mind, cues) {
+    const t = mind.trooper, o = t.order, next = mind.entering[0];
+    const to = flat(next).sub(flat(t.root.position)), distance = to.length();
+    mind.marching = (mind.marching ?? 0) + tick;
+    if (distance < 0.3 || mind.marching > 8) {
+      mind.entering.shift();
+      if (mind.marching > 8) mind.entering.length = 0;
+      if (!mind.entering.length) {
+        mind.entering = null;
+        const fighter = minds.find(other => other.mode === 'combat' && other !== mind);
+        if (fighter) { mind.lastKnown.copy(fighter.lastKnown); alert(mind, cues); }
+      }
+      return;
+    }
+    o.velocity.copy(to.divideScalar(distance)).multiplyScalar(PACE.run * 0.8);
+    o.face = headingTo(t.root.position, next);
   }
   reset();
 
@@ -681,7 +721,6 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       const t = mind.trooper, o = t.order;
       // Dead, or dying on the blade: out of the fight for good.
       if (t.dead || t.impaled) { release(mind); alerts?.hide(t); mind.mode = 'dead'; continue; }
-      perceive(mind, dt, hero, heroSpeed, saber, noises, cues);
       o.velocity.set(0, 0, 0);
       o.face = null;
       o.look = null;
@@ -689,6 +728,9 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       o.crouch = false;
       o.blind = false;
       o.aimAt = mind.aimPoint;
+      // Coming in through the door: nothing else until he is in.
+      if (mind.entering) { if (t.free) march(mind, cues); else mind.entering = null; continue; }
+      perceive(mind, dt, hero, heroSpeed, saber, noises, cues);
       // In the Force's grip, on the floor, running off: he is not his own master.
       if (!t.free) {
         release(mind);
@@ -705,5 +747,5 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   }
   /** The squad's mood: 'calme', 'suspicion' or 'alerte'. */
   const mood = () => (minds.some(mind => mind.mode === 'combat') ? 'alerte' : minds.some(mind => mind.mode === 'suspicious' || mind.mode === 'searching') ? 'suspicion' : 'calme');
-  return { update, reset, minds, mood };
+  return { update, reset, add, remove, minds, mood };
 }

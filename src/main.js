@@ -10,6 +10,7 @@ import { createCoat } from './coat.js';
 import { createStage, deckGeometry } from './stage.js';
 import { createArena, ARENA } from './arena.js';
 import { createNav } from './nav.js';
+import { createReinforcements } from './reinforcements.js';
 import { createLighting } from './lighting.js';
 import { createSaber } from './saber.js';
 import { MotionController, damp } from './motion.js';
@@ -159,6 +160,29 @@ function init() {
   // The squad finds its way round the crates and walls on a navigation grid.
   const nav = createNav(lab, ARENA);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
+  // Every so often the great door opens and three or four more march in.
+  const reinforcements = createReinforcements({ door: arena.door });
+  /** One of a wave: made in the corridor, marched through the door to a post in the room. */
+  function bringIn(index) {
+    const door = arena.door, heading = Math.atan2(door.out.x, door.out.z);
+    const trooper = createStormtrooper({ scene, effects, lab, position: door.inside[index % door.inside.length], heading });
+    trooper.reinforcement = true;
+    // Through the doorway, then round whatever stands in the way to a free spot fanned out in front.
+    const threshold = door.centre.clone().addScaledVector(door.out, 0.7);
+    const wanted = door.centre.clone().addScaledVector(door.out, 2.3 + (index % 2) * 0.9).addScaledVector(door.along, ((index % 4) - 1.5) * 0.9);
+    const post = nav.nearest(wanted) ?? threshold.clone().addScaledVector(door.out, 1.5);
+    squad.add(trooper, { position: post, heading }, { entering: [threshold, ...(nav.path(threshold, post) ?? [post])] });
+    clearBodies();
+  }
+  /** Too many men in the room, dead ones included: the oldest bodies are cleared away. */
+  function clearBodies() {
+    while (troopers.length > FEEL.reinforce.bodies) {
+      const old = troopers.find(trooper => trooper.dead && trooper.fallen && !trooper.impaled && trooper !== held && trooper !== skewered?.trooper);
+      if (!old) break;
+      old.dispose();
+      squad.remove(old);
+    }
+  }
   // What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
   const noises = [];
   const noise = (position, radius, options = {}) => noises.push({ position: position.clone(), radius, ...options });
@@ -197,8 +221,12 @@ function init() {
     dashCooldown = 0;
   }
   function resetTrooper() {
-    skewered = thrust = null;
+    skewered = thrust = held = null;
     combat.unpin();
+    // The reinforcements go; the door shuts; the first squad stands at its posts again.
+    for (const trooper of troopers.filter(trooper => trooper.reinforcement)) { trooper.dispose(); squad.remove(trooper); }
+    arena.door?.reset();
+    reinforcements.reset();
     for (const trooper of troopers) trooper.reset();
     effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear(); scars.clear();
     debris.clear(); debris.scatter();
@@ -816,6 +844,13 @@ function init() {
       // The squad: senses, decisions, orders; then the shots leave the muzzles.
       const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises });
       noises.length = 0;
+      // Reinforcements: the alarm, the door, the men coming out one by one.
+      const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
+      for (const event of reinforcements.update(sim, { living, entering })) {
+        if (event === 'alarm') audio.alarm();
+        else if (event === 'open' || event === 'close') audio.door();
+        else if (event.type === 'spawn') bringIn(event.index);
+      }
       for (const shot of thoughts.shots) {
         blasters.fire(shot.from, shot.direction, { owner: shot.trooper, speed: FEEL.blaster.speed });
         audio.shot(shot.from.distanceTo(character.root.position));
@@ -941,7 +976,7 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, arena, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars,
+    squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars,
     camera,
     /** For checks: the lit blade this frame. */
     blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),
@@ -1095,6 +1130,20 @@ function createAudio() {
       if (!this.enabled || !context) return;
       const near = Math.max(0.2, 1 - distance / 16), pitch = 1700 + progress * 900;
       this.tone({ type: 'square', from: pitch, to: pitch * 0.98, duration: 0.05, gain: 0.035 * near });
+    },
+    /** The door's klaxon: two falling tones, twice. */
+    alarm() {
+      if (!this.enabled || !context) return;
+      for (let k = 0; k < 2; k++) {
+        this.tone({ type: 'sawtooth', from: 540, to: 520, duration: 0.32, gain: 0.025, delay: k * 0.75 });
+        this.tone({ type: 'sawtooth', from: 410, to: 395, duration: 0.32, gain: 0.025, delay: k * 0.75 + 0.36 });
+      }
+    },
+    /** The door's leaves: a heavy rumble, a clunk as they stop. */
+    door() {
+      if (!this.enabled || !context) return;
+      this.noiseBurst({ duration: 1.3, type: 'lowpass', frequency: 240, gain: 0.08, decay: 1.1 });
+      this.tone({ type: 'square', from: 95, to: 60, duration: 0.14, gain: 0.05, delay: 1.25 });
     },
     whoosh() {
       if (!this.enabled || !context) return;

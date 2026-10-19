@@ -102,6 +102,12 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
   return {
     path, lineFree, rebuild, cols, rows, cell,
     walkable: point => free(...cellOf(point)),
+    /** The nearest walkable spot to a point (the point itself if it is walkable), or null. */
+    nearest(point) {
+      if (free(...cellOf(point))) return point.clone().setY(0);
+      const cellAt = nearestFree(point);
+      return cellAt ? centre(...cellAt) : null;
+    },
   };
 }
 

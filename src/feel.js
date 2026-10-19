@@ -48,6 +48,18 @@ export const FEEL = {
     // Held (LT kept down): he hangs in the air before the hero, following him.
     hold: { distance: 1.25, height: 0.5, follow: 9, bob: 0.05 },
   },
+  // Reinforcements through the great door.
+  reinforce: {
+    first: 22, // s before the first wave
+    interval: [26, 36], // s between waves
+    wave: [3, 4], // troopers a wave
+    cap: 9, // never more than this many standing
+    few: 2, soon: 5, // this few left standing: the next wave within this many seconds
+    alarm: 1.6, // s of blinking lamp and alarm before the door opens
+    spacing: 0.85, // s between men coming out
+    linger: 1.6, // s the door stays open after the last one
+    bodies: 14, // troopers kept at most, dead ones included: the oldest bodies are cleared
+  },
   // Y / Space: a lightning dash along the stick (or straight ahead).
   dash: {
     speed: 14, // m/s at the start, easing off: about 2.5 m in all

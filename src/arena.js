@@ -12,9 +12,13 @@ import { deckGeometry } from './stage.js';
  * floor lights, a few grates glowing amber from below, worn hazard edging —
  * red only as accents (the lights flanking the door, small diodes).
  *
+ * The great door opens: its two leaves slide into the wall onto a lit
+ * corridor, from where reinforcements march in (see reinforcements.js);
+ * arena.door: open(), close(), openness, and where to stand inside and out.
+ *
  * Walls, consoles and railings join the lab's obstacles (kinds 'wall' and
  * 'rail'): walkers, bodies, bolts and grenades meet them; no one takes cover
- * behind them. update(time) runs the lights.
+ * behind them. update(time) runs the lights and the door.
  */
 export const ARENA = { minX: -10.4, maxX: 8.4, minZ: -11.2, maxZ: 7.4, height: 5.4, drop: 2.8 };
 // The ground tier's cornice; above it the wall goes on up, darker, out of sight.
@@ -42,6 +46,9 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
   const obstacles = [];
   const block = (kind, min, max) => { const box = { kind, min, max, centre: min.clone().add(max).multiplyScalar(0.5) }; obstacles.push(box); return box; };
   const indicators = [], lights = [];
+  // The door's own lamp, so it can blink on its own.
+  M.doorLamp = new THREE.MeshBasicMaterial({ name: 'door lamp', color: AMBER.clone(), toneMapped: false });
+  let door = null;
   const floorLights = createFloorLights(group);
 
   // ---- The back walls ---------------------------------------------------------
@@ -51,12 +58,13 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
     { origin: new THREE.Vector3(minX, 0, maxZ + 0.6), along: new THREE.Vector3(0, 0, -1), length: maxZ - minZ + 0.6, bays: ['vent', 'console', 'window', 'console', 'vent', 'window'] },
   ];
   const pitch = 3.2;
+  let doorWall = null;
   for (const wall of walls) {
     const f = frameOf(wall.origin, wall.along), L = wall.length;
     const toWorld = (a, y, n) => new THREE.Vector3(a, y, n).applyMatrix4(f);
     const pillars = [];
     for (let a = 0.45; a < L - 0.3; a += pitch) pillars.push(a);
-    const door = wall.bays.indexOf('door'), redPillars = new Set(door >= 0 ? [door, door + 1] : []);
+    const doorBay = wall.bays.indexOf('door'), redPillars = new Set(doorBay >= 0 ? [doorBay, doorBay + 1] : []);
     // Bays between the pillars; the wall slab is built bay by bay so windows can open in it.
     for (let i = 0; i < pillars.length; i++) {
       const from = pillars[i] + 0.31, to = (pillars[i + 1] ?? L) - (pillars[i + 1] ? 0.31 : 0), w = to - from, mid = (from + to) / 2;
@@ -80,12 +88,14 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
         kit.box(M.trim, w, 0.08, 0.1, [mid, 2.47, 0.0], null, f);
         for (let k = 1; k < 3; k++) kit.box(M.trim, 0.05, 1.4, 0.06, [from + w * k / 3, 1.75, -0.06], null, f);
         lights.push(pointLight(toWorld(mid, 1.75, 0.5), 1.4, 3.2));
-      } else {
+      } else if (kind !== 'door') {
         kit.box(M.wall, w + 0.62, H, 0.5, [mid, H / 2, -0.25], null, f);
       }
-      // Grooves, a kick plate, a cornice: the wall's rhythm.
-      for (const y of [1.0, 2.25]) if (kind !== 'window' || y < 1) kit.box(M.dark, w, 0.025, 0.02, [mid, y, 0.005], null, f);
-      kit.box(M.trim, w, 0.22, 0.08, [mid, 0.11, 0.04], null, f);
+      // Grooves, a kick plate, a cornice: the wall's rhythm (not across the doorway).
+      if (kind !== 'door') {
+        for (const y of [1.0, 2.25]) if (kind !== 'window' || y < 1) kit.box(M.dark, w, 0.025, 0.02, [mid, y, 0.005], null, f);
+        kit.box(M.trim, w, 0.22, 0.08, [mid, 0.11, 0.04], null, f);
+      }
       kit.box(M.trim, w, 0.18, 0.24, [mid, TIER - 0.09, 0.12], null, f);
       kit.box(M.dark, w, 0.05, 0.2, [mid, TIER - 0.2, 0.08], null, f);
       // The upper tier: plain dark panels, a gantry, a white light bar.
@@ -116,21 +126,81 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
           for (const y of [0.6, 1.8, 2.8]) kit.box(M.trim, 0.2, 0.06, 0.2, [mid + side * w * 0.4, y, 0.1], null, f);
         }
       } else if (kind === 'door') {
-        // The great door: two leaves, a round boss across both, a white bar and an amber lamp above.
+        // The great door: jambs and lintel, a white bar and an amber lamp
+        // above; the wall round the doorway; a lit corridor behind; two
+        // leaves (a round boss split across them) that slide into the wall.
+        const left = from + 0.22, right = to - 0.22, ow = right - left, oh = 2.9;
+        kit.box(M.wall, left - (mid - (w + 0.62) / 2), H, 0.5, [(mid - (w + 0.62) / 2 + left) / 2, H / 2, -0.25], null, f);
+        kit.box(M.wall, mid + (w + 0.62) / 2 - right, H, 0.5, [(right + mid + (w + 0.62) / 2) / 2, H / 2, -0.25], null, f);
+        kit.box(M.wall, ow, H - oh, 0.5, [mid, (H + oh) / 2, -0.25], null, f);
         kit.box(M.trim, 0.22, 3.05, 0.26, [from + 0.11, 1.525, 0.13], null, f);
         kit.box(M.trim, 0.22, 3.05, 0.26, [to - 0.11, 1.525, 0.13], null, f);
         kit.box(M.trim, w, 0.3, 0.26, [mid, 3.0, 0.13], null, f);
-        for (const side of [-1, 1]) kit.box(M.panel, w / 2 - 0.24, 2.84, 0.1, [mid + side * (w / 4 - 0.01), 1.42, 0.05], null, f);
-        kit.add(M.cap, new THREE.CylinderGeometry(0.95, 0.95, 0.06, 40), [mid, 1.75, 0.12], [Math.PI / 2, 0, 0], f);
-        kit.add(M.dark, new THREE.CylinderGeometry(0.82, 0.82, 0.07, 40), [mid, 1.75, 0.13], [Math.PI / 2, 0, 0], f);
-        kit.add(M.trim, new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6), [mid, 1.75, 0.14], [Math.PI / 2, 0, 0], f);
-        for (let k = 0; k < 6; k++) kit.box(M.trim, 0.05, 0.3, 0.08, [mid + Math.sin(k * Math.PI / 3) * 0.66, 1.75 + Math.cos(k * Math.PI / 3) * 0.66, 0.14], [0, 0, -k * Math.PI / 3], f);
-        kit.box(M.dark, 0.035, 2.84, 0.16, [mid, 1.42, 0.08], null, f);
+        kit.box(M.cap, ow, 0.05, 0.3, [mid, 0.025, -0.1], null, f);
         kit.box(M.dark, w * 0.6, 0.08, 0.02, [mid, 3.0, 0.27], null, f);
         kit.box(M.light, w * 0.55, 0.04, 0.012, [mid, 3.0, 0.28], null, f);
-        kit.box(M.amber, 0.12, 0.08, 0.05, [to - 0.32, 2.75, 0.28], null, f);
+        kit.box(M.doorLamp, 0.12, 0.08, 0.05, [to - 0.32, 2.75, 0.28], null, f);
+        // The corridor: floor, walls, ceiling, a light down its middle and one at its end.
+        const depth = 4.4, back = -0.5 - depth;
+        kit.box(M.panel, ow + 0.6, 0.04, depth, [mid, -0.02, -0.5 - depth / 2], null, f);
+        for (const side of [-1, 1]) kit.box(M.wall, 0.25, oh + 0.1, depth, [mid + side * (ow / 2 + 0.125), (oh + 0.1) / 2, -0.5 - depth / 2], null, f);
+        kit.box(M.wall, ow + 0.6, 0.2, depth, [mid, oh + 0.1, -0.5 - depth / 2], null, f);
+        kit.box(M.wall, ow + 0.6, oh + 0.2, 0.25, [mid, (oh + 0.2) / 2, back - 0.125], null, f);
+        kit.box(M.light, 0.07, 0.02, depth - 0.6, [mid, oh - 0.01, -0.5 - depth / 2], null, f);
+        kit.box(M.light, ow * 0.5, 0.06, 0.02, [mid, 2.4, back + 0.01], null, f);
+        // Light strips down both of its walls, seen through the doorway.
+        for (const side of [-1, 1]) for (const n of [-1.1, -2.4, -3.7]) kit.box(M.light, 0.02, 0.9, 0.06, [mid + side * (ow / 2 - 0.005), 1.6, n], null, f);
+        for (const side of [-1, 1]) kit.box(M.trim, 0.04, oh, 0.08, [mid + side * (ow / 2 - 0.02), oh / 2, -1.6], null, f), kit.box(M.trim, 0.04, oh, 0.08, [mid + side * (ow / 2 - 0.02), oh / 2, -3.2], null, f);
+        lights.push(pointLight(toWorld(mid, 2.4, -2.6), 1.1, 4.5));
+        floorLights.add(toWorld(mid, 0, -1.2), toWorld(mid, 0, back + 0.6), { every: 1.6 });
+        // The leaves, each its own group, recessed a hand behind the wall face.
+        const root = new THREE.Group();
+        root.name = 'Door';
+        f.decompose(root.position, root.quaternion, root.scale);
+        const leaves = [-1, 1].map(side => {
+          const leaf = new THREE.Group();
+          const part = (geometry, material, x, y, z, rx = 0, rz = 0) => {
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+            mesh.rotation.set(rx, 0, rz);
+            mesh.castShadow = mesh.receiveShadow = true;
+            leaf.add(mesh);
+          };
+          const half = ow / 2 + 0.03, edge = -side * half / 2;
+          part(new THREE.BoxGeometry(half, oh - 0.04, 0.1), M.panel, 0, (oh - 0.04) / 2, -0.12);
+          // Half the boss: the half on this leaf's side of the seam.
+          const arc = side < 0 ? Math.PI : 0;
+          part(new THREE.CylinderGeometry(0.95, 0.95, 0.06, 40, 1, false, arc, Math.PI), M.cap, edge, 1.75, -0.05, Math.PI / 2);
+          part(new THREE.CylinderGeometry(0.82, 0.82, 0.07, 40, 1, false, arc, Math.PI), M.dark, edge, 1.75, -0.045, Math.PI / 2);
+          part(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6, 1, false, arc, Math.PI), M.trim, edge, 1.75, -0.04, Math.PI / 2);
+          for (let k = 0; k < 6; k++) {
+            const x = Math.sin(k * Math.PI / 3 + 0.0001) * 0.66;
+            if (Math.sign(x) !== side) continue;
+            part(new THREE.BoxGeometry(0.05, 0.3, 0.08), M.trim, edge + x, 1.75 + Math.cos(k * Math.PI / 3) * 0.66, -0.04, 0, -k * Math.PI / 3);
+          }
+          part(new THREE.BoxGeometry(0.03, oh - 0.04, 0.12), M.dark, edge, (oh - 0.04) / 2, -0.1);
+          leaf.userData = { closed: mid + side * half / 2, open: mid + side * (half / 2 + half + 0.12) };
+          leaf.position.x = leaf.userData.closed;
+          root.add(leaf);
+          return leaf;
+        });
+        group.add(root);
         hazard(toWorld(mid, 0, 0.55), wall.along, w - 0.3, 0.3);
         lights.push(pointLight(toWorld(mid, 2.6, 0.9), 1.4, 4));
+        const out = new THREE.Vector3(0, 0, 1).transformDirection(f);
+        // Closed, the door is a wall; open, a way through.
+        const shut0 = toWorld(left, 0, -0.17), shut1 = toWorld(right, oh, 0.01);
+        door = {
+          leaves, openness: 0, target: 0, from: left, to: right, wallFrame: f,
+          shut: { kind: 'wall', min: shut0.clone().min(shut1), max: shut0.clone().max(shut1), centre: shut0.clone().add(shut1).multiplyScalar(0.5) },
+          centre: toWorld(mid, 0, 0), out, along: wall.along.clone(), width: ow,
+          // Where men stand in the corridor, deepest first, in two files.
+          inside: [toWorld(mid - 0.45, 0, back + 0.7), toWorld(mid + 0.45, 0, back + 0.7), toWorld(mid - 0.45, 0, back + 1.6), toWorld(mid + 0.45, 0, back + 1.6)],
+        };
+        doorWall = { wallIndex: walls.indexOf(wall), left, right };
+        // The corridor's walls stop the hero; its end too.
+        for (const side of [-1, 1]) { const c0 = toWorld(mid + side * (ow / 2 + 0.25), 0, -0.5), c1 = toWorld(mid + side * ow / 2, oh, back); block('wall', c0.clone().min(c1), c0.clone().max(c1)); }
+        { const c0 = toWorld(mid - ow / 2, 0, back), c1 = toWorld(mid + ow / 2, oh, back - 0.25); block('wall', c0.clone().min(c1), c0.clone().max(c1)); }
       }
       // Pipes running along the top, held by brackets.
       kit.cylinder(M.pipe, 0.06, 0.06, w + 0.02, 14, [mid, TIER - 0.48, 0.16], [0, 0, Math.PI / 2], f);
@@ -148,9 +218,10 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
       kit.box(M.amber, 0.04, 0.04, 0.02, [a, 0.55, 0.43], null, f);
       if (index % 2 === 0) lights.push(pointLight(toWorld(a, 2.1, 0.8), 1.3, 4.2));
     }
-    // Walkers, bodies and bolts meet the wall and its pillars, on their real faces.
-    const a0 = toWorld(-0.6, 0, -0.6), a1 = toWorld(L + 0.6, H, 0.01);
-    block('wall', a0.clone().min(a1), a0.clone().max(a1));
+    // Walkers, bodies and bolts meet the wall and its pillars, on their real
+    // faces — the wall in two pieces either side of a doorway.
+    const spans = doorWall && doorWall.wallIndex === walls.indexOf(wall) ? [[-0.6, doorWall.left], [doorWall.right, L + 0.6]] : [[-0.6, L + 0.6]];
+    for (const [a, b] of spans) { const a0 = toWorld(a, 0, -0.6), a1 = toWorld(b, H, 0.01); block('wall', a0.clone().min(a1), a0.clone().max(a1)); }
     for (const a of pillars) { const p0 = toWorld(a - 0.37, 0, 0), p1 = toWorld(a + 0.37, H, 0.43); block('wall', p0.clone().min(p1), p0.clone().max(p1)); }
     // Light panels in the floor along its foot.
     floorLights.add(toWorld(1.2, 0, 0.9), toWorld(L - 0.8, 0, 0.9), { every: 2.6 });
@@ -274,16 +345,44 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
   floorLights.build();
   kit.build(group, { name: 'Room' });
   scene.add(group);
+  if (door) obstacles.push(door.shut);
   if (lab) lab.obstacles.push(...obstacles);
+  const allObstacles = lab ? lab.obstacles : obstacles;
 
+  let lastTime = null;
   function update(time) {
+    const dt = lastTime === null ? 0 : Math.max(0, Math.min(0.1, time - lastTime));
+    lastTime = time;
+    if (door) {
+      // The leaves glide: a heavy start, a soft stop. The lamp blinks while it moves or stands open.
+      const before = door.openness;
+      door.openness = THREE.MathUtils.clamp(door.openness + Math.sign(door.target - door.openness) * dt / 1.3, 0, 1);
+      const k = THREE.MathUtils.smootherstep(door.openness, 0, 1);
+      for (const leaf of door.leaves) leaf.position.x = THREE.MathUtils.lerp(leaf.userData.closed, leaf.userData.open, k);
+      const shut = allObstacles.includes(door.shut);
+      if (door.openness > 0.6 && shut) allObstacles.splice(allObstacles.indexOf(door.shut), 1);
+      if (door.openness <= 0.6 && before > door.openness && !shut) allObstacles.push(door.shut);
+      const busy = door.target > 0 || door.openness > 0 || door.alarm;
+      M.doorLamp.color.copy(AMBER).multiplyScalar(busy ? (Math.sin(time * 9) > 0 ? 1.4 : 0.15) : 0.6);
+    }
     indicators.forEach((indicator, index) => {
       const on = Math.sin((time / indicator.period + indicator.phase) * Math.PI * 2) > -0.2;
       lamp.setColorAt(index, lampColor.copy(indicator.color).multiplyScalar(on ? 1 : 0.12));
     });
     if (lamp.instanceColor) lamp.instanceColor.needsUpdate = true;
   }
-  return { group, obstacles, floorLights, grates, lights, update, bounds: ARENA };
+  if (door) Object.assign(door, {
+    open() { door.target = 1; },
+    close() { door.target = 0; },
+    /** Shut at once (a restart). */
+    reset() { door.target = door.openness = 0; door.alarm = false; for (const leaf of door.leaves) leaf.position.x = leaf.userData.closed; if (!allObstacles.includes(door.shut)) allObstacles.push(door.shut); },
+    alarm: false,
+  });
+  if (door) Object.defineProperties(door, {
+    isOpen: { get: () => door.openness >= 1 },
+    isClosed: { get: () => door.openness <= 0 },
+  });
+  return { group, obstacles, floorLights, grates, lights, door, update, bounds: ARENA };
 }
 
 let grate = null;
