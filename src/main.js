@@ -7,7 +7,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { createCharacter } from './character.js';
 import { createCoat } from './coat.js';
-import { createStage } from './stage.js';
+import { createStage, deckGeometry } from './stage.js';
+import { createArena, ARENA } from './arena.js';
 import { createLighting } from './lighting.js';
 import { createSaber } from './saber.js';
 import { MotionController, damp } from './motion.js';
@@ -61,34 +62,50 @@ function init() {
   camera.position.copy(cameraFocus).add(cameraOffset);
   camera.lookAt(cameraFocus);
   const lighting = createLighting(scene, renderer);
+  // The studio strip above the hero would whiten every puddle of the wet deck.
+  lighting.whiteStrip.intensity *= 0.55;
 
-  const stage = createStage(scene);
-  // The AI lab: crates, barrels and barriers on the floor, no walls.
+  // The deck, closed at the back by walls, open at the front over a lower level.
+  const stage = createStage(scene, { bounds: ARENA });
+  // The AI lab: crates, barrels and barriers on the floor; the room around it.
   const lab = createLab(scene);
-  const reflection = new Reflector(new THREE.PlaneGeometry(80, 80), {
+  const arena = createArena(scene, { lab, floorMaterial: stage.material });
+  // The wet deck mirrors the room: the reflection is added to the floor's own
+  // light, strongest in the puddles (smooth in the roughness map), and it is
+  // stretched towards the viewer as on wet steel — light columns and strips
+  // become long red streaks.
+  const deck = deckGeometry(ARENA);
+  const reflection = new Reflector(deck.geometry, {
     textureWidth: 640, textureHeight: 400, multisample: 0, clipBias: 0.001,
     shader: {
-      name: 'WeatheredMetalReflection',
+      name: 'WetDeckReflection',
       uniforms: {
         color: { value: new THREE.Color(0x8698ad) }, tDiffuse: { value: null }, textureMatrix: { value: null },
-        roughnessMap: { value: stage.roughnessTexture },
+        roughnessMap: { value: stage.roughnessTexture }, texel: { value: new THREE.Vector2(1 / 640, 1 / 400) },
       },
       vertexShader: `uniform mat4 textureMatrix; varying vec4 mirrorUv; varying vec2 surfaceUv;
-        void main(){mirrorUv=textureMatrix*vec4(position,1.);surfaceUv=uv*8.333333;
+        void main(){mirrorUv=textureMatrix*vec4(position,1.);surfaceUv=uv;
         gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; varying vec4 mirrorUv; varying vec2 surfaceUv;
-        void main(){float rough=texture2D(roughnessMap,surfaceUv).r;
-        vec2 uv=mirrorUv.xy/mirrorUv.w; float distortion=(rough-.5)*.0025;
-        vec3 reflected=texture2D(tDiffuse,uv+vec2(distortion,distortion*.4)).rgb;
-        gl_FragColor=vec4(reflected*.85,(1.-rough)*.55);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
+      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; uniform vec2 texel; varying vec4 mirrorUv; varying vec2 surfaceUv;
+        void main(){
+          float rough=texture2D(roughnessMap,surfaceUv).r;
+          float wet=1.-smoothstep(.2,.6,rough);
+          vec2 uv=mirrorUv.xy/mirrorUv.w;
+          float stretch=mix(4.5,1.6,wet)*texel.y, wobble=(rough-.5)*texel.x*1.5;
+          vec3 sum=vec3(0.); float total=0.;
+          for(int i=-4;i<=4;i++){float w=1.-abs(float(i))/5.;sum+=texture2D(tDiffuse,uv+vec2(wobble,float(i)*stretch)).rgb*w;total+=w;}
+          // Only what shines is mirrored: the dim room and the fog add no milky veil.
+          vec3 bright=max(sum/total-vec3(.012),0.);
+          gl_FragColor=vec4(bright*mix(.4,1.25,wet),1.);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
     },
   });
   reflection.rotation.x = -Math.PI / 2;
-  reflection.position.y = 0.002;
+  reflection.position.copy(deck.centre).setY(0.002);
   reflection.material.transparent = true;
+  reflection.material.blending = THREE.AdditiveBlending;
   reflection.material.depthWrite = false;
   reflection.renderOrder = 1;
   reflection.getRenderTarget().texture.magFilter = THREE.NearestFilter;
@@ -395,7 +412,7 @@ function init() {
   let deflections = 0, burns = 0, kills = 0;
   /** Every bolt, every frame: the blade first, then the hero, then (sent back) the troopers. */
   function boltMeets(bolt, a, b) {
-    const wall = lab.segmentHit(a, b), end = wall ? wall.point : b;
+    const wall = lab.segmentHit(a, b, box => box.kind === 'rail'), end = wall ? wall.point : b;
     if (!bolt.deflected) {
       chest.set(motion.x, 1.05, motion.z);
       // Guarding, the blade takes a bolt coming at him from the front, and any
@@ -495,6 +512,7 @@ function init() {
     renderer.setSize(renderWidth, renderHeight, false);
     composer.setSize(renderWidth, renderHeight);
     reflection.getRenderTarget().setSize(renderWidth, renderHeight);
+    reflection.material.uniforms.texel.value.set(1 / renderWidth, 1 / renderHeight);
     updateProjection();
   }
   function updateProjection(height = viewHeight) {
@@ -762,6 +780,8 @@ function init() {
       targetFocus.set(motion.x + motion.vx * 0.16, 0.6, motion.z + motion.vz * 0.16);
       cameraFocus.lerp(targetFocus, 1 - Math.exp(-7 * sim));
       stage.update({ time, playerPosition });
+      lab.update(time);
+      arena.update(time);
       // A heavy landing shakes the view for a moment.
       impactShake = Math.max(0, impactShake - dt * 3);
       shake.set(Math.sin(time * 91 + now * 0.05), Math.sin(time * 77 + 1 + now * 0.04), Math.sin(time * 83 + 2)).multiplyScalar(action.shake * action.shake * 0.09 + impactShake * impactShake * 0.07);
@@ -807,7 +827,7 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, blasters, troopers, grenades, explosions, debris, knockdown, marks,
+    squad, lab, arena, blasters, troopers, grenades, explosions, debris, knockdown, marks,
     /** For checks: a grenade thrown by trooper `index` (or dropped) at (x, z). */
     grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
     explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },

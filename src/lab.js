@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createKit, frameOf, blink, lineGlowTexture, RED, AMBER } from './kit.js';
 
 /**
  * The AI laboratory: crates, stacked crates, barrels and low barriers on the
@@ -39,21 +40,19 @@ const LAYOUT = [
 export function createLab(scene) {
   const group = new THREE.Group();
   group.name = 'AI lab';
-  const metal = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.55, metalness: 0.55 });
-  const panel = new THREE.MeshStandardMaterial({ color: 0x343a44, roughness: 0.5, metalness: 0.5 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.7, metalness: 0.3 });
-  // Red light, like the panels and floor strips of the reference. The frame is
-  // tone-mapped (ACES) after the bloom: brighter than this, red turns orange.
-  const glow = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.78, 0.008, 0.008), toneMapped: false });
-  const neon = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 0.004, 0.004), toneMapped: false });
-  const piece = (geometry, material, position, parent = group) => {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.copy(position);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    parent.add(mesh);
-    return mesh;
+  // Gunmetal cases: a dark shell, a brighter frame and caps that catch the
+  // light, recessed panels, black vents, pale stencils, red and amber lights.
+  const M = {
+    metal: new THREE.MeshStandardMaterial({ name: 'shell', color: 0x1b1f26, roughness: 0.42, metalness: 0.75 }),
+    trim: new THREE.MeshStandardMaterial({ name: 'frame', color: 0x39404b, roughness: 0.32, metalness: 0.8 }),
+    cap: new THREE.MeshStandardMaterial({ name: 'caps', color: 0x4a525e, roughness: 0.28, metalness: 0.82 }),
+    panel: new THREE.MeshStandardMaterial({ name: 'panels', color: 0x15181d, roughness: 0.55, metalness: 0.6 }),
+    dark: new THREE.MeshStandardMaterial({ name: 'vents', color: 0x090a0d, roughness: 0.75, metalness: 0.4 }),
+    stencil: new THREE.MeshStandardMaterial({ name: 'stencils', color: 0x59606b, roughness: 0.7, metalness: 0.2 }),
+    glow: new THREE.MeshBasicMaterial({ name: 'red lights', color: RED, toneMapped: false }),
+    amber: new THREE.MeshBasicMaterial({ name: 'amber lights', color: AMBER, toneMapped: false }),
   };
+  const kit = createKit();
 
   const obstacles = [];
   for (const [kind, u, v, [sx, sy, sz], raised = 0] of LAYOUT) {
@@ -61,39 +60,18 @@ export function createLab(scene) {
     const base = raised ? obstacles.at(-1).max.y : 0;
     const min = new THREE.Vector3(centre.x - sx / 2, base, centre.z - sz / 2), max = new THREE.Vector3(centre.x + sx / 2, base + sy, centre.z + sz / 2);
     obstacles.push({ kind, min, max, centre: new THREE.Vector3(centre.x, base + sy / 2, centre.z) });
-    const at = new THREE.Vector3(centre.x, base + sy / 2, centre.z);
-    if (kind === 'barrel') {
-      const radius = sx / 2;
-      piece(new THREE.CylinderGeometry(radius, radius, sy, 12), metal, at);
-      for (const y of [0.18, 0.55]) piece(new THREE.CylinderGeometry(radius + 0.015, radius + 0.015, 0.05, 12), panel, at.clone().setY(base + sy * y));
-      piece(new THREE.CylinderGeometry(radius + 0.01, radius + 0.01, 0.035, 12), glow, at.clone().setY(base + sy * 0.82));
-      piece(new THREE.CylinderGeometry(radius * 0.85, radius * 0.85, 0.02, 12), dark, at.clone().setY(base + sy + 0.005));
-      continue;
-    }
-    // Crates and barriers: a dark shell, framed edges, inset panels, red light.
-    piece(new THREE.BoxGeometry(sx, sy, sz), metal, at);
-    for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      piece(new THREE.BoxGeometry(0.06, sy + 0.01, 0.06), panel, new THREE.Vector3(at.x + dx * (sx / 2 - 0.02), at.y, at.z + dz * (sz / 2 - 0.02)));
-    }
-    piece(new THREE.BoxGeometry(sx - 0.12, 0.03, sz - 0.12), panel, new THREE.Vector3(at.x, base + sy + 0.012, at.z));
-    // Light panels on the faces the camera sees (+X and +Z).
-    if (kind === 'barrier') {
-      const long = sx > sz;
-      piece(new THREE.BoxGeometry(long ? sx - 0.2 : 0.012, 0.05, long ? 0.012 : sz - 0.2), glow, new THREE.Vector3(at.x + (long ? 0 : sx / 2 + 0.006), base + sy - 0.12, at.z + (long ? sz / 2 + 0.006 : 0)));
-    } else {
-      piece(new THREE.BoxGeometry(sx * 0.42, 0.06, 0.012), glow, new THREE.Vector3(at.x - sx * 0.15, base + sy * 0.7, at.z + sz / 2 + 0.006));
-      piece(new THREE.BoxGeometry(0.012, sy * 0.35, sz * 0.18), glow, new THREE.Vector3(at.x + sx / 2 + 0.006, base + sy * 0.55, at.z + sz * 0.25));
-      piece(new THREE.BoxGeometry(sx * 0.7, sy * 0.5, 0.01), dark, new THREE.Vector3(at.x + sx * 0.05, base + sy * 0.4, at.z + sz / 2 + 0.004));
-    }
+    if (kind === 'barrel') dressBarrel(kit, M, min, max);
+    else dressCase(kit, M, min, max, kind === 'barrier');
   }
+  kit.build(group, { name: 'Lab cases' });
 
-  // Red neon strips set into the floor, along the grid, like the reference.
-  for (const [from, to] of [[[-9, -4.3], [5, -4.3]], [[-6.2, -9], [-6.2, 2.5]], [[4.6, -9], [4.6, 0.5]], [[-9, -8.2], [7, -8.2]], [[-1.8, 2.4], [3.4, 2.4]]]) {
-    const a = new THREE.Vector3(from[0], 0.006, from[1]), b = new THREE.Vector3(to[0], 0.006, to[1]);
-    const length = a.distanceTo(b), along = b.clone().sub(a).normalize();
-    const strip = piece(new THREE.BoxGeometry(along.x ? length : 0.05, 0.008, along.z ? length : 0.05), neon, a.clone().add(b).multiplyScalar(0.5));
-    strip.castShadow = false;
-  }
+  // Red neon strips set into the floor, along the grid, like the reference:
+  // each in a dark channel, with the red light it spills on the wet floor.
+  // They blink slowly, each a little out of step with the next.
+  const strips = [[[-9, -4.3], [5, -4.3]], [[-6.2, -9], [-6.2, 2.5]], [[4.6, -9], [4.6, 0.5]], [[-9, -8.2], [7, -8.2]], [[-1.8, 2.4], [3.4, 2.4]]].map(([from, to], index) => {
+    const a = new THREE.Vector3(from[0], 0, from[1]), b = new THREE.Vector3(to[0], 0, to[1]);
+    return floorStrip(group, a, b, index * 0.17);
+  });
   // Red light spills onto the troopers and the floor around the crates.
   const lights = [onScreen(-2.2, 3.9), onScreen(2.6, 4.4), onScreen(0, 6.6)].map(at => {
     const light = new THREE.PointLight(0xff3328, 3.2, 5.5, 1.6);
@@ -102,6 +80,9 @@ export function createLab(scene) {
     return light;
   });
   scene.add(group);
+  function update(time) {
+    for (const strip of strips) strip.update(time);
+  }
 
   const temp = new THREE.Vector3();
   /** Pushes a walker (a circle on the floor) out of every obstacle; returns the corrected point. */
@@ -124,12 +105,15 @@ export function createLab(scene) {
     }
     return position;
   }
-  /** First obstacle a segment crosses: { t (0..1), point, normal, box } or null (slab method). */
+  /**
+   * First obstacle a segment crosses: { t (0..1), point, normal, box } or null
+   * (slab method). skip: a box to ignore, or a test that rejects boxes.
+   */
   function segmentHit(a, b, skip = null) {
     let best = null;
     const d = temp.subVectors(b, a);
     for (const box of obstacles) {
-      if (box === skip) continue;
+      if (box === skip || (typeof skip === 'function' && skip(box))) continue;
       let enter = 0, exit = 1, axis = -1, sign = 0;
       let ok = true;
       for (const [k, i] of [['x', 0], ['y', 1], ['z', 2]]) {
@@ -160,7 +144,7 @@ export function createLab(scene) {
     const spots = [];
     const eye = threat.clone().setY(1.2);
     for (const box of obstacles) {
-      if (box.min.y > 0.5 || box.max.y < 0.75) continue;
+      if (box.min.y > 0.5 || box.max.y < 0.75 || box.kind === 'wall' || box.kind === 'rail') continue;
       const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2, hx = (box.max.x - box.min.x) / 2, hz = (box.max.z - box.min.z) / 2;
       for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         for (const offset of [-0.3, 0.3]) {
@@ -176,5 +160,103 @@ export function createLab(scene) {
     }
     return spots;
   }
-  return { group, obstacles, lights, pushOut, segmentHit, clear, coverSpots };
+  return { group, obstacles, lights, strips, pushOut, segmentHit, clear, coverSpots, update };
+}
+
+/** A case seen from the camera (+X, +Z and its lid): frame, caps, panels, vents, handles, lights. */
+function dressCase(kit, M, min, max, barrier) {
+  const sx = max.x - min.x, sy = max.y - min.y, sz = max.z - min.z;
+  const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2, t = 0.07;
+  kit.box(M.metal, sx - 0.04, sy - 0.03, sz - 0.04, [cx, cy - 0.015, cz]);
+  for (const dx of [-1, 1]) for (const dz of [-1, 1]) kit.box(M.trim, t, sy, t, [cx + dx * (sx / 2 - t / 2), cy, cz + dz * (sz / 2 - t / 2)]);
+  for (const y of [min.y + t / 2, max.y - t / 2]) {
+    for (const dz of [-1, 1]) kit.box(M.trim, sx, t, t, [cx, y, cz + dz * (sz / 2 - t / 2)]);
+    for (const dx of [-1, 1]) kit.box(M.trim, t, t, sz, [cx + dx * (sx / 2 - t / 2), y, cz]);
+  }
+  for (const dx of [-1, 1]) for (const dz of [-1, 1]) kit.box(M.cap, 0.13, 0.05, 0.13, [cx + dx * (sx / 2 - 0.055), max.y - 0.015, cz + dz * (sz / 2 - 0.055)]);
+  // The lid: an inset panel, a raised spine, two latches.
+  kit.box(M.panel, sx - 0.2, 0.02, sz - 0.2, [cx, max.y - 0.006, cz]);
+  kit.box(M.trim, sx > sz ? sx - 0.36 : 0.05, 0.02, sx > sz ? 0.05 : sz - 0.36, [cx, max.y + 0.004, cz]);
+  for (const side of [-1, 1]) kit.box(M.cap, 0.09, 0.03, 0.05, [cx + side * sx * 0.25, max.y + 0.008, cz + sz / 2 - 0.1]);
+  const faces = [
+    { origin: new THREE.Vector3(cx, min.y, max.z), along: new THREE.Vector3(1, 0, 0), width: sx, main: true },
+    { origin: new THREE.Vector3(max.x, min.y, cz), along: new THREE.Vector3(0, 0, -1), width: sz, main: false },
+  ];
+  for (const { origin, along, width, main } of faces) {
+    const f = frameOf(origin, along);
+    const long = barrier && width > 1.2;
+    // Recessed panels (segmented along a long barrier), ribbed below.
+    const count = long ? Math.max(2, Math.round(width / 0.75)) : 1, span = (width - 0.16) / count;
+    for (let i = 0; i < count; i++) {
+      const a = -width / 2 + 0.08 + span * (i + 0.5);
+      kit.box(M.panel, span - 0.07, sy * 0.58, 0.02, [a, sy * 0.44, 0.004], null, f);
+      for (let r = 0; r < 3; r++) kit.box(M.trim, span - 0.14, 0.022, 0.018, [a, sy * (0.22 + r * 0.075), 0.016], null, f);
+    }
+    if (long) {
+      // A red light along the top of the long side, two amber at its ends.
+      kit.box(M.dark, width - 0.22, 0.07, 0.016, [0, sy - 0.13, 0.006], null, f);
+      kit.box(M.glow, width - 0.3, 0.035, 0.012, [0, sy - 0.13, 0.016], null, f);
+      for (const side of [-1, 1]) kit.box(M.amber, 0.035, 0.025, 0.014, [side * (width / 2 - 0.13), sy - 0.13, 0.016], null, f);
+      continue;
+    }
+    if (main) {
+      // A vent, a horizontal red light, amber indicators and stencilled marks.
+      kit.box(M.dark, width * 0.3, 0.2, 0.012, [-width * 0.2, sy * 0.68, 0.01], null, f);
+      for (let i = 0; i < 5; i++) kit.box(M.trim, width * 0.27, 0.014, 0.022, [-width * 0.2, sy * 0.68 - 0.08 + i * 0.04, 0.016], null, f);
+      kit.box(M.dark, width * 0.4, 0.075, 0.016, [width * 0.16, sy * 0.82, 0.006], null, f);
+      kit.box(M.glow, width * 0.34, 0.04, 0.012, [width * 0.16, sy * 0.82, 0.016], null, f);
+      for (let i = 0; i < 2; i++) kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.06 + i * 0.05, sy * 0.71, 0.016], null, f);
+      for (let i = 0; i < 3; i++) kit.box(M.stencil, 0.05 + (i % 2) * 0.03, 0.018, 0.006, [width * 0.08 + i * 0.075, sy * 0.13, 0.016], null, f);
+    } else {
+      // A vertical red light in its housing, a handle on standoffs.
+      kit.box(M.dark, 0.085, sy * 0.48, 0.016, [width * 0.3, sy * 0.5, 0.006], null, f);
+      kit.box(M.glow, 0.035, sy * 0.42, 0.012, [width * 0.3, sy * 0.5, 0.016], null, f);
+      kit.box(M.cap, 0.24, 0.026, 0.026, [-width * 0.12, sy * 0.66, 0.05], null, f);
+      for (const side of [-1, 1]) kit.box(M.trim, 0.026, 0.026, 0.05, [-width * 0.12 + side * 0.1, sy * 0.66, 0.025], null, f);
+      kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.3, sy * 0.78, 0.016], null, f);
+    }
+  }
+}
+
+/** A drum: ribbed, banded at the foot, a red light band near the top, a lid with a valve. */
+function dressBarrel(kit, M, min, max) {
+  const r = (max.x - min.x) / 2, sy = max.y - min.y, cx = (min.x + max.x) / 2, cz = (min.z + max.z) / 2, n = 20;
+  kit.cylinder(M.metal, r - 0.008, r, sy - 0.02, n, [cx, min.y + sy / 2 - 0.01, cz]);
+  kit.cylinder(M.dark, r + 0.006, r + 0.006, 0.06, n, [cx, min.y + 0.03, cz]);
+  for (const y of [0.22, 0.5]) kit.cylinder(M.trim, r + 0.014, r + 0.014, 0.045, n, [cx, min.y + sy * y, cz]);
+  kit.cylinder(M.dark, r + 0.008, r + 0.008, 0.075, n, [cx, min.y + sy * 0.82, cz]);
+  kit.cylinder(M.glow, r + 0.012, r + 0.012, 0.034, n, [cx, min.y + sy * 0.82, cz]);
+  kit.cylinder(M.trim, r - 0.004, r - 0.004, 0.03, n, [cx, max.y - 0.01, cz]);
+  kit.cylinder(M.panel, r * 0.8, r * 0.8, 0.012, n, [cx, max.y + 0.008, cz]);
+  kit.cylinder(M.cap, 0.035, 0.035, 0.06, 10, [cx + r * 0.4, max.y + 0.03, cz + r * 0.25]);
+  kit.box(M.stencil, 0.12, 0.02, 0.006, [cx, min.y + sy * 0.36, cz + r + 0.004]);
+}
+
+/** A neon strip in the floor from a to b, its channel, and the light it pools around it; update(time) blinks it. */
+export function floorStrip(parent, a, b, phase = 0, { width = 0.05, glow = 0.55, y = 0 } = {}) {
+  const length = a.distanceTo(b), along = b.clone().sub(a).normalize(), centre = a.clone().add(b).multiplyScalar(0.5);
+  const angle = Math.atan2(along.x, along.z);
+  const channel = new THREE.Mesh(new THREE.BoxGeometry(width + 0.08, 0.01, length + 0.08), new THREE.MeshStandardMaterial({ color: 0x07080a, roughness: 0.6, metalness: 0.5 }));
+  channel.position.copy(centre).setY(y + 0.004);
+  channel.rotation.y = angle;
+  channel.receiveShadow = true;
+  const material = new THREE.MeshBasicMaterial({ color: RED.clone(), toneMapped: false });
+  const core = new THREE.Mesh(new THREE.BoxGeometry(width, 0.012, length), material);
+  core.position.copy(centre).setY(y + 0.007);
+  core.rotation.y = angle;
+  // The light it throws on the floor: additive, as wide as a stride.
+  const poolMaterial = new THREE.MeshBasicMaterial({ map: lineGlowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.5, length + 1.2), poolMaterial);
+  pool.rotation.set(-Math.PI / 2, 0, angle);
+  pool.position.copy(centre).setY(y + 0.012);
+  pool.renderOrder = 2;
+  for (const mesh of [channel, core, pool]) parent.add(mesh);
+  return {
+    core, pool, phase,
+    update(time) {
+      const k = blink(time, phase);
+      material.color.copy(RED).multiplyScalar(k);
+      poolMaterial.color.copy(RED).multiplyScalar(glow * k);
+    },
+  };
 }

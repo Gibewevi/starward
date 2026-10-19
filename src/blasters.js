@@ -15,6 +15,8 @@ import { ease } from './tween.js';
  * crates and the floor come next. update returns what happened this frame.
  */
 const UP = new THREE.Vector3(0, 1, 0);
+// A railing is mostly air: bolts pass between its bars.
+const throughRails = box => box.kind === 'rail';
 const LENGTH = 0.85;
 
 export function createBlasters(scene, { effects = null, lab = null, marks = null, random = Math.random } = {}) {
@@ -149,7 +151,7 @@ export function createBlasters(scene, { effects = null, lab = null, marks = null
       if (answer === 'spent') { remove(bolt); continue; }
       if (answer === 'deflected') { place(bolt); events.push({ type: 'deflected', bolt, point: bolt.position.clone() }); continue; }
       // Crates and barrels, then the floor.
-      const hit = lab?.segmentHit(a, b);
+      const hit = lab?.segmentHit(a, b, throughRails);
       let t = hit ? hit.t : Infinity, facing = hit?.normal ?? null, box = hit?.box ?? null;
       if (b.y < 0 && a.y >= 0) {
         const floor = a.y / Math.max(1e-6, a.y - b.y);

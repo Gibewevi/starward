@@ -81,7 +81,7 @@ export function createScorchMarks(scene, { random = Math.random, lab = null, lim
     if (!lab) return;
     const reach = 1.7 * power;
     for (const box of lab.obstacles) {
-      if (box.min.y > 0.3) continue;
+      if (box.min.y > 0.3 || box.kind === 'rail') continue;
       const nearestX = THREE.MathUtils.clamp(at.x, box.min.x, box.max.x), nearestZ = THREE.MathUtils.clamp(at.z, box.min.z, box.max.z);
       const distance = Math.hypot(at.x - nearestX, at.z - nearestZ);
       if (distance > reach) continue;

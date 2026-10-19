@@ -80,7 +80,7 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
   /** Small objects strewn about the lab, mostly by the crates, never on the hero's start. */
   function scatter(count = 46) {
     const names = ['crate', 'plate', 'plate', 'canister', 'canister', 'pipe', 'part', 'part', 'part'];
-    const boxes = lab?.obstacles.filter(box => box.min.y < 0.1) ?? [];
+    const boxes = lab?.obstacles.filter(box => box.min.y < 0.1 && box.kind !== 'wall' && box.kind !== 'rail') ?? [];
     for (let i = 0; i < count; i++) {
       const name = names[Math.floor(random() * names.length)];
       let at = null;
