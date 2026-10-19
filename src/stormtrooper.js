@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { buildTrooperParts } from './trooper-model.js';
 import { Ragdoll } from './ragdoll.js';
 import { aimBone, solveTwoBone } from './ik.js';
 import { approach, createTweens, ease } from './tween.js';
@@ -6,21 +8,21 @@ import { FEEL, curve, pick } from './feel.js';
 import { createGait, GAIT_JOINTS } from './trooper-gait.js';
 
 /**
- * Stormtrooper training dummy. A low-poly trooper in white armour over a black
- * suit, built from rigid parts — helmet, torso, pelvis, upper arms, forearms,
- * hands, thighs, shins, boots, and an E-11 blaster — each hung on a light
- * skeleton while it stands, idle, rifle in hand, feet planted by leg IK. Every
- * part is also a rigid body of a Verlet ragdoll whose particles follow the
- * pose until physics takes over. The blade's real sweep is tested against a
- * capsule per part; where it crosses decides which predefined joint is
- * severed (shoulder, elbow, wrist, hip, knee, ankle, neck, or the waist under
- * a horizontal cut), or an armour plate is knocked off. Cuts are cauterised
- * and glow, nothing gory. A severed piece is thrown with the blade's momentum
- * — along its sweep, up into an arc, spinning about the cut — then simply
- * simulated: it tumbles, bounces, skids and comes to rest near the body.
- * Every hit flashes the struck armour white for an instant, and his armour
- * comes apart progressively: helmet, plates, pauldrons and guards come off
- * under the blade and in hard landings, and fly as physical pieces.
+ * Stormtrooper training dummy. A trooper in moulded white armour (rounded
+ * edges, rolled rims) over a black suit, built from rigid parts — helmet,
+ * torso, pelvis, upper arms, forearms, hands, thighs, shins, boots, and an E-11
+ * blaster — each hung on a light skeleton while it stands, idle, rifle in hand,
+ * feet planted by leg IK. Every part is also a rigid body of a Verlet ragdoll
+ * whose particles follow the pose until physics takes over. The blade's real
+ * sweep is tested against a capsule per part; where it crosses decides which
+ * predefined joint is severed (shoulder, elbow, wrist, hip, knee, ankle, neck,
+ * or the waist under a horizontal cut), or an armour plate is knocked off. Cuts
+ * are cauterised and glow, nothing gory. A severed piece is thrown with the
+ * blade's momentum — along its sweep, up into an arc, spinning about the cut —
+ * then simply simulated: it tumbles, bounces, skids and comes to rest near the
+ * body. Every hit flashes the struck armour white for an instant, and his
+ * armour comes apart progressively: helmet, plates, pauldrons and guards come
+ * off under the blade and in hard landings, and fly as physical pieces.
  *
  * Blows move him: each one shoves him back along the blade and turns him
  * away from it, and a felled body carries the blow's momentum and slides.
@@ -59,7 +61,7 @@ const SLASH_LETHAL_SPEED = 3.5;
 const SIDES = [['L', 1], ['R', -1]];
 const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0), X_AXIS = new THREE.Vector3(1, 0, 0), ORIGIN = new THREE.Vector3();
 // The rifle at low ready across the belly; shouldered, its stock against the right shoulder.
-const LOW_READY = { position: new THREE.Vector3(-0.02, 0.1, 0.24), quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, 0.4, 0, 'YXZ')) };
+const LOW_READY = { position: new THREE.Vector3(-0.065, 0.075, 0.22), quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.32, 1.12, 0, 'YXZ')) };
 const SHOULDERED = new THREE.Vector3(-0.125, 0.27, 0.23);
 // Throwing a grenade, the left hand's path in the spine's frame: from the
 // rifle's foregrip, wound up behind the shoulder, swung over the top, released
@@ -76,8 +78,8 @@ const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 const LOOSE = { bounce: 0.38, friction: 0.05 };
 
 const materials = {
-  armor: new THREE.MeshStandardMaterial({ color: 0xb9bdc4, roughness: 0.55, metalness: 0 }),
-  shade: new THREE.MeshStandardMaterial({ color: 0x6d727b, roughness: 0.6, metalness: 0.05 }),
+  armor: new THREE.MeshStandardMaterial({ color: 0xcbd0d6, roughness: 0.48, metalness: 0 }),
+  shade: new THREE.MeshStandardMaterial({ color: 0x44494f, roughness: 0.6, metalness: 0.05 }),
   black: new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.8, metalness: 0 }),
   lens: new THREE.MeshStandardMaterial({ color: 0x07080b, roughness: 0.18, metalness: 0.1 }),
 };
@@ -173,26 +175,10 @@ for (const side of ['L', 'R']) {
   });
 }
 
-function frustum(wTop, wBottom, dTop, dBottom, height) {
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const p = geometry.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const top = p.getY(i) > 0;
-    p.setXYZ(i, p.getX(i) * (top ? wTop : wBottom), p.getY(i) * height, p.getZ(i) * (top ? dTop : dBottom));
-  }
-  geometry.computeVertexNormals();
-  return geometry;
-}
-const cylinder = (top, bottom, height, segments = 8) => new THREE.CylinderGeometry(top, bottom, height, segments);
-// Faceted low-poly look with normals baked per face: shading derivatives can
-// yield NaN on tiny distant triangles, which the bloom would spread.
-function facet(geometry) {
-  const flat = geometry.index ? geometry.toNonIndexed() : geometry;
-  flat.computeVertexNormals();
-  return flat;
-}
+// Used by the glowing wound marker; armour geometry lives in trooper-model.js.
+const box = (width, height, depth) => new RoundedBoxGeometry(width, height, depth, 3, Math.min(width, height, depth) * 0.3);
 function add(group, geometry, material, position = [0, 0, 0], rotation = [0, 0, 0], name = '') {
-  const mesh = new THREE.Mesh(facet(geometry), material);
+  const mesh = new THREE.Mesh(geometry, material);
   mesh.position.fromArray(position);
   mesh.rotation.set(...rotation);
   mesh.name = name;
@@ -200,128 +186,6 @@ function add(group, geometry, material, position = [0, 0, 0], rotation = [0, 0, 
   mesh.receiveShadow = true;
   group.add(mesh);
   return mesh;
-}
-
-function buildParts() {
-  const { armor, shade, black, lens } = materials;
-  const parts = {}, pieces = {};
-  const part = name => (parts[name] = Object.assign(new THREE.Group(), { name }));
-  // A detachable piece of armour: a group of meshes that can come off whole.
-  const plate = (owner, name) => {
-    const group = Object.assign(new THREE.Group(), { name });
-    group.userData.armour = true;
-    owner.add(group);
-    pieces[name] = group;
-    return group;
-  };
-  const lathe = (profile, segments, start, length) => new THREE.LatheGeometry(profile.map(([x, y]) => new THREE.Vector2(x, y)), segments, start, length);
-
-  // Helmet: broad and massive, a dome that flares out over the neck at the
-  // back and sides; a brow ridge; big black lenses slanting down and out; a
-  // nose ridge; a frowning grille between cheek "tears"; breathers under it;
-  // round ear caps with side vents.
-  const head = part('head');
-  add(head, cylinder(0.062, 0.068, 0.1), black, [0, 0.03, 0]);
-  // Under the helmet, a black balaclava.
-  add(head, new THREE.SphereGeometry(0.125, 8, 6), black, [0, 0.19, 0.01]);
-  const helmet = plate(head, 'helmet');
-  add(helmet, lathe([[0.142, 0.055], [0.167, 0.085], [0.177, 0.14], [0.178, 0.2], [0.168, 0.258], [0.138, 0.303], [0.088, 0.333], [0.001, 0.342]], 12), armor).scale.set(1, 1, 1.06);
-  add(helmet, lathe([[0.128, 0.03], [0.186, 0.045], [0.18, 0.1]], 12, Math.PI * 0.33, Math.PI * 1.34), armor);
-  // The face: cheeks and jaw stand proud of the dome, narrowing to the chin.
-  add(helmet, frustum(0.22, 0.15, 0.09, 0.07, 0.13), armor, [0, 0.115, 0.122], [0.14, 0, 0]);
-  // The brow ridge follows the dome round: a centre and two swept-back wings.
-  add(helmet, new THREE.BoxGeometry(0.11, 0.032, 0.04), armor, [0, 0.25, 0.168]);
-  add(helmet, new THREE.BoxGeometry(0.1, 0.012, 0.012), shade, [0, 0.262, 0.189]);
-  for (const sign of [-1, 1]) {
-    add(helmet, new THREE.BoxGeometry(0.075, 0.03, 0.036), armor, [sign * 0.088, 0.248, 0.146], [0, sign * 0.55, 0]);
-    add(helmet, new THREE.BoxGeometry(0.07, 0.011, 0.011), shade, [sign * 0.094, 0.26, 0.163], [0, sign * 0.55, 0]);
-  }
-  add(helmet, new THREE.BoxGeometry(0.034, 0.075, 0.03), armor, [0, 0.168, 0.19]);
-  // Mouth: a frown — the grille widens towards the bottom — with its teeth.
-  add(helmet, frustum(0.07, 0.11, 0.03, 0.03, 0.046), black, [0, 0.1, 0.17], [0.14, 0, 0]);
-  for (let i = -1.5; i <= 1.5; i++) add(helmet, new THREE.BoxGeometry(0.008, 0.036, 0.012), shade, [i * 0.021, 0.099, 0.186], [0.14, 0, 0]);
-  for (const sign of [-1, 1]) {
-    // A big lens, slanting down towards the outside, set into the curve of the dome.
-    add(helmet, new THREE.BoxGeometry(0.082, 0.058, 0.03), lens, [sign * 0.058, 0.2, 0.177], [0.08, sign * 0.38, -sign * 0.32]);
-    add(helmet, new THREE.BoxGeometry(0.018, 0.06, 0.012), shade, [sign * 0.09, 0.13, 0.168], [0.1, sign * 0.5, -sign * 0.3]);
-    add(helmet, cylinder(0.013, 0.013, 0.045, 6), shade, [sign * 0.062, 0.08, 0.16], [0.6, 0, 0]);
-    add(helmet, cylinder(0.044, 0.044, 0.026, 10), armor, [sign * 0.178, 0.168, -0.005], [0, 0, Math.PI / 2]);
-    add(helmet, cylinder(0.024, 0.024, 0.03, 8), shade, [sign * 0.181, 0.168, -0.005], [0, 0, Math.PI / 2]);
-    add(helmet, new THREE.BoxGeometry(0.012, 0.05, 0.05), black, [sign * 0.17, 0.11, 0.085], [0, sign * 0.45, 0]);
-  }
-  add(helmet, new THREE.BoxGeometry(0.2, 0.02, 0.02), shade, [0, 0.13, -0.19]);
-
-  // Torso: a broad chest plate over the black suit, sloping up to the collar;
-  // a ribbed belly plate; the back plate and its pack.
-  const torso = part('torso');
-  add(torso, frustum(0.36, 0.3, 0.24, 0.21, 0.37), black, [0, 0.165, 0]);
-  const chest = plate(torso, 'chestPlate');
-  add(chest, frustum(0.5, 0.4, 0.29, 0.25, 0.19), armor, [0, 0.255, 0.012]);
-  add(chest, frustum(0.3, 0.46, 0.2, 0.27, 0.045), armor, [0, 0.37, 0.004]);
-  for (const sign of [-1, 1]) add(chest, new THREE.BoxGeometry(0.07, 0.04, 0.012), shade, [sign * 0.088, 0.29, 0.155]);
-  add(chest, new THREE.BoxGeometry(0.03, 0.09, 0.012), shade, [0, 0.235, 0.15]);
-  const belly = plate(torso, 'abPlate');
-  add(belly, frustum(0.34, 0.31, 0.24, 0.22, 0.11), armor, [0, 0.095, 0.012]);
-  for (const y of [0.075, 0.112]) add(belly, new THREE.BoxGeometry(0.25, 0.012, 0.012), shade, [0, y, 0.13]);
-  const back = plate(torso, 'backPlate');
-  add(back, new THREE.BoxGeometry(0.38, 0.22, 0.035), armor, [0, 0.25, -0.135]);
-  add(back, new THREE.BoxGeometry(0.2, 0.12, 0.05), shade, [0, 0.24, -0.165]);
-  add(torso, cylinder(0.088, 0.098, 0.05, 10), black, [0, 0.35, -0.01]);
-
-  const pelvis = part('pelvis');
-  add(pelvis, frustum(0.33, 0.28, 0.22, 0.2, 0.2), black, [0, 0.02, 0]);
-  const belt = plate(pelvis, 'belt');
-  add(belt, new THREE.BoxGeometry(0.4, 0.07, 0.27), armor, [0, 0.085, 0]);
-  add(belt, new THREE.BoxGeometry(0.11, 0.05, 0.012), shade, [0, 0.085, 0.137]);
-  for (const sign of [-1, 1]) {
-    add(belt, new THREE.BoxGeometry(0.055, 0.055, 0.035), armor, [sign * 0.14, 0.085, 0.13]);
-    add(belt, new THREE.BoxGeometry(0.035, 0.055, 0.06), armor, [sign * 0.2, 0.085, 0.02]);
-  }
-  add(plate(pelvis, 'codPlate'), frustum(0.2, 0.1, 0.055, 0.045, 0.12), armor, [0, -0.015, 0.11]);
-  add(plate(pelvis, 'rearPlate'), frustum(0.27, 0.2, 0.055, 0.045, 0.13), armor, [0, -0.005, -0.11]);
-
-  // Limbs: thick, armoured, with the black suit showing at the joints.
-  for (const [side, sign] of SIDES) {
-    const upperArm = part(`upperArm${side}`);
-    add(plate(upperArm, `pauldron${side}`), new THREE.SphereGeometry(1, 8, 4, 0, Math.PI * 2, 0, Math.PI * 0.55), armor, [sign * 0.012, -0.002, 0]).scale.set(0.102, 0.078, 0.108);
-    add(upperArm, cylinder(0.058, 0.056, 0.255), black, [0, -0.128, 0]);
-    add(plate(upperArm, `bicep${side}`), cylinder(0.07, 0.064, 0.15), armor, [0, -0.13, 0]);
-
-    const forearm = part(`forearm${side}`);
-    add(forearm, new THREE.SphereGeometry(0.058, 8, 6), black);
-    add(plate(forearm, `bracer${side}`), cylinder(0.066, 0.054, 0.16), armor, [0, -0.12, 0]);
-    add(forearm, cylinder(0.05, 0.05, 0.04), black, [0, -0.215, 0]);
-
-    const hand = part(`hand${side}`);
-    add(hand, new THREE.BoxGeometry(0.072, 0.095, 0.085), black, [0, -0.052, 0.005]);
-    add(hand, new THREE.BoxGeometry(0.028, 0.055, 0.028), black, [-sign * 0.036, -0.036, 0.04]);
-
-    const thigh = part(`thigh${side}`);
-    add(thigh, cylinder(0.082, 0.076, 0.325), black, [0, -0.162, 0]);
-    add(plate(thigh, `thighPlate${side}`), cylinder(0.1, 0.086, 0.23), armor, [0, -0.15, 0.004]);
-    if (side === 'R') add(thigh, new THREE.BoxGeometry(0.06, 0.13, 0.07), black, [-0.108, -0.11, 0.01]);
-
-    const shin = part(`shin${side}`);
-    add(shin, new THREE.SphereGeometry(0.072, 8, 6), black);
-    add(shin, cylinder(0.068, 0.06, 0.305), black, [0, -0.152, 0]);
-    add(plate(shin, `kneePad${side}`), frustum(0.105, 0.1, 0.06, 0.06, 0.09), armor, [0, -0.03, 0.065]);
-    add(plate(shin, `shinPlate${side}`), cylinder(0.082, 0.068, 0.19), armor, [0, -0.175, 0.006]);
-
-    const foot = part(`foot${side}`);
-    add(foot, new THREE.BoxGeometry(0.13, 0.15, 0.25), armor, [0, -0.025, 0.05]);
-    add(foot, new THREE.BoxGeometry(0.135, 0.022, 0.255), black, [0, -0.09, 0.05]);
-  }
-
-  const blaster = part('blaster');
-  add(blaster, cylinder(0.022, 0.022, 0.42), black, [0, 0, 0.1], [Math.PI / 2, 0, 0]);
-  for (let i = 0; i < 5; i++) add(blaster, cylinder(0.027, 0.027, 0.012), shade, [0, 0, 0.05 + i * 0.04], [Math.PI / 2, 0, 0]);
-  add(blaster, cylinder(0.018, 0.018, 0.03), shade, [0, 0, 0.32], [Math.PI / 2, 0, 0]);
-  add(blaster, new THREE.BoxGeometry(0.045, 0.06, 0.14), black, [0, 0, -0.02]);
-  add(blaster, cylinder(0.013, 0.013, 0.13, 6), shade, [0, 0.045, 0.02], [Math.PI / 2, 0, 0]);
-  add(blaster, new THREE.BoxGeometry(0.016, 0.035, 0.1), black, [0.035, -0.005, 0.02]);
-  add(blaster, new THREE.BoxGeometry(0.03, 0.07, 0.035), black, [0, -0.055, -0.05], [-0.3, 0, 0]);
-  add(blaster, new THREE.BoxGeometry(0.012, 0.012, 0.16), shade, [0, 0.035, -0.1]);
-  return { parts, pieces };
 }
 
 const smooth = u => u * u * (3 - 2 * u);
@@ -338,6 +202,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   let recover = null, towing = null, pickup = null, slick = null, mounts = null, landed = 0;
   // Held up by the Force, dropping back down, running away, turning back.
   let levitating = null, dropping = null, flee = null, turnBack = null;
+  // Run through by the blade: he struggles on it, then hangs from it dead.
+  let impaled = null;
   // Down but alive and pulled: the Force first hauls him upright.
   let lifting = null;
   // Throwing a grenade (the left hand), and the grenade in that hand.
@@ -377,11 +243,11 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     holder = new THREE.Object3D();
     holder.name = 'Blaster holder';
     holder.position.copy(LOW_READY.position);
-    holder.rotation.set(0.35, 0.4, 0, 'YXZ');
+    holder.quaternion.copy(LOW_READY.quaternion);
     joints.spine.add(holder);
     joints.holder = holder;
-    ({ parts, pieces } = buildParts());
-    heldGrenade = add(parts.handL, new THREE.SphereGeometry(0.062, 8, 6), materials.shade, [0, -0.1, 0.035], [0, 0, 0], 'Grenade in hand');
+    ({ parts, pieces } = buildTrooperParts(materials));
+    heldGrenade = add(parts.handL, new THREE.SphereGeometry(0.062, 14, 10), materials.shade, [0, -0.1, 0.035], [0, 0, 0], 'Grenade in hand');
     heldGrenade.visible = false;
     mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
     for (const side of ['L', 'R']) Object.assign(mounts, { [`upperArm${side}`]: `shoulder${side}`, [`forearm${side}`]: `elbow${side}`, [`hand${side}`]: `wrist${side}`, [`thigh${side}`]: `hip${side}`, [`shin${side}`]: `knee${side}`, [`foot${side}`]: `ankle${side}` });
@@ -397,7 +263,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       caps[name] = [[cut.parent, normal], [cut.child, normal.clone().negate()]].map(([owner, facing]) => {
         const cap = new THREE.Group();
         cap.name = `Cut ${name}`;
-        add(cap, new THREE.CircleGeometry(cut.radius * 0.72, 10), materials.black, [0, 0, 0.002]);
+        add(cap, new THREE.CircleGeometry(cut.radius * 0.72, 16), materials.black, [0, 0, 0.002]);
         const ring = add(cap, new THREE.RingGeometry(cut.radius * 0.6, cut.radius * 1.08, 12), new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false, side: THREE.DoubleSide }));
         cap.position.copy(at);
         cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), facing);
@@ -453,7 +319,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     scene.add(root, debris);
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
-    collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = null;
+    collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = impaled = null;
     blows = 0;
     woundedAt = -Infinity;
     woundingBlow = null;
@@ -566,18 +432,19 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const dazed = Math.min(1, r.daze / 0.6), sway = Math.sin(time * 2.6) * 0.1 * dazed, loll = Math.sin(time * 3.1 + 1) * 0.16 * dazed;
     const kneel = r.kneel, yank = r.yank;
     // Held in the air the legs dangle and kick.
-    r.dangle += ((levitating ? 1 : 0) - r.dangle) * (1 - Math.exp(-8 * dt));
+    r.dangle += ((levitating || impaled ? 1 : 0) - r.dangle) * (1 - Math.exp(-8 * dt));
     const dangle = r.dangle;
     // Choked by the Force while it pulls or holds him: the hands fly to the
     // throat at once and let go slowly. He fights in bursts.
-    const choking = Boolean(levitating || towing?.kind === 'stand' || lifting);
+    // On the blade he fights the same way, weaker and weaker as he dies.
+    const choking = Boolean(levitating || towing?.kind === 'stand' || lifting || impaled);
     r.choke += ((choking ? 1 : 0) - r.choke) * (1 - Math.exp(-(choking ? 14 : 4) * dt));
-    const choke = r.choke, fight = choke * (0.7 + 0.3 * Math.sin(time * 1.9 + seed) * Math.sin(time * 0.83 + seed));
+    const choke = r.choke, fight = choke * (impaled ? 0.25 + 1.1 * impaled.vigour : 1) * (0.7 + 0.3 * Math.sin(time * 1.9 + seed) * Math.sin(time * 0.83 + seed));
     const writhe = (a, b, c) => jitter(time, a, b, c) * fight;
     const breathe = Math.sin(time * 1.7);
     // His orders: crouched behind cover, the rifle shouldered and aimed, eyes on something.
     const o = trooper.order;
-    const able = !towing && !levitating && !dropping && !lifting && !pickup && !fetching && !flee;
+    const able = !towing && !levitating && !dropping && !lifting && !pickup && !fetching && !flee && !impaled;
     glide('crouch', able && o.crouch && !r.wound ? 1 : 0, 0.3, ease.inOutCubic);
     const aimTarget = o.aimAt;
     glide('aim', able && o.aim && aimTarget && trooper.holding && !r.wound && r.daze < 0.3 ? 1 : 0, o.aim ? 0.24 : 0.4, ease.outCubic);
@@ -589,7 +456,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
 
     // Base layer: the captured gait, on his feet (not while he hangs in the
     // Force's grip or is dragged through the air).
-    const grounded = !levitating && towing?.kind !== 'stand' && !dropping && !lifting;
+    const grounded = !levitating && towing?.kind !== 'stand' && !dropping && !lifting && !impaled;
     r.gait = approach(r.gait, grounded ? 1 : 0, dt / (grounded ? 0.25 : 0.1));
     const g = r.gait, keep = 1 - g;
     gait.update(dt, { speed: loco.velocity.length() + r.knock.length() * 0.6, backward: loco.backward, turnRate: loco.turnRate });
@@ -733,11 +600,14 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       }
     }
     // Choking: both hands at his throat, tugging at the grip he cannot see.
+    // Run through: they clutch at the blade before his chest.
     if (choke > 0.01) {
       for (const [side, sign] of SIDES) {
         if (armCut(side)) continue;
         const tug = jitter(time + sign * 1.7, 24.1, 37.7, 15.3) * 0.022 * (0.4 + fight);
-        const target = joints.spine.localToWorld(new THREE.Vector3(sign * (0.085 + tug * 0.4), 0.27 + tug, 0.155 + tug * 0.6));
+        const target = impaled
+          ? joints.spine.localToWorld(new THREE.Vector3(sign * (0.06 + tug * 0.5), 0.17 + tug, 0.27 + tug * 0.8))
+          : joints.spine.localToWorld(new THREE.Vector3(sign * (0.085 + tug * 0.4), 0.27 + tug, 0.155 + tug * 0.6));
         reach(side, target, joints[`shoulder${side}`].localToWorld(temp2.set(sign * 0.45, -0.35, 0.05)), choke);
       }
     }
@@ -1078,6 +948,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         break;
       case 'force':
       case 'pull':
+      case 'impaled':
         break;
       default:
         ragdoll.push(indicesOf(upper), along.clone().multiplyScalar(topple));
@@ -1089,7 +960,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     ragdoll.push([particleIndex.SR], twist.clone().negate());
     // A body felled by the blade carries the blow and the shove already under
     // way: it does not drop where it was struck, it is thrown and slides.
-    if (cause !== 'force' && cause !== 'pull') {
+    if (cause !== 'force' && cause !== 'pull' && cause !== 'impaled') {
       const carry = new THREE.Vector3().copy(velocity).setY(0).multiplyScalar(FEEL.hit.carry).add(reaction.knock).clampLength(0, FEEL.hit.maxCarry);
       if (carry.lengthSq() > 0.04) {
         carry.y = 0.35 + carry.length() * 0.12;
@@ -1217,7 +1088,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const along = hit.velocity.clone().addScaledVector(normal, -hit.velocity.dot(normal)).normalize();
     if (!Number.isFinite(along.x) || along.lengthSq() < 0.5) return;
     const material = new THREE.MeshBasicMaterial({ color: 0x000000, toneMapped: false });
-    const mark = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.016, 0.012), material);
+    const mark = new THREE.Mesh(box(0.24, 0.016, 0.012), material);
     mark.name = 'Saber scorch';
     const matrix = new THREE.Matrix4().makeBasis(along, temp2.crossVectors(normal, along), normal);
     mark.quaternion.setFromRotationMatrix(matrix);
@@ -1486,6 +1357,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
    */
   function forcePush(velocity) {
     const v = velocity.clone();
+    if (impaled) slideOff();
     if (pickup) dropPickup();
     levitating = dropping = flee = turnBack = null;
     if (lifting) { lifting = null; muscles = []; if (!trooper.dead) startRecovery(); }
@@ -1650,6 +1522,94 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (!levitating) return;
     levitating = null;
     dropping = { speed: 0 };
+  }
+  // Where the blade goes through him: on his spine, at the chest.
+  const WOUND = new THREE.Vector3(0, 0.2, 0.02);
+  /**
+   * Run through by the blade at `point` (the hero facing `heading`): he lets
+   * go of his rifle and struggles on it for a few seconds, weaker and weaker,
+   * then dies there and hangs from it. False if he cannot be (down, dead).
+   */
+  function impale(point, heading) {
+    if (trooper.dead || trooper.fallen || collapse) return false;
+    abortThrow();
+    if (pickup) dropPickup();
+    towing = levitating = dropping = flee = turnBack = fetching = null;
+    reaction.knock.set(0, 0, 0);
+    reaction.spin = 0;
+    if (trooper.holding) dropBlaster(new THREE.Vector3(Math.sin(heading) * 0.6, 0.5, Math.cos(heading) * 0.6));
+    impaled = { point: point.clone(), heading: wrap(heading + Math.PI), age: 0, struggle: pick(FEEL.impale.struggle, random), vigour: 1, next: 0.05, hang: 0, pinned: false };
+    // The jolt of the blade going in.
+    Object.assign(reaction, { vpitch: reaction.vpitch - 4, vbuckle: reaction.vbuckle + 2.5, vhead: reaction.vhead - 5 });
+    reaction.varmL -= 3 + random() * 3;
+    reaction.varmR -= 3 + random() * 3;
+    // Glowing burns where it went in and where it came out.
+    trooper.root.updateMatrixWorld(true);
+    const axis = joints.spine.localToWorld(WOUND.clone()), through = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
+    burn(bodies.torso, axis.clone().addScaledVector(through, -0.2), axis);
+    burn(bodies.torso, axis.clone().addScaledVector(through, 0.2), axis);
+    feed.push({ type: 'impaled', point: axis.clone() });
+    return true;
+  }
+  /** Where the blade holds him now (and which way the hero faces). */
+  function skewer(point, heading = null) {
+    if (!impaled) return;
+    impaled.point.copy(point);
+    if (heading !== null) impaled.heading = wrap(heading + Math.PI);
+  }
+  /** Off the blade: alive, he dies of it and falls; dead, the body drops. */
+  function slideOff(velocity = new THREE.Vector3()) {
+    if (!impaled) return false;
+    impaled = null;
+    if (!trooper.dead) { die('impaled', velocity); return true; }
+    for (const index of [particleIndex.W, particleIndex.N]) {
+      const particle = ragdoll.particles[index];
+      if (!particle.kinematic) continue;
+      particle.kinematic = false;
+      particle.previous.copy(particle.position).addScaledVector(velocity, -1 / 120);
+    }
+    feed.push({ type: 'slid', point: centroid(joinedIndices()) });
+    return true;
+  }
+  /** Struggling on the blade: carried so his chest stays on it, on his toes, jerking. */
+  function impaleStep(dt, time) {
+    const s = impaled;
+    s.age += dt;
+    s.vigour = 1 - THREE.MathUtils.smoothstep(s.age, s.struggle * 0.4, s.struggle);
+    trooper.root.updateMatrixWorld(true);
+    const wound = joints.spine.localToWorld(WOUND.clone());
+    const target = trooper.root.position.clone().sub(wound).add(s.point);
+    target.y = Math.max(0, target.y);
+    trooper.root.position.lerp(target, 1 - Math.exp(-16 * dt));
+    turnTo(s.heading + jitter(time, 2.3, 4.1, 7.7) * 0.2 * s.vigour, 8, dt);
+    if ((s.next -= dt) <= 0) {
+      s.next = 0.16 + random() * 0.4;
+      reaction.vpitch += (random() - 0.3) * 3.2 * s.vigour;
+      reaction.vroll += (random() - 0.5) * 2.6 * s.vigour;
+      reaction.vbuckle += random() * 2 * s.vigour;
+    }
+    if (s.age >= s.struggle) die('impaled');
+  }
+  /**
+   * Dead on the blade: his chest is held on it, slumped forward over it (the
+   * torso's two ends placed), the rest hangs and swings from there.
+   */
+  function hangStep(dt) {
+    const s = impaled, waist = ragdoll.particles[particleIndex.W], neck = ragdoll.particles[particleIndex.N];
+    s.age += dt;
+    if (!s.pinned) {
+      s.pinned = true;
+      s.length = waist.position.distanceTo(neck.position);
+      s.from = [waist.position.clone(), neck.position.clone()];
+      waist.kinematic = neck.kinematic = true;
+    }
+    s.hang = Math.min(1, s.hang + dt / 0.45);
+    const slump = 0.15 + 0.4 * ease.outCubic(s.hang);
+    const forward = new THREE.Vector3(Math.sin(s.heading), 0, Math.cos(s.heading));
+    const along = new THREE.Vector3(0, Math.cos(slump), 0).addScaledVector(forward, Math.sin(slump));
+    const share = Math.min(0.9, WOUND.y / s.length), k = ease.inOutCubic(s.hang);
+    ragdoll.place(particleIndex.W, s.from[0].clone().lerp(s.point.clone().addScaledVector(along, -s.length * share), k), dt);
+    ragdoll.place(particleIndex.N, s.from[1].clone().lerp(s.point.clone().addScaledVector(along, s.length * (1 - share)), k), dt);
   }
   /** Hanging in the Force's grip: following the point, choking, writhing and jerking. */
   function levitateStep(dt, time) {
@@ -1953,7 +1913,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     clock += dt;
     tweens.update(dt);
     if (!trooper.fallen && dt > 0) {
-      if (towing?.kind === 'stand') towStanding(dt);
+      if (impaled) impaleStep(dt, time);
+      else if (towing?.kind === 'stand') towStanding(dt);
       else if (levitating) levitateStep(dt, time);
       else if (dropping) dropStep(dt);
       else if (flee) fleeStep(dt);
@@ -1962,13 +1923,13 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         locomote(dt, temp.set(0, 0, 0), turnBack);
         if (Math.abs(wrap(turnBack - headingOf())) < 0.05) turnBack = null;
       } else if (!pickup) obey(dt);
-      if (towing || levitating || dropping) loco.velocity.set(0, 0, 0);
+      if (towing || levitating || dropping || impaled) loco.velocity.set(0, 0, 0);
       if (throwing) throwStep(dt);
       if (pickup) pickupStep(dt);
-      else if (!levitating && !dropping && !flee && !towing && !fetching) lookForRifle();
+      else if (!levitating && !dropping && !flee && !towing && !fetching && !impaled) lookForRifle();
       // Shoved by the blows: he slides back, turning away, then catches himself.
       const r = reaction;
-      if (!towing) {
+      if (!towing && !impaled) {
         trooper.root.position.x += r.knock.x * dt;
         trooper.root.position.z += r.knock.z * dt;
         face(headingOf() + r.spin * dt);
@@ -1976,7 +1937,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       r.knock.multiplyScalar(Math.exp(-5.5 * dt));
       r.spin *= Math.exp(-6 * dt);
       // Crates and barrels: he walks round them, he is not pushed through them.
-      if (!towing && !levitating) lab?.pushOut(trooper.root.position, 0.3);
+      if (!towing && !levitating && !impaled) lab?.pushOut(trooper.root.position, 0.3);
       // How fast he is turning: a quick turn on the spot takes steps.
       const yaw = headingOf();
       loco.turnRate += (wrap(yaw - loco.lastYaw) / dt - loco.turnRate) * (1 - Math.exp(-14 * dt));
@@ -1990,6 +1951,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       liftStep(dt, time);
     } else {
       if (towing?.kind === 'body' && dt > 0) towBody(dt);
+      if (impaled && dt > 0) hangStep(dt);
       if (crawl && !trooper.dead && dt > 0) crawlStep(dt, time);
       else if (recover && !trooper.dead && dt > 0) recoverStep(dt, time);
       convulse(dt);
@@ -2186,7 +2148,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   }
 
   /** Free to act on his own: up, alive, not in the Force's grip, not running off, rearming or reeling. */
-  const free = () => !trooper.dead && !trooper.fallen && !towing && !levitating && !dropping && !flee && !fetching && !pickup && !lifting && !collapse && turnBack === null;
+  const free = () => !trooper.dead && !trooper.fallen && !towing && !levitating && !dropping && !flee && !fetching && !pickup && !lifting && !collapse && !impaled && turnBack === null;
 
   /** Pulls the trigger: a bolt leaves the muzzle along the barrel (null when he cannot fire). */
   function fire() {
@@ -2278,7 +2240,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   /** Where the threat is (the hero), so that he gets up facing it. */
   trooper.focus = null;
   build();
-  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop, fire, boltHit, shot, throwGrenade });
+  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop, fire, boltHit, shot, throwGrenade, impale, skewer, slideOff });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
     /** In the middle of throwing a grenade. */
@@ -2296,6 +2258,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     /** Where his rifle lies, if it is on the floor (null in his hands, or when he cannot hold one). */
     rifle: { get: () => (trooper.holding || !bodies.blaster.dynamic || armCut('L') || armCut('R') ? null : centroid(bodies.blaster.indices).setY(0)) },
     crawl: { get: () => crawl },
+    /** On the blade (struggling, or dead and hanging from it). */
+    impaled: { get: () => Boolean(impaled) },
     recovery: { get: () => recover },
     towing: { get: () => towing },
     spasm: { get: () => spasm },
@@ -2304,13 +2268,13 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     /** Armour still on him. */
     armour: { get: () => Object.values(pieces).filter(piece => !piece.userData.loose).length },
     /**
-     * 'standing', 'wounded', 'pulled', 'held', 'dropping', 'fleeing', 'dazed',
+     * 'standing', 'wounded', 'impaled', 'pulled', 'held', 'dropping', 'fleeing', 'dazed',
      * 'rearming', 'stunned', 'rising', 'down', 'crawling' or 'dead'.
      */
     state: {
       get: () => {
         if (trooper.dead) return 'dead';
-        if (!trooper.fallen) return towing ? 'pulled' : levitating ? 'held' : dropping ? 'dropping' : flee ? 'fleeing' : pickup || fetching ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
+        if (!trooper.fallen) return impaled ? 'impaled' : towing ? 'pulled' : levitating ? 'held' : dropping ? 'dropping' : flee ? 'fleeing' : pickup || fetching ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
         if (lifting) return 'pulled';
         if (recover) return recover.stage === 'rising' ? 'rising' : 'stunned';
         return crawl?.stage === 'crawl' ? 'crawling' : 'down';

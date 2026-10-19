@@ -513,7 +513,8 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     const heroSpeed = Math.hypot(heroVelocity.x, heroVelocity.z);
     for (const mind of minds) {
       const t = mind.trooper, o = t.order;
-      if (t.dead) { release(mind); alerts?.hide(t); mind.mode = 'dead'; continue; }
+      // Dead, or dying on the blade: out of the fight for good.
+      if (t.dead || t.impaled) { release(mind); alerts?.hide(t); mind.mode = 'dead'; continue; }
       perceive(mind, dt, hero, heroSpeed, saber, noises, cues);
       o.velocity.set(0, 0, 0);
       o.face = null;

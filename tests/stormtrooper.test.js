@@ -798,3 +798,45 @@ test('one swing touching him all over is still one blow: he reels back a little,
   assert.ok(moved < 1.2, `reeled back ${moved.toFixed(2)} m, no flight`);
   FEEL.hit.toughness = 0;
 });
+
+test('run through by the blade he drops his rifle, struggles on it, dies, hangs from it, and drops once it lets go', () => {
+  const { trooper, run } = fixture(17);
+  run(0.5);
+  const heading = 0.4 + Math.PI, chest = () => trooper.particle('W').position.clone().lerp(trooper.particle('N').position, 0.45);
+  const point = chest().setY(1.2);
+  assert.ok(trooper.impale(point, heading));
+  assert.equal(trooper.state, 'impaled');
+  let hands = Infinity;
+  for (let i = 0; i < 60; i++) {
+    run(1 / 60);
+    trooper.skewer(point, heading);
+    hands = Math.min(hands, trooper.particle('WL').position.distanceTo(point) + trooper.particle('WR').position.distanceTo(point));
+  }
+  assert.ok(!trooper.holding, 'the rifle falls');
+  assert.ok(hands < 0.75, `his hands go to the blade (${hands.toFixed(2)} m)`);
+  assert.ok(!trooper.dead, 'still fighting a second in');
+  for (let i = 0; i < 60 * 3; i++) { run(1 / 60); trooper.skewer(point, heading); }
+  assert.ok(trooper.dead && trooper.impaled, 'dead on the blade');
+  // The hero walks half a metre on: the body comes with the blade.
+  const moved = point.clone().add(new THREE.Vector3(0.5, 0.05, 0));
+  for (let i = 0; i < 60; i++) { run(1 / 60); trooper.skewer(moved, heading); }
+  assert.ok(chest().distanceTo(moved) < 0.2, `hanging from it (${chest().distanceTo(moved).toFixed(2)} m off)`);
+  assert.ok(trooper.particle('W').position.y > 0.6, 'held up');
+  assert.ok(trooper.slideOff());
+  run(2.5);
+  assert.ok(!trooper.impaled && trooper.particle('W').position.y < 0.45, `on the floor once let go (${trooper.particle('W').position.y.toFixed(2)} m)`);
+  assert.ok(trooper.ragdoll.particles.every(p => [p.position.x, p.position.y, p.position.z].every(Number.isFinite)));
+});
+
+test('let go while he still struggles, he dies of it as he falls', () => {
+  const { trooper, run } = fixture(19);
+  run(0.4);
+  const point = trooper.particle('W').position.clone().setY(1.2);
+  assert.ok(trooper.impale(point, 0.4 + Math.PI));
+  for (let i = 0; i < 30; i++) { run(1 / 60); trooper.skewer(point); }
+  assert.ok(!trooper.dead);
+  trooper.slideOff();
+  run(2.5);
+  assert.ok(trooper.dead && trooper.fallen && trooper.particle('W').position.y < 0.45);
+  assert.equal(trooper.impale(point, 0), false, 'a body cannot be run through again');
+});

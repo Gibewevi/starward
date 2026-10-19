@@ -1,0 +1,22 @@
+{
+  "image": "explosion.png",
+  "heatImage": "explosion-heat.png",
+  "frames": 64,
+  "columns": 8,
+  "rows": 8,
+  "size": 256,
+  "fps": 20,
+  "duration": 3.2,
+  "width": 7.2,
+  "centre": 1.85,
+  "cameraOffset": [
+    8,
+    8.2,
+    10
+  ],
+  "playback": "linear",
+  "source": "scripts/explosion-volumetric.py (authored 3D turbulent density fields, Blender Eevee Next)",
+  "alpha": "straight",
+  "heatEncoding": "linear radiance mask, no sRGB",
+  "peakTime": 0.28
+}

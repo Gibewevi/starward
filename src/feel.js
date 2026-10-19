@@ -51,6 +51,15 @@ export const FEEL = {
   flee: {
     speed: [3.2, 4], time: [1.2, 1.9], stride: 1.3, // m/s, seconds, metres per running cycle
   },
+  // LT and B held, a trooper before the hero: the blade goes through him.
+  impale: {
+    press: 0.16, // s: B held this long (LT down) runs him through; a quicker tap still strikes
+    reach: 1.8, cone: 0.8, // metres, half-angle (rad): who can be run through
+    depth: 0.72, // m along the blade from the hilt: where his chest sits on it
+    struggle: [2.2, 3.2], // s: he fights on the blade, weaker and weaker, then dies there
+    hitStop: [0.12, 0.14], // the blade going in
+    gush: [0.05, 0.11], // s between spurts of sparks while he struggles
+  },
   push: {
     range: 5.8, cone: 0.95,
     speed: [6, 8.5], lift: [2.4, 3.6], tumble: [2, 5], // m/s, m/s, rad/s
@@ -77,6 +86,9 @@ export const FEEL = {
     reach: 0.9, // m: the blade meets a bolt this far from his chest
     near: 1.45, // m: a bolt passing this close is caught too, from any side (behind his back as well)
     react: 0.17, // s: the parry starts this long before the bolt arrives
+    reactBack: 0.26, // s: the same from behind (the blade has to go over his shoulder and down his back)
+    blade: 0.32, // m: a bolt from behind is stopped where it passes this close to the blade down his back…
+    body: 0.6, // m: …or, the blade being behind him, before it gets this close to his chest
     close: [2.5, 9], // m from the shooter: the closer the hero, the likelier the return goes back at him
     yaw: [0.15, 0.9], lift: [-0.04, 0.18], // scatter (rad) of a return left to chance
     speedUp: 1.3, // a sent-back bolt flies faster

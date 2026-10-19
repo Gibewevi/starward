@@ -26,10 +26,22 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
   const meshes = {}, bodies = [];
   for (const [name, kind] of Object.entries(KINDS)) {
     const [x, y, z] = kind.size;
-    const geometry = kind.round ? new THREE.CylinderGeometry(0.5, 0.5, 1, 8) : new THREE.BoxGeometry(1, 1, 1);
+    const geometry = name === 'chunk' ? new THREE.IcosahedronGeometry(0.59, 0)
+      : kind.round ? new THREE.CylinderGeometry(0.5, 0.5, 1, 8) : new THREE.BoxGeometry(1, 1, 1);
+    if (name === 'chunk') {
+      // A torn, angular silhouette instead of an identical little cube.
+      // The distortion is deterministic and does not consume the simulation RNG.
+      const points = geometry.attributes.position;
+      for (let i = 0; i < points.count; i++) {
+        const x = points.getX(i), y = points.getY(i), z = points.getZ(i);
+        const dent = 0.78 + 0.22 * Math.sin(x * 13.1 + y * 8.7 + z * 17.3) ** 2;
+        points.setXYZ(i, x * dent, y * (0.82 + dent * 0.18), z * dent);
+      }
+      geometry.computeVertexNormals();
+    }
     if (kind.round && name === 'pipe') geometry.rotateX(Math.PI / 2);
     // Fragments take their colour per instance: they cool from orange to black.
-    const material = new THREE.MeshStandardMaterial({ color: name === 'chunk' ? 0xffffff : kind.color, roughness: 0.55, metalness: 0.5 });
+    const material = new THREE.MeshStandardMaterial({ color: name === 'chunk' ? 0xffffff : kind.color, roughness: name === 'chunk' ? 0.84 : 0.55, metalness: name === 'chunk' ? 0.12 : 0.5 });
     const mesh = new THREE.InstancedMesh(geometry, material, capacity);
     mesh.name = `Debris ${name}`;
     mesh.castShadow = true;
@@ -42,7 +54,7 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
   // Burning fragments glow for a moment as they fly.
   const chunkGlow = new THREE.Color(), hot = new THREE.Color(1.8, 0.5, 0.08);
 
-  function add(name, position, { quaternion = null, velocity = null, spin = null, life = Infinity } = {}) {
+  function add(name, position, { quaternion = null, velocity = null, spin = null, life = Infinity, scale = null, temperature = null } = {}) {
     const kind = KINDS[name], entry = meshes[name];
     if (entry.list.length >= capacity) {
       // Recycle the oldest fragment of that kind.
@@ -50,13 +62,15 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
       bodies.splice(bodies.indexOf(old), 1);
     }
     const half = new THREE.Vector3(...kind.size).multiplyScalar(0.5 * (0.85 + random() * 0.3));
+    if (scale) half.multiply(scale);
     const [a, b, c] = [half.x * 2, half.y * 2, half.z * 2];
-    const inertia = kind.mass * (a * a + b * b + c * c) / 18;
+    const mass = scale ? Math.max(0.06, kind.mass * scale.x * scale.y * scale.z) : kind.mass;
+    const inertia = mass * (a * a + b * b + c * c) / 18;
     const body = {
-      name, half, mass: kind.mass, invMass: 1 / kind.mass, invInertia: 1 / inertia,
+      name, half, mass, invMass: 1 / mass, invInertia: 1 / inertia,
       position: position.clone(), velocity: velocity?.clone() ?? new THREE.Vector3(), angular: spin?.clone() ?? new THREE.Vector3(),
       quaternion: quaternion?.clone() ?? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI * 2),
-      sleeping: !velocity, still: 0, age: 0, life, heat: name === 'chunk' ? 1 : 0, radius: Math.min(half.x, half.y, half.z) * 1.1 + 0.02,
+      sleeping: !velocity, still: 0, age: 0, life, heat: name === 'chunk' ? (temperature ?? 1) : 0, radius: Math.min(half.x, half.y, half.z) * 1.1 + 0.02,
     };
     bodies.push(body);
     entry.list.push(body);
@@ -108,14 +122,29 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
       body.still = 0;
     }
   }
-  /** Burning chunks flung out of the blast. */
+  /** Dark torn fragments fly mostly outwards, with a few short rising arcs. */
   function fragments(at, count = 14) {
+    const lobeCount = Math.max(3, Math.min(6, Math.round(count / 4))), orientation = random() * Math.PI * 2;
+    // Jittered sectors keep the impulse broad, including the near side of the
+    // camera, without the perfectly equal spokes of a firework.
+    const lobes = Array.from({ length: lobeCount }, (_, index) => ({
+      theta: orientation + index / lobeCount * Math.PI * 2 + (random() - 0.5) * 0.35,
+      rise: 0.12 + random() ** 1.4 * 0.28,
+    }));
     for (let i = 0; i < count; i++) {
-      const theta = random() * Math.PI * 2, rise = 0.35 + random() * 0.6, speed = 5 + random() * 9;
+      const lobe = lobes[i % lobes.length];
+      const theta = lobe.theta + (random() - 0.5) * 0.45, rise = Math.max(0.08, lobe.rise + (random() - 0.5) * 0.12);
+      const large = i % 7 === 0, extent = large ? 1.65 + random() * 0.65 : 0.45 + random() ** 1.5 * 0.85;
+      const speed = (large ? 3.8 : 4.4) + random() ** 1.2 * (large ? 3.5 : 5.5);
       const velocity = new THREE.Vector3(Math.cos(theta) * (1 - rise * 0.6), rise, Math.sin(theta) * (1 - rise * 0.6)).normalize().multiplyScalar(speed);
       const spin = new THREE.Vector3(random() - 0.5, random() - 0.5, random() - 0.5).multiplyScalar(30);
       const name = i % 4 === 3 ? 'part' : 'chunk';
-      add(name, at.clone().add(temp.set((random() - 0.5) * 0.5, 0.25 + random() * 0.4, (random() - 0.5) * 0.5)), { velocity, spin, life: 12 + random() * 6, quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(random() * 6, random() * 6, random() * 6)) });
+      add(name, at.clone().add(temp.set((random() - 0.5) * 0.4, 0.22 + random() * 0.23, (random() - 0.5) * 0.4)), {
+        velocity, spin, life: 12 + random() * 6,
+        scale: new THREE.Vector3(extent * (0.7 + random() * 0.6), extent * (0.6 + random() * 0.7), extent * (0.8 + random() * 0.5)),
+        temperature: random() < 0.22 ? 0.65 + random() * 0.25 : 0.04 + random() * 0.2,
+        quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(random() * 6, random() * 6, random() * 6)),
+      });
     }
   }
   /** A foot (or a body) going through at `at` with `velocity` nudges what lies there. */
@@ -254,6 +283,7 @@ export function createDebris(scene, { lab = null, random = Math.random, capacity
   }
   function clear() {
     bodies.length = 0;
+    accumulator = 0;
     for (const entry of Object.values(meshes)) entry.list.length = 0;
     render();
   }

@@ -21,6 +21,12 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const position = new Float32Array(MAX * 3), velocity = new Float32Array(MAX * 3);
   const heat = new Float32Array(MAX), cooling = new Float32Array(MAX), size = new Float32Array(MAX);
   const kind = new Uint8Array(MAX), alive = new Uint8Array(MAX), resting = new Uint8Array(MAX), seed = new Float32Array(MAX);
+  // Saber-blue sparks (from a parry) glow blue-white instead of white-orange.
+  const blue = new Uint8Array(MAX);
+  // Blast particles share the bounded pool, but have their own launch timing
+  // and exposure length. Saber cuts retain their original timing and trails.
+  const explosive = new Uint8Array(MAX);
+  const launchDelay = new Float32Array(MAX), age = new Float32Array(MAX), exposure = new Float32Array(MAX);
 
   // Round, soft-edged beads (points) and velocity streaks (lines).
   const beadGeometry = new THREE.BufferGeometry();
@@ -56,7 +62,16 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const streaks = new THREE.LineSegments(streakGeometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
   streaks.name = 'Spark streaks';
   streaks.frustumCulled = false;
-  scene.add(beads, streaks);
+  // Two extra segments complete a curved, fading trail behind a blast spark.
+  // The gaps suggest incandescent material breaking off a fast fragment.
+  const trailGeometry = new THREE.BufferGeometry();
+  const trailPositions = new Float32Array(MAX * 12), trailColors = new Float32Array(MAX * 12);
+  trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3).setUsage(THREE.DynamicDrawUsage));
+  trailGeometry.setAttribute('color', new THREE.BufferAttribute(trailColors, 3).setUsage(THREE.DynamicDrawUsage));
+  const trails = new THREE.LineSegments(trailGeometry, streaks.material);
+  trails.name = 'Explosion fragment trails';
+  trails.frustumCulled = false;
+  scene.add(beads, streaks, trails);
 
   const lights = [0, 1].map(() => {
     const light = new THREE.PointLight(0xff8a3a, 0, 3.2, 1.8);
@@ -116,17 +131,30 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     if (t > 0.15) return out.setRGB(2.2, 0.55, 0.08).lerp(color.setRGB(0.7, 0.08, 0.02), (0.45 - t) / 0.3);
     return out.setRGB(0.7, 0.08, 0.02).multiplyScalar(Math.max(0, t / 0.15));
   }
+  function blastIncandescence(t, out) {
+    // The fireball supplies the white flash. Its airborne fragments read as
+    // saturated orange even through bloom; only their tiny hottest heads
+    // become pale. Sharing the saber's broad white/yellow ramp washed out
+    // the entire spray at the peak of the explosion.
+    if (t > 0.78) return out.setRGB(3.5, 0.46, 0.012).lerp(color.setRGB(3.9, 0.85, 0.045), (t - 0.78) / 0.22);
+    if (t > 0.32) return out.setRGB(2.8, 0.24, 0.004).lerp(color.setRGB(3.5, 0.46, 0.012), (t - 0.32) / 0.46);
+    return out.setRGB(2.8, 0.24, 0.004).multiplyScalar(Math.max(0, t / 0.32));
+  }
   const glowColor = new THREE.Color();
 
-  function emit(at, v, type, temperature, rate, pixels) {
+  function emit(at, v, type, temperature, rate, pixels, saber = 0) {
     const i = cursor;
     cursor = (cursor + 1) % MAX;
     at.toArray(position, i * 3);
     v.toArray(velocity, i * 3);
+    blue[i] = saber;
+    explosive[i] = 0; launchDelay[i] = 0; age[i] = 0; exposure[i] = 0;
     kind[i] = type; heat[i] = temperature; cooling[i] = rate; size[i] = pixels; alive[i] = 1; resting[i] = 0; seed[i] = random() * 100;
+    return i;
   }
   /** A burst along the blade's motion, fanned across the cut plane. */
-  function sparks(at, direction, normal, { count = 40, speed = 4 } = {}) {
+  /** saber: share of the sparks that take the blade's blue. */
+  function sparks(at, direction, normal, { count = 40, speed = 4, saber = 0 } = {}) {
     const v = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
@@ -139,28 +167,51 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       v.y += drop ? 0.2 + random() * 0.6 : 0.6 + random() * 2;
       // Staggered along their paths, so the burst never piles up in one blinding point.
       start.copy(at).addScaledVector(v, random() * 0.03);
-      emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6);
+      emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6, !drop && random() < saber ? 1 : 0);
     }
   }
   /**
-   * An explosion's spray: sparks shot out in every direction — mostly outwards
-   * and up, a few skimming the floor — long fast streaks among them, drops of
-   * molten metal, and embers carried up on the heat to drift and die out.
+   * An explosion tears into uneven jets. A few hot leaders draw long trails;
+   * smaller, cooler splinters follow the same low lobes, with dark space
+   * between. The whole impulse launches in 70 ms, spreading over the floor.
    */
   function blast(at, { sparks: count = 220, embers = 110, speed = 14 } = {}) {
     const v = new THREE.Vector3();
+    const jetCount = Math.min(14, Math.max(5, Math.round(Math.sqrt(count) * 0.7)));
+    const orientation = random() * Math.PI * 2;
+    const jets = Array.from({ length: jetCount }, (_, jetIndex) => {
+      const theta = orientation + jetIndex / jetCount * Math.PI * 2 + (random() - 0.5) * 0.5;
+      const rise = 0.06 + random() ** 1.7 * 0.36;
+      const flat = Math.sqrt(1 - rise * rise);
+      return { direction: new THREE.Vector3(Math.cos(theta) * flat, rise, Math.sin(theta) * flat), speed: 0.6 + random() * 0.6, delay: random() * 0.018 };
+    });
     for (let i = 0; i < count; i++) {
-      const theta = random() * Math.PI * 2, rise = 0.08 + random() ** 0.8 * 0.95, flat = Math.sqrt(1 - Math.min(0.98, rise * rise));
-      const pace = speed * (0.3 + random() ** 1.6 * 1.1);
-      v.set(Math.cos(theta) * flat, rise, Math.sin(theta) * flat).multiplyScalar(pace);
-      start.copy(at).add(point.set((random() - 0.5) * 0.4, random() * 0.35, (random() - 0.5) * 0.4));
-      const drop = i % 5 === 4;
-      emit(start, v, drop ? DROP : SPARK, 0.8 + random() * 0.18, drop ? 0.18 + random() * 0.1 : 0.2 + random() * 0.32, drop ? 2.6 + random() * 0.8 : 1.6 + random() * 0.8);
+      const jet = jets[i % jetCount], leader = i < jetCount, scatter = !leader && random() < 0.24;
+      const spread = leader ? 0.035 : scatter ? 0.55 : 0.12;
+      v.copy(jet.direction).add(point.set((random() - 0.5) * spread, (random() - 0.5) * spread * 0.35, (random() - 0.5) * spread));
+      v.y = Math.max(0.035, v.y);
+      const pace = speed * jet.speed * (leader ? 0.95 + random() * 0.24 : 0.35 + random() ** 0.8 * 0.64);
+      v.normalize().multiplyScalar(pace);
+      start.copy(at).addScaledVector(jet.direction, 0.06 + random() * 0.18)
+        .add(point.set((random() - 0.5) * 0.13, random() * 0.08, (random() - 0.5) * 0.13));
+      const drop = !leader && random() < 0.12;
+      const index = emit(start, v, drop ? DROP : SPARK,
+        leader ? 0.94 + random() * 0.05 : 0.48 + random() * 0.46,
+        leader ? 0.5 + random() * 0.3 : drop ? 0.24 + random() * 0.2 : 0.62 + random() * 0.55,
+        leader ? 2 + random() * 0.8 : drop ? 1.8 + random() * 1.1 : 1 + random() * 0.9);
+      explosive[index] = 1;
+      launchDelay[index] = jet.delay + (leader ? 0 : random() * 0.05);
+      exposure[index] = leader ? 0.085 + random() * 0.055 : 0.007 + random() ** 2 * 0.035;
     }
     for (let i = 0; i < embers; i++) {
-      v.set((random() - 0.5) * 3, 1.2 + random() * 3.2, (random() - 0.5) * 3);
-      start.copy(at).add(point.set((random() - 0.5) * 1.6, 0.2 + random() * 1.2, (random() - 0.5) * 1.6));
-      emit(start, v, EMBER, 0.62 + random() * 0.2, 0.16 + random() * 0.2, 1.5 + random() * 0.9);
+      const jet = jets[Math.floor(random() * jetCount)], spread = random() ** 0.6;
+      v.copy(jet.direction).multiplyScalar(1.2 + random() * 2.4);
+      v.y += 0.12 + random() * 0.45;
+      start.copy(at).addScaledVector(jet.direction, spread * 0.35)
+        .add(point.set((random() - 0.5) * 0.2, 0.05 + random() * 0.22, (random() - 0.5) * 0.2));
+      const index = emit(start, v, EMBER, 0.24 + random() ** 1.4 * 0.55, 0.22 + random() * 0.35, 0.8 + random() ** 2 * 1.7);
+      explosive[index] = 1;
+      launchDelay[index] = 0.012 + random() * 0.055;
     }
   }
   /** The impact lights its surroundings: white at once, cooling to orange as it fades. */
@@ -278,21 +329,33 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
 
     for (let i = 0; i < MAX; i++) {
       const o = i * 3, l = i * 6;
-      if (!alive[i]) {
+      const tail = i * 12;
+      trailColors.fill(0, tail, tail + 12);
+      let step = dt;
+      if (alive[i] && launchDelay[i] > 0) {
+        step = Math.max(0, dt - launchDelay[i]);
+        launchDelay[i] = Math.max(0, launchDelay[i] - dt);
+      }
+      if (!alive[i] || (launchDelay[i] > 0 && step === 0)) {
         beadSizes[i] = 0;
         beadColors[o] = beadColors[o + 1] = beadColors[o + 2] = 0;
         streakColors.fill(0, l, l + 6);
         continue;
       }
+      age[i] += step;
       const type = kind[i];
       // Air: drag, and gravity (embers float on the heat instead).
-      const drag = Math.exp(-(type === EMBER ? 1.5 : type === DROP ? 0.4 : 1.1) * dt);
+      const air = explosive[i]
+        ? (type === EMBER ? 1.1 : type === DROP ? 0.45 : 1.15 + (seed[i] % 1) * 1.8)
+        : (type === EMBER ? 1.5 : type === DROP ? 0.4 : 1.1);
+      const drag = Math.exp(-air * step);
       velocity[o] *= drag; velocity[o + 1] *= drag; velocity[o + 2] *= drag;
       if (type === EMBER) {
-        velocity[o] += Math.sin(seed[i] + heat[i] * 20) * 0.4 * dt;
-        velocity[o + 2] += Math.cos(seed[i] * 1.3 + heat[i] * 17) * 0.4 * dt;
-      } else if (!resting[i]) velocity[o + 1] -= 9.8 * dt;
-      position[o] += velocity[o] * dt; position[o + 1] += velocity[o + 1] * dt; position[o + 2] += velocity[o + 2] * dt;
+        velocity[o] += Math.sin(seed[i] + heat[i] * 20) * 0.4 * step;
+        velocity[o + 2] += Math.cos(seed[i] * 1.3 + heat[i] * 17) * 0.4 * step;
+        if (explosive[i]) velocity[o + 1] += Math.max(-0.7, 0.45 - age[i] * 0.65) * step;
+      } else if (!resting[i]) velocity[o + 1] -= 9.8 * step;
+      position[o] += velocity[o] * step; position[o + 1] += velocity[o + 1] * step; position[o + 2] += velocity[o + 2] * step;
       // Floor: bounce with losses, then slide to a stop and lie there.
       if (type !== EMBER && position[o + 1] < 0.006) {
         position[o + 1] = 0.006;
@@ -302,21 +365,32 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
         } else {
           velocity[o + 1] = 0;
           resting[i] = 1;
-          const slide = Math.exp(-5 * dt);
+          const slide = Math.exp(-5 * step);
           velocity[o] *= slide; velocity[o + 2] *= slide;
         }
       }
       // Cooling: slower once lying on the floor, so they linger.
-      heat[i] -= cooling[i] * dt * (resting[i] ? 0.75 : 1);
-      if (heat[i] <= 0) { alive[i] = 0; continue; }
-      incandescence(heat[i], glowColor);
+      heat[i] -= cooling[i] * step * (resting[i] ? 0.75 : 1);
+      if (heat[i] <= 0) {
+        alive[i] = 0;
+        beadSizes[i] = 0;
+        beadColors[o] = beadColors[o + 1] = beadColors[o + 2] = 0;
+        streakColors.fill(0, l, l + 6);
+        continue;
+      }
+      if (blue[i]) glowColor.setRGB(0.9 + heat[i] * 1.4, 1.3 + heat[i] * 1.2, 2.6 + heat[i] * 0.6).multiplyScalar(Math.min(1, heat[i] * 2.2));
+      else if (explosive[i]) blastIncandescence(heat[i], glowColor);
+      else incandescence(heat[i], glowColor);
       const flicker = type === EMBER ? 0.75 + 0.25 * Math.sin(seed[i] * 7 + heat[i] * 60) : 1;
       beadPositions[o] = position[o]; beadPositions[o + 1] = position[o + 1]; beadPositions[o + 2] = position[o + 2];
       beadColors[o] = glowColor.r * flicker; beadColors[o + 1] = glowColor.g * flicker; beadColors[o + 2] = glowColor.b * flicker;
+      if (explosive[i] && type === SPARK && exposure[i] > 0.07 && heat[i] > 0.62) {
+        beadColors[o] = 4.1; beadColors[o + 1] = 2.4; beadColors[o + 2] = 1.1;
+      }
       beadSizes[i] = size[i] * (0.6 + 0.4 * Math.min(1, heat[i] * 2));
       // A fast spark is a streak along its path: bright head, fading tail.
       const speed = Math.hypot(velocity[o], velocity[o + 1], velocity[o + 2]);
-      const stretch = type === SPARK && speed > 1.2 ? 0.035 : 0;
+      const stretch = type === SPARK && speed > 1.2 ? (explosive[i] ? Math.min(exposure[i], age[i]) / 3 : 0.035) : 0;
       streakPositions[l] = position[o]; streakPositions[l + 1] = position[o + 1]; streakPositions[l + 2] = position[o + 2];
       streakPositions[l + 3] = position[o] - velocity[o] * stretch;
       streakPositions[l + 4] = position[o + 1] - velocity[o + 1] * stretch;
@@ -324,21 +398,51 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       const strength = stretch ? 1 : 0;
       streakColors[l] = glowColor.r * strength; streakColors[l + 1] = glowColor.g * strength; streakColors[l + 2] = glowColor.b * strength;
       streakColors[l + 3] = glowColor.r * 0.2 * strength; streakColors[l + 4] = glowColor.g * 0.1 * strength; streakColors[l + 5] = glowColor.b * 0.05 * strength;
+      if (explosive[i] && stretch && !resting[i]) {
+        // Extrapolate the brief exposure backwards along the ballistic arc.
+        // A bright leader, interrupted orange body and dim red tail, rather
+        // than a long uniformly bright straight line.
+        streakPositions[l + 4] -= 4.9 * stretch * stretch;
+        streakColors[l + 3] = glowColor.r * 0.95;
+        streakColors[l + 4] = glowColor.g * 0.86;
+        streakColors[l + 5] = glowColor.b * 0.5;
+        for (let segment = 0; segment < 2; segment++) {
+          const offset = tail + segment * 6;
+          for (let end = 0; end < 2; end++) {
+            const t = stretch * (segment + 1 + (end ? 0.88 : 0.08));
+            const p = offset + end * 3;
+            trailPositions[p] = position[o] - velocity[o] * t;
+            trailPositions[p + 1] = Math.max(0.008, position[o + 1] - velocity[o + 1] * t - 4.9 * t * t);
+            trailPositions[p + 2] = position[o + 2] - velocity[o + 2] * t;
+            const fade = (1 - t / (stretch * 3)) ** 0.8;
+            trailColors[p] = glowColor.r * fade;
+            trailColors[p + 1] = glowColor.g * fade * (0.8 - segment * 0.16);
+            trailColors[p + 2] = glowColor.b * fade * 0.2;
+          }
+        }
+      }
       if (stretch) beadSizes[i] *= 0.7;
     }
-    for (const attribute of [beadGeometry.attributes.position, beadGeometry.attributes.glow, beadGeometry.attributes.size, streakGeometry.attributes.position, streakGeometry.attributes.color]) attribute.needsUpdate = true;
+    for (const attribute of [beadGeometry.attributes.position, beadGeometry.attributes.glow, beadGeometry.attributes.size, streakGeometry.attributes.position, streakGeometry.attributes.color, trailGeometry.attributes.position, trailGeometry.attributes.color]) attribute.needsUpdate = true;
   }
   function clear() {
-    alive.fill(0);
+    // Scrubbing starts from the same empty pool, including unlaunched heads,
+    // tail buffers and transient lights. The caller owns/reseeds its RNG.
+    for (const array of [position, velocity, heat, cooling, size, kind, alive, resting, seed, blue, explosive, launchDelay, age, exposure,
+      beadPositions, beadColors, beadSizes, streakPositions, streakColors, trailPositions, trailColors]) array.fill(0);
+    cursor = nextLight = nextFlare = nextRing = nextWave = 0;
     smoulders.length = 0;
     glows.length = 0;
     tweens.clear();
+    for (const slot of lights) { slot.light.intensity = 0; slot.tween = null; }
+    for (const slot of flareSlots) { slot.sprite.visible = false; slot.tween = null; }
+    for (const slot of [...ringSlots, ...waveSlots]) { slot.mesh.visible = false; slot.tween = null; }
     update(0);
   }
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
   return {
-    points: beads, beads, streaks, sparks, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
+    points: beads, beads, streaks, trails, sparks, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
     /** Flares and rings currently shown. */
     get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },

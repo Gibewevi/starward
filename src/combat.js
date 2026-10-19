@@ -324,6 +324,22 @@ export const MOVES = {
       READY(1),
     ],
   },
+  // LT and B held, a trooper before him: the blade drawn back, both hands on
+  // the hilt, driven through his chest; held there, a little raised, as long
+  // as LT is (the sustain window repeats); then pulled out and down.
+  impale: {
+    role: ['impale'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 1.3, buffer: 1, chain: 2, active: [0.14, 0.24], trail: [0.08, 0.26],
+    drive: [[0.1, 0.2, 2.6]], impact: [0.18, 0.55], sustain: [0.3, 0.62],
+    keys: [
+      key(0, [-0.26, 1.0, 0.08], [-0.3, 0.3, 0.9], { left: [0.12, 1.12, 0.45], yaw: -0.2, crouch: 0.6 }),
+      key(0.1, [-0.2, 1.03, -0.12], [-0.06, 0.06, 1], { grip: 0.5, left: [0.1, 1.04, -0.02], yaw: -0.6, pitch: -0.04, crouch: 0.85 }),
+      key(0.18, [-0.04, 1.06, 0.52], [0, 0.06, 1], { grip: 0.85, left: [0.04, 1.04, 0.42], yaw: 0.28, pitch: 0.24, crouch: 1.2 }),
+      key(0.3, [-0.05, 1.12, 0.46], [0, 0.2, 0.98], { grip: 0.9, left: [0.03, 1.1, 0.38], yaw: 0.22, pitch: 0.14, crouch: 1.05 }),
+      key(0.62, [-0.05, 1.12, 0.46], [0, 0.2, 0.98], { grip: 0.9, left: [0.03, 1.1, 0.38], yaw: 0.22, pitch: 0.14, crouch: 1.05 }),
+      key(0.76, [-0.14, 1.0, 0.3], [-0.4, -0.25, 0.88], { grip: 0.3, left: [0.24, 0.98, 0.12], yaw: -0.15, pitch: 0.06, crouch: 0.85 }),
+      FRONT_LOW(1, { grip: 0 }),
+    ],
+  },
   // Not a strike: the twirl that accompanies igniting the blade.
   draw: {
     role: ['flourish'], from: ['R', 'L', 'F'], to: 'F', duration: 0.62, buffer: 0, chain: 0, active: [2, 2], trail: [0.02, 0.78], free: true,
@@ -425,6 +441,7 @@ export class CombatController {
   }
   reset() {
     this.action = null;
+    this.pinned = false;
     this.time = 0;
     this.hits = 0;
     this.length = 0;
@@ -510,7 +527,12 @@ export class CombatController {
   deflect(side = null) {
     if (this.action?.power) return false;
     const back = side === 'back';
-    if (this.action?.role.includes('parry') && (this.action.name === 'parryBack') === back && this.time / this.action.duration < 0.45) return true;
+    if (this.action?.role.includes('parry') && (this.action.name === 'parryBack') === back) {
+      const done = this.time / this.action.duration;
+      if (done < 0.45) return true;
+      // A burst from behind: the blade stays down his back for the next one.
+      if (back && done < 0.75) { this.time = 0.4 * this.action.duration; return true; }
+    }
     const name = back ? 'parryBack' : side === 'left' ? 'parryLeft' : side === 'right' ? 'parryRight' : side === 'high' ? 'parryHigh'
       : this.lastParry === 'parryLeft' ? 'parryRight' : 'parryLeft';
     this.lastParry = name;
@@ -519,6 +541,17 @@ export class CombatController {
     return true;
   }
   takeForce() { const name = this.fired; this.fired = null; return name; }
+  /** LT and B held, a trooper before him: the blade goes through him, and stays while pinned. */
+  impale() {
+    this.interrupt();
+    this.start('impale');
+    this.pinned = true;
+    return true;
+  }
+  /** LT let go: the blade comes out (the move plays on to its end). */
+  unpin() { this.pinned = false; }
+  /** Holding the blade in a body (the thrust has gone in, the hold goes on). */
+  get impaling() { return this.action?.name === 'impale' && this.pinned && this.time / this.action.duration >= this.action.sustain[0] - 0.12; }
   /** The ignition twirl; it never interrupts a strike or the guard. */
   flourish() {
     if (this.action || this.guard > 0.3) return false;
@@ -527,6 +560,7 @@ export class CombatController {
   }
   start(name) {
     const move = MOVES[name];
+    if (name !== 'impale') this.pinned = false;
     copyPose(this.fromPose, this.lastPose);
     this.blendFrom = this.output.weight > 0.5 ? 1 : 0;
     // Each strike differs a little: tempo, twist and reach vary. FEEL sets the pace.
@@ -555,12 +589,14 @@ export class CombatController {
     if (this.action) {
       const action = this.action;
       this.time += dt;
-      const t = this.time / action.duration;
-      if (this.queued && t >= action.chain && !action.role.includes('finisher')) {
+      // A held move (the impale) waits in its sustain window while pinned.
+      if (action.sustain && this.pinned && this.time / action.duration > action.sustain[1]) this.time = action.sustain[0] * action.duration;
+      const t = this.time / action.duration, held = action.sustain && this.pinned;
+      if (this.queued && !held && t >= action.chain && !action.role.includes('finisher')) {
         if (!action.utility) this.side = action.to;
         if (this.hits === 0) this.sequence++;
         this.start(this.choose({ speed }));
-      } else if (guard && (action.free || t >= action.active[1])) {
+      } else if (guard && !held && (action.free || t >= action.active[1])) {
         this.finish();
       } else if (t >= 1) {
         this.finish();
@@ -618,6 +654,8 @@ export class CombatController {
     out.inputScale = striking ? (this.action.utility ? 0.5 : 0.15) : 1;
     out.turnScale = striking ? 0 : this.guard > 0.5 ? 0.6 : 1;
     out.maxSpeed = striking ? Infinity : this.guard > 0.1 ? GUARD_SPEED + (1 - this.guard) * 3 : this.force > 0.1 ? 2.8 : Infinity;
+    // A body on the blade: he can turn with it and shuffle, no more.
+    if (this.impaling) { out.inputScale = 0.3; out.turnScale = 0.35; out.maxSpeed = 0.8; }
     out.engaged = Boolean(this.action) || this.guard > 0.1 || this.force > 0.1;
     return out;
   }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Starward — Atelier d’explosion</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,Segoe UI,Arial,sans-serif;background:#090e16;color:#e1e6ee}
+    *{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button,select{color:inherit;background:#1a2432;border:1px solid #334153;border-radius:6px;padding:9px 14px}button{cursor:pointer}button:hover{background:#29394c}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid #ffb56c;outline-offset:4px}button:disabled,fieldset:disabled{opacity:.5;cursor:wait}
+    header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 28px;border-bottom:1px solid #27313f}h1{font-size:13px;font-weight:600;letter-spacing:.17em;margin:0}header a{font-size:13px;color:#b8c7d8;text-decoration:none}main{max-width:1540px;margin:auto;padding:20px 28px 30px}.stage{position:relative;width:100%;height:clamp(360px,64vh,760px);overflow:hidden;border:1px solid #27313f;border-radius:10px;background:#101722}canvas{display:block;width:100%;height:100%;image-rendering:pixelated}.stamp{position:absolute;top:18px;left:19px;font-size:11px;letter-spacing:.13em;color:#a6b3c2;pointer-events:none}.time{position:absolute;right:18px;bottom:18px;font-size:13px;font-variant-numeric:tabular-nums;background:#0b111bd9;padding:8px 12px;border:1px solid #39404c;border-radius:5px}.notice{position:absolute;inset:0;display:grid;place-content:center;padding:30px;text-align:center;background:#0d1522d9;font-size:14px;line-height:1.7}.notice[hidden]{display:none}fieldset{padding:0;border:0;margin:18px 0 0}.transport{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.primary{background:#b6491e;border-color:#d9743e;color:#fff}.primary:hover{background:#ce5a27}.spacer{flex:1}.control{display:flex;align-items:center;gap:8px;color:#b4c0cf;font-size:12px}.control select{padding:8px 10px}.timeline{display:flex;align-items:center;gap:14px;margin-top:18px;font-size:12px;color:#a4b3c6}.timeline input{flex:1;accent-color:#e78b49}.phases{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.phases button{font-size:12px;padding:7px 12px;background:transparent;color:#b4c0cf}.phases button:hover{background:#1b2735}.footer{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-top:18px}.footer p{color:#7f91a7;font-size:12px;line-height:1.6;margin:0;max-width:620px}.reference{max-width:480px;flex:0 1 380px}.reference summary{cursor:pointer;color:#c1ccda;font-size:12px;text-align:right}.reference img{display:block;width:100%;margin-top:12px;border:1px solid #303c4d;border-radius:5px}.reference figcaption{font-size:11px;color:#8190a2;margin-top:7px}.reference figure{margin:0}
+    @media(max-width:700px){header{padding:18px 16px}main{padding:14px 12px}.stage{height:57vh;min-height:340px}.spacer{display:none}.transport{gap:8px}.footer{display:block}.reference{margin-top:20px;max-width:none}.reference summary{text-align:left}button{padding:9px 11px}}
+  </style>
+</head>
+<body>
+  <header><h1>STARWARD / EXPLOSION</h1><a href="/">Jouer ↗</a></header>
+  <main>
+    <div class="stage" id="stage">
+      <canvas id="view" aria-label="Explosion dans le laboratoire, vue isométrique"></canvas>
+      <span class="stamp">ATELIER VISUEL</span>
+      <output class="time" id="time" aria-live="off">0,00 s</output>
+      <div class="notice" id="notice" role="status">Chargement de l’explosion…</div>
+    </div>
+    <fieldset id="controls" disabled aria-label="Lecture de l’explosion">
+      <div class="transport">
+        <button type="button" class="primary" id="replay">Déclencher l’explosion</button>
+        <button type="button" id="pause">Lire</button>
+        <label class="control"><input id="loop" type="checkbox" /> En boucle</label>
+        <span class="spacer"></span>
+        <label class="control" for="speed">Vitesse <select id="speed"><option value="1">Normale</option><option value="0.5">½ — ralenti</option><option value="0.25">¼ — détail</option></select></label>
+        <label class="control" for="pixels">Pixels <select id="pixels"><option value="1">1× — détail</option><option value="2" selected>2×</option><option value="4">4× — jeu</option></select></label>
+        <label class="control" for="framing">Vue <select id="framing"><option value="close" selected>Gros plan</option><option value="wide">Ensemble</option></select></label>
+        <label class="control"><input id="scale" type="checkbox" checked /> Repère de taille</label>
+      </div>
+      <div class="timeline"><label for="scrub">Moment</label><span>0 s</span><input id="scrub" type="range" min="0" max="6" step="0.008333333" value="0.38" aria-label="Moment de l’explosion" /><span id="end">6 s</span></div>
+      <div class="phases" aria-label="Moments clés"><button type="button" data-time="0.06">Éclair initial</button><button type="button" data-time="0.38">Boule de feu</button><button type="button" data-time="1.2">Fumée</button><button type="button" data-time="3.5">Retombées</button></div>
+    </fieldset>
+    <div class="footer">
+      <p>La même explosion que dans le jeu : feu, fumée, projections, lumière et reflets. Déplacez le curseur pour examiner chaque instant. Chaque lecture rejoue les mêmes projections.</p>
+      <details class="reference"><summary>Comparer avec votre image</summary><figure><img src="/references/explosion.png" alt="Image de référence : explosion orange, fumée dense et projections sur un sol métallique" /><figcaption>Image de référence fournie.</figcaption></figure></details>
+    </div>
+  </main>
+  <script type="module" src="/src/explosion-studio.js"></script>
+</body>
+</html>

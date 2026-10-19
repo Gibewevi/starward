@@ -22,7 +22,8 @@ import { createBlasters, closestSegments } from './blasters.js';
 import { createAlerts } from './alerts.js';
 import { createSquadMind } from './trooper-ai.js';
 import { returnDirection } from './deflect.js';
-import { createExplosions } from './explosions.js';
+import { createExplosions, loadExplosionAssets } from './explosions.js';
+import { createScorchMarks } from './scorch-marks.js';
 import { createDebris } from './debris.js';
 import { createGrenades } from './grenades.js';
 import { createHeroRagdoll } from './hero-ragdoll.js';
@@ -122,17 +123,16 @@ function init() {
   const alerts = createAlerts(scene);
   // Grenades and explosions. The fireball is a Blender flipbook (public/fx),
   // laid over the iso view; everything around it is live.
-  const explosions = createExplosions(scene);
+  // Burns that stay: blasts and bolts mark the floor and the crates for good.
+  const marks = createScorchMarks(scene, { lab });
+  const explosions = createExplosions(scene, { marks, slots: 5 });
   camera.layers.enable(1);
-  new THREE.TextureLoader().load('fx/explosion.png', texture => {
-    Object.assign(texture, { colorSpace: THREE.SRGBColorSpace, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
-    fetch('fx/explosion.json').then(response => response.json()).then(data => explosions.configure({ texture, data })).catch(() => explosions.configure({ texture }));
-  });
+  loadExplosionAssets(explosions).catch(error => console.error('Chargement de l’explosion interrompu :', error));
   const debris = createDebris(scene, { lab });
   debris.scatter();
   const grenades = createGrenades(scene, { lab, reach: FEEL.grenade.reach, onBeep: (grenade, progress) => audio.beep(progress, grenade.position.distanceTo(character.root.position)) });
   const knockdown = createHeroRagdoll(character, { lab });
-  const blasters = createBlasters(scene, { effects, lab });
+  const blasters = createBlasters(scene, { effects, lab, marks });
   const squad = createSquadMind({ troopers, lab, alerts, posts: POSTS, cameraRight: screenRight });
   // What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
   const noises = [];
@@ -165,8 +165,10 @@ function init() {
   }
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
   function resetTrooper() {
+    skewered = thrust = null;
+    combat.unpin();
     for (const trooper of troopers) trooper.reset();
-    effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear();
+    effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear();
     debris.clear(); debris.scatter();
   }
   // Hit stops: at most one per enemy and per attack sequence.
@@ -202,6 +204,89 @@ function init() {
     if (!pullHeld || held.dead) { held.drop(); held = null; return; }
     const point = holdPoint();
     held.hold(point, Math.atan2(motion.x - point.x, motion.z - point.z));
+  }
+  // LT and B held, a trooper before him: the blade goes through him. A quick
+  // tap of B still strikes; held a moment, it runs the trooper through. He
+  // struggles on the blade, dies there, and hangs from it until LT is let go.
+  let thrust = null, skewered = null, gushClock = 0;
+  const bladeAxis = new THREE.Vector3(), wound = new THREE.Vector3();
+  /** The living trooper the blade can reach before him: the one held up by the Force first. */
+  function victim() {
+    if (held && !held.dead && !held.fallen) return held;
+    const trooper = target(FEEL.impale.reach, FEEL.impale.cone);
+    return trooper && !trooper.dead && !trooper.fallen ? trooper : null;
+  }
+  function impaleInput(dt, attackHeld, down) {
+    if (down || skewered) { thrust = null; return; }
+    if (attackPressed && pullHeld && victim()) { thrust = { age: 0 }; attackPressed = false; }
+    if (!thrust) return;
+    thrust.age += dt;
+    if (!attackHeld) { thrust = null; attackPressed = true; return; }
+    if (thrust.age < FEEL.impale.press) return;
+    thrust = null;
+    const trooper = victim();
+    if (!trooper) { attackPressed = true; return; }
+    if (held === trooper) held = null;
+    const at = whereIs(trooper);
+    motion.face(Math.atan2(at.x - motion.x, at.z - motion.z));
+    combat.impale();
+    skewered = { trooper, entered: false, depth: 0.7 };
+  }
+  /** Off the blade: the body drops (a living one dies of it as he falls). */
+  function unskewer() {
+    if (!skewered) return;
+    const { trooper } = skewered;
+    skewered = null;
+    combat.unpin();
+    if (trooper.impaled) trooper.slideOff(bladeAxis.clone().multiplyScalar(0.4).setY(-0.3));
+  }
+  /** Each frame while the thrust goes in and the body is on the blade. */
+  function keepSkewer(dt) {
+    if (!skewered) return;
+    const { trooper } = skewered;
+    bladeAxis.subVectors(bladeTip, bladeBase);
+    const length = bladeAxis.length();
+    if (length < 0.2) { unskewer(); return; }
+    bladeAxis.divideScalar(length);
+    const moving = combat.action?.name === 'impale';
+    if (!skewered.entered) {
+      // The blade goes in as the thrust lands; his chest slides onto it where it passes him.
+      if (!moving || !pullHeld) { skewered = null; combat.unpin(); return; }
+      if (combat.time / combat.action.duration < 0.17) return;
+      const chestAt = whereIs(trooper).setY(bladeBase.y);
+      skewered.depth = THREE.MathUtils.clamp(chestAt.sub(bladeBase).dot(bladeAxis), 0.45, length * 0.8);
+      wound.copy(bladeBase).addScaledVector(bladeAxis, skewered.depth);
+      if (!trooper.impale(wound, motion.heading)) { skewered = null; combat.unpin(); return; }
+      skewered.entered = true;
+      // The gush: sparks out of his back along the blade, back out of the
+      // entry towards the hero, blade-blue and molten mixed, smoke after.
+      const across = new THREE.Vector3().crossVectors(bladeAxis, UP).normalize();
+      effects.sparks(wound.clone().addScaledVector(bladeAxis, 0.2), bladeAxis.clone().add(UP.clone().multiplyScalar(0.25)).normalize(), across, { count: 46, speed: 5.5, saber: 0.35 });
+      effects.sparks(wound.clone().addScaledVector(bladeAxis, -0.2), bladeAxis.clone().negate().add(UP.clone().multiplyScalar(0.5)).normalize(), across, { count: 22, speed: 3.2, saber: 0.35 });
+      effects.flash(wound, 1.3);
+      effects.burst(wound, { normal: bladeAxis.clone().negate(), power: 1 });
+      if (trooper.parts?.torso) effects.smoulder(trooper.parts.torso, 4.5);
+      const [hold, recover] = FEEL.impale.hitStop;
+      stopFor(hold, recover);
+      punch(FEEL.camera.punch * 1.6);
+      shove(bladeAxis, FEEL.camera.kick);
+      impactShake = Math.max(impactShake, 0.22);
+      audio.impact(1);
+      noise(wound, 9, { alarm: true, from: character.root.position, source: trooper });
+      gushClock = 0.06;
+      return;
+    }
+    // LT let go, or the blade taken elsewhere (a power, a blast): the body comes off.
+    if (!pullHeld || !moving || !trooper.impaled) { unskewer(); return; }
+    wound.copy(bladeBase).addScaledVector(bladeAxis, skewered.depth);
+    trooper.skewer(wound, motion.heading);
+    // While he fights, spurts of sparks from the wound, fewer as he weakens.
+    if (!trooper.dead && (gushClock -= dt) <= 0) {
+      gushClock = pick(FEEL.impale.gush);
+      const across = new THREE.Vector3().crossVectors(bladeAxis, UP).normalize();
+      const out = Math.random() < 0.6;
+      effects.sparks(wound.clone().addScaledVector(bladeAxis, out ? 0.2 : -0.2), bladeAxis.clone().multiplyScalar(out ? 1 : -1).add(UP.clone().multiplyScalar(0.4)).normalize(), across, { count: 5 + Math.round(Math.random() * 6), speed: 2.4, saber: 0.3 });
+    }
   }
   function unleash(kind) {
     character.rig.bones.LeftHand.getWorldPosition(leftHand);
@@ -260,10 +345,11 @@ function init() {
       if (closing <= 0) continue;
       const passes = offset.clone().addScaledVector(bolt.velocity, closing / speed).length();
       const reach = Math.max(FEEL.deflect.reach, Math.min(passes, FEEL.deflect.near));
-      if (passes > FEEL.deflect.near || (closing - reach) / speed > FEEL.deflect.react) continue;
-      const local = offset.clone().applyAxisAngle(UP, -motion.heading);
-      combat.deflect(!inFront(bolt.position) ? 'back' : local.x > 0.12 ? 'left' : local.x < -0.12 ? 'right' : bolt.position.y > 1.45 ? 'high' : null);
-      bolt.parried = true;
+      // From behind the blade has further to go (over the shoulder, down his back): it sets off sooner.
+      const local = offset.clone().applyAxisAngle(UP, -motion.heading), back = !inFront(bolt.position);
+      if (passes > FEEL.deflect.near || (closing - reach) / speed > (back ? FEEL.deflect.reactBack : FEEL.deflect.react)) continue;
+      const side = back ? 'back' : local.x > 0.12 ? 'left' : local.x < -0.12 ? 'right' : bolt.position.y > 1.45 ? 'high' : null;
+      if (combat.deflect(side)) bolt.parried = back ? 'back' : 'side';
     }
   }
   /** The blade meets a bolt and sends it back — at an enemy if his precision allows, else somewhere off. */
@@ -284,9 +370,10 @@ function init() {
     if (Math.abs(turn) > 0.45 && Math.abs(turn) < 1.95) motion.face(motion.heading + turn * 0.3);
     train(FEEL.deflect.precision.gain);
     const across = new THREE.Vector3().crossVectors(incoming, UP).normalize();
-    effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([18, 42])), speed: 3.4 });
-    effects.flash(at, 1.2);
-    effects.burst(at, { normal: incoming, power: 0.7, tint: 'red' });
+    // A small spray, blade-blue and molten-yellow mixed.
+    effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([7, 13])), speed: 3, saber: 0.5 });
+    effects.flash(at, 0.8);
+    effects.burst(at, { normal: incoming, power: 0.45, tint: 'red' });
     combat.output.flare = 1;
     stopFor(0.012, 0.035);
     shove(aim, 0.025);
@@ -313,8 +400,15 @@ function init() {
       chest.set(motion.x, 1.05, motion.z);
       // Guarding, the blade takes a bolt coming at him from the front, and any
       // bolt it has gone out to meet (from behind, or passing close by).
+      // From behind, only the blade down his back stops it: where it crosses the
+      // blade, or (the blade being there) before it would reach him.
       const pass = closestSegments(a, end, chest, chest).distance;
-      if (guardUp() && ((inFront(a) && pass < FEEL.deflect.reach) || (bolt.parried && pass < FEEL.deflect.near))) { deflectBolt(bolt, a, end); return 'deflected'; }
+      if (guardUp()) {
+        const front = inFront(a) && bolt.parried !== 'back';
+        const backed = bolt.parried === 'back' && combat.action?.name === 'parryBack' && combat.time / combat.action.duration > 0.22
+          && (closestSegments(a, end, bladeBase, bladeTip).distance < FEEL.deflect.blade || pass < FEEL.deflect.body);
+        if ((front && pass < FEEL.deflect.reach) || (bolt.parried === 'side' && pass < FEEL.deflect.near) || backed) { deflectBolt(bolt, a, end); return 'deflected'; }
+      }
       heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
       const body = closestSegments(a, end, heroFeet, heroHead);
       if (body.distance < 0.26) { burnHero(bolt, body.c1); return 'spent'; }
@@ -377,6 +471,7 @@ function init() {
     const velocity = direction.clone().setY(0).normalize().multiplyScalar(pick(FEEL.blast.speed) * falloff).setY(pick(FEEL.blast.lift) * falloff);
     velocity.x += motion.vx * 0.5;
     velocity.z += motion.vz * 0.5;
+    unskewer();
     combat.reset();
     trail.clear();
     if (held) { held.drop(); held = null; }
@@ -546,6 +641,7 @@ function init() {
       if (down) { attackPressed = parryPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0; }
       // Powers cut any strike short; a parry too; B strikes and chains.
       keepHold();
+      impaleInput(dt, padAttack || keys.has('KeyJ'), down);
       autoParry(guard);
       if (powerPressed) combat.power(powerPressed);
       if (parryPressed) combat.parry();
@@ -557,7 +653,7 @@ function init() {
       // stick at rest turns towards the trooper the hero is facing most.
       const started = combat.takeStart();
       if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
-      if (started && !started.startsWith('parry') && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      if (started && !/^(parry|impale)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       else if (started === 'forcePull' || started === 'forcePush') {
         const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
         if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
@@ -610,13 +706,14 @@ function init() {
         noise(shot.from, 12, { alarm: true, from: character.root.position, source: shot.trooper });
       }
       for (const cue of thoughts.cues) audio.alert(cue.type === 'alert' ? '!' : '?');
+      keepSkewer(sim);
       for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
       collideSquad(troopers);
       // One hit stop per enemy and per strike (a new strike, a new one).
       const strikeKey = `${combat.sequence}:${combat.hits}`;
       if (strikeKey !== stoppedSequence) { stopped.clear(); stoppedSequence = strikeKey; }
       troopers.forEach((trooper, index) => {
-        const struck = saber.extension > 0.6 && bladeReady && !down ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
+        const struck = saber.extension > 0.6 && bladeReady && !down && skewered?.trooper !== trooper ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
         if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
         if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {
@@ -658,7 +755,7 @@ function init() {
       for (const at of grenades.update(sim)) detonate(at);
       explosions.update(sim, camera);
       debris.update(sim);
-      alerts.update(dt, trooper => (trooper.dead ? null : trooper.particle('HT').position), screenRight);
+      alerts.update(dt, trooper => (trooper.dead || trooper.impaled ? null : trooper.particle('HT').position), screenRight);
       effects.update(sim);
       playerPosition.copy(character.root.position);
       lighting.follow(playerPosition);
@@ -687,7 +784,7 @@ function init() {
     if (hudTimer > 0.15) {
       hudTimer = 0;
       const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : knockdown.active ? 'À TERRE' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      stateEl.textContent = paused ? 'EN PAUSE' : knockdown.active ? 'À TERRE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
@@ -710,11 +807,13 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, blasters, troopers, grenades, explosions, debris, knockdown,
+    squad, lab, blasters, troopers, grenades, explosions, debris, knockdown, marks,
     /** For checks: a grenade thrown by trooper `index` (or dropped) at (x, z). */
     grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
     explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },
     set guard(value) { forcedGuard = value; },
+    /** For checks: who is on the blade (null if nobody). */
+    get skewered() { return skewered?.trooper ?? null; },
     getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);

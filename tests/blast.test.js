@@ -7,6 +7,8 @@ import { createSquadMind } from '../src/trooper-ai.js';
 import { createDebris } from '../src/debris.js';
 import { createGrenades } from '../src/grenades.js';
 import { createExplosions } from '../src/explosions.js';
+import { createScorchMarks } from '../src/scorch-marks.js';
+import { createBlasters } from '../src/blasters.js';
 import { createHeroRagdoll } from '../src/hero-ragdoll.js';
 import { createCharacter } from '../src/character.js';
 import { FEEL } from '../src/feel.js';
@@ -76,8 +78,10 @@ test('a grenade lands near its target, bounces, beeps faster and faster, and goe
   assert.ok(again.velocity.x > 5, 'pushed away by the Force');
 });
 
-test('an explosion flashes, rings out over the floor and is gone; it leaves a scorch', () => {
-  const explosions = createExplosions(new THREE.Scene());
+test('an explosion flashes, rings out over the floor and is gone; its burn stays', () => {
+  const scene = new THREE.Scene();
+  const marks = createScorchMarks(scene, { random: seeded(2) });
+  const explosions = createExplosions(scene, { marks });
   const slot = explosions.spawn(new THREE.Vector3(1, 0, 1));
   const camera = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 100);
   camera.position.set(9, 9.2, 11);
@@ -89,7 +93,73 @@ test('an explosion flashes, rings out over the floor and is gone; it leaves a sc
   assert.ok(peak < 6 && light[peak] > 20, 'a blinding flash at once');
   assert.ok(light[40] < light[peak] * 0.3, 'that fades fast');
   assert.equal(explosions.active, 0, 'done');
-  assert.ok(slot.scorch.visible && slot.scorch.material.opacity > 0.3, 'a scorch stays');
+  assert.ok(slot.heat.visible, 'the floor still glows where it burst');
+  for (let i = 0; i < 60 * 60; i++) explosions.update(1 / 60, camera);
+  assert.ok(!slot.heat.visible, 'the glow has cooled');
+  assert.equal(marks.meshes.floor.count, 1, 'the burn is still there a minute later');
+  const burn = new THREE.Matrix4();
+  marks.meshes.floor.getMatrixAt(0, burn);
+  const at = new THREE.Vector3().setFromMatrixPosition(burn), size = new THREE.Vector3().setFromMatrixScale(burn);
+  assert.ok(Math.abs(at.x - 1) < 1e-6 && Math.abs(at.z - 1) < 1e-6 && at.y > 0 && at.y < 0.01, 'on the floor, where it burst');
+  assert.ok(size.x > 1.5 && size.x < 3, `a burn as wide as the blast (${size.x.toFixed(2)} m)`);
+});
+
+test('a blast beside a crate and a barrel blackens their sides from the floor up, on the faces that saw it', () => {
+  const lab = createLab(new THREE.Scene());
+  const marks = createScorchMarks(new THREE.Scene(), { lab, random: seeded(4) });
+  const crate = lab.obstacles.find(box => box.kind === 'crate' && box.min.y === 0);
+  const barrel = lab.obstacles.find(box => box.kind === 'barrel');
+  // In front of the crate's +X face, level with its middle.
+  marks.blast(new THREE.Vector3(crate.max.x + 0.5, 0, crate.centre.z));
+  assert.equal(marks.meshes.floor.count, 1);
+  assert.ok(marks.meshes.walls.count >= 1, 'soot on the crate');
+  const soot = new THREE.Matrix4(), at = new THREE.Vector3(), scale = new THREE.Vector3(), turn = new THREE.Quaternion();
+  marks.meshes.walls.getMatrixAt(0, soot);
+  soot.decompose(at, turn, scale);
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(turn);
+  assert.ok(normal.x > 0.99, 'on the face turned to the blast');
+  assert.ok(Math.abs(at.x - crate.max.x) < 0.03 && at.y === 0, 'standing on the floor, against the face');
+  assert.ok(at.z - scale.x / 2 >= crate.min.z - 1e-6 && at.z + scale.x / 2 <= crate.max.z + 1e-6, 'within the face');
+  assert.ok(scale.y <= crate.max.y - crate.min.y + 1e-6, 'no higher than the crate');
+  // Far from everything: only the floor.
+  const before = marks.meshes.walls.count + marks.meshes.barrels.count;
+  marks.blast(new THREE.Vector3(30, 0, 30));
+  assert.equal(marks.meshes.walls.count + marks.meshes.barrels.count, before);
+  // Next to a barrel: on its curve.
+  marks.blast(new THREE.Vector3(barrel.centre.x, 0, barrel.max.z + 0.4));
+  assert.ok(marks.meshes.barrels.count >= 1, 'soot on the barrel (and on its neighbour)');
+});
+
+test('bolts leave scorches that never fade, on a barrel on its curve; the oldest are recycled at last', () => {
+  const scene = new THREE.Scene();
+  const lab = createLab(scene);
+  const marks = createScorchMarks(scene, { lab, random: seeded(6), limits: { bolts: 8 } });
+  const blasters = createBlasters(scene, { lab, marks, random: seeded(8) });
+  const barrel = lab.obstacles.find(box => box.kind === 'barrel');
+  // At the barrel's box corner: the scorch goes on the round side.
+  const from = new THREE.Vector3(barrel.centre.x + 4, 0.6, barrel.centre.z + 4);
+  blasters.fire(from, new THREE.Vector3(barrel.centre.x, 0.6, barrel.centre.z).sub(from));
+  for (let i = 0; i < 60; i++) blasters.update(1 / 60);
+  assert.equal(marks.meshes.bolts.count, 1, 'a scorch');
+  const mark = new THREE.Matrix4();
+  marks.meshes.bolts.getMatrixAt(0, mark);
+  const at = new THREE.Vector3().setFromMatrixPosition(mark);
+  const radius = (barrel.max.x - barrel.min.x) / 2;
+  assert.ok(Math.abs(Math.hypot(at.x - barrel.centre.x, at.z - barrel.centre.z) - radius) < 0.02, 'on the barrel itself');
+  // Shots into the floor; a minute on, they are all still there.
+  for (let k = 0; k < 5; k++) {
+    blasters.fire(new THREE.Vector3(20 + k, 1, 20), new THREE.Vector3(0, -1, 0.2));
+    for (let i = 0; i < 30; i++) blasters.update(1 / 60);
+  }
+  for (let i = 0; i < 60 * 60; i++) blasters.update(1 / 60);
+  assert.equal(marks.meshes.bolts.count, 6, 'all still there');
+  for (let k = 0; k < 6; k++) {
+    blasters.fire(new THREE.Vector3(-20 - k, 1, -20), new THREE.Vector3(0, -1, 0.2));
+    for (let i = 0; i < 30; i++) blasters.update(1 / 60);
+  }
+  assert.equal(marks.meshes.bolts.count, 8, 'capped: the oldest went');
+  marks.clear();
+  assert.equal(marks.count, 0);
 });
 
 test('a trooper throws a grenade with his left hand, rifle kept in the right; knocked over mid-throw, he drops it', () => {

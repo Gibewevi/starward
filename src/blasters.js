@@ -6,7 +6,8 @@ import { ease } from './tween.js';
  * straight and fast enough to sting, slow enough to see and to deflect. A
  * muzzle flash marks each shot; two red lights ride with the bolts and wash
  * over whatever they pass. A bolt that meets a crate, a barrel or the floor
- * bursts in sparks and leaves a scorch that glows, then cools.
+ * bursts in sparks and leaves a scorch that glows, cools, and stays there
+ * for good (see scorch-marks.js).
  *
  * fire(from, direction) launches one; update(dt, interact) moves them all:
  * interact(bolt, a, b) is asked first about the stretch a → b (the blade,
@@ -16,7 +17,7 @@ import { ease } from './tween.js';
 const UP = new THREE.Vector3(0, 1, 0);
 const LENGTH = 0.85;
 
-export function createBlasters(scene, { effects = null, lab = null, random = Math.random } = {}) {
+export function createBlasters(scene, { effects = null, lab = null, marks = null, random = Math.random } = {}) {
   const coreGeometry = new THREE.CylinderGeometry(0.016, 0.016, LENGTH, 6, 1);
   const glowGeometry = new THREE.CylinderGeometry(0.042, 0.042, LENGTH + 0.08, 8, 1);
   // White-hot core, deep red sheath (brighter red turns orange under the ACES tone mapping).
@@ -60,7 +61,7 @@ export function createBlasters(scene, { effects = null, lab = null, random = Mat
     return { sprite, age: Infinity };
   });
   let nextMuzzle = 0;
-  // Scorches on crates and on the floor.
+  // The scorch's glow on crates and on the floor; the mark itself stays (marks).
   const scorchGeometry = new THREE.CircleGeometry(0.06, 8);
   const scorches = Array.from({ length: 36 }, () => {
     const mesh = new THREE.Mesh(scorchGeometry, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }));
@@ -77,7 +78,8 @@ export function createBlasters(scene, { effects = null, lab = null, random = Mat
   function fire(from, aim, { owner = null, speed = 12 } = {}) {
     const bolt = pool.find(entry => !entry.live) ?? live[0];
     if (bolt.live) remove(bolt);
-    Object.assign(bolt, { live: true, age: 0, life: 3, owner, deflected: false, stretch: 0 });
+    // A recycled bolt starts afresh (not parried, not deflected).
+    Object.assign(bolt, { live: true, age: 0, life: 3, owner, deflected: false, parried: false, stretch: 0 });
     bolt.position.copy(from);
     bolt.velocity.copy(aim).normalize().multiplyScalar(speed);
     bolt.core.material.color.copy(coreColor);
@@ -115,22 +117,24 @@ export function createBlasters(scene, { effects = null, lab = null, random = Mat
     // Fresh out of the muzzle the streak grows to its length.
     bolt.group.scale.set(1, Math.min(1, 0.15 + bolt.stretch), 1);
   }
-  function scorch(at, facing) {
+  function scorch(at, facing, box = null) {
     const entry = scorches[nextScorch];
     nextScorch = (nextScorch + 1) % scorches.length;
     entry.age = 0;
-    entry.mesh.position.copy(at).addScaledVector(facing, 0.004);
+    const surface = marks?.bolt(at, facing, box);
+    if (surface) { at = surface.position; facing = surface.normal; }
+    entry.mesh.position.copy(at).addScaledVector(facing, 0.006);
     entry.mesh.quaternion.setFromUnitVectors(normal.set(0, 0, 1), facing);
     entry.mesh.scale.setScalar(0.7 + random() * 0.6);
     entry.mesh.material.opacity = 1;
     entry.mesh.visible = true;
     effects?.glow(entry.mesh.material, 2.2);
   }
-  function burst(at, facing, along) {
+  function burst(at, facing, along, box = null) {
     effects?.sparks(at, facing.clone().addScaledVector(along, -0.3).normalize(), along, { count: 14 + Math.round(random() * 16), speed: 2.6 });
     effects?.flash(at, 0.7, { color: lightRed });
     effects?.burst(at, { normal: facing, power: 0.35, tint: 'red' });
-    scorch(at, facing);
+    scorch(at, facing, box);
   }
 
   function update(dt, interact = null) {
@@ -146,14 +150,14 @@ export function createBlasters(scene, { effects = null, lab = null, random = Mat
       if (answer === 'deflected') { place(bolt); events.push({ type: 'deflected', bolt, point: bolt.position.clone() }); continue; }
       // Crates and barrels, then the floor.
       const hit = lab?.segmentHit(a, b);
-      let t = hit ? hit.t : Infinity, facing = hit?.normal ?? null;
+      let t = hit ? hit.t : Infinity, facing = hit?.normal ?? null, box = hit?.box ?? null;
       if (b.y < 0 && a.y >= 0) {
         const floor = a.y / Math.max(1e-6, a.y - b.y);
-        if (floor < t) { t = floor; facing = UP.clone(); }
+        if (floor < t) { t = floor; facing = UP.clone(); box = null; }
       }
       if (t <= 1) {
         const at = a.clone().lerp(b, t);
-        burst(at, facing, direction.copy(bolt.velocity).normalize());
+        burst(at, facing, direction.copy(bolt.velocity).normalize(), box);
         events.push({ type: 'impact', point: at, bolt });
         remove(bolt);
         continue;
@@ -182,8 +186,9 @@ export function createBlasters(scene, { effects = null, lab = null, random = Mat
     for (const entry of scorches) {
       if (!entry.mesh.visible) continue;
       entry.age += dt;
-      if (entry.age > 9) entry.mesh.material.opacity = Math.max(0, 1 - (entry.age - 9) / 3);
-      if (entry.age > 12) entry.mesh.visible = false;
+      // Cooled, the glow gives way to the mark (it stays; without marks, so does this).
+      if (marks && entry.age > 2.2) entry.mesh.material.opacity = Math.max(0, 1 - (entry.age - 2.2) / 0.8);
+      if (marks && entry.age > 3) entry.mesh.visible = false;
     }
     return events;
   }

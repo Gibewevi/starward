@@ -316,3 +316,23 @@ test('a bolt from behind: the blade drops down his back to meet it, then he is b
   run(combat, 0.6, { guard: true });
   assert.equal(combat.output.name, 'guard');
 });
+
+test('the impale drives the blade straight ahead, holds it there as long as it is pinned, then pulls it out', () => {
+  const combat = new CombatController({ random: () => 0.4 });
+  combat.update(1 / 60, {});
+  assert.ok(combat.impale());
+  let thrust = null;
+  for (let i = 0; i < 60 * 4; i++) {
+    const out = combat.update(1 / 60, {});
+    if (combat.time / combat.action.duration > 0.2 && !thrust) thrust = { hand: out.hand.clone(), blade: out.blade.clone() };
+  }
+  assert.equal(combat.action?.name, 'impale', 'still on it four seconds later');
+  assert.ok(combat.impaling);
+  assert.ok(thrust.hand.z > 0.4 && thrust.blade.z > 0.95, 'the blade points straight ahead, arm out');
+  const held = combat.update(1 / 60, {});
+  assert.ok(held.inputScale < 0.5 && held.maxSpeed < 1, 'he can only shuffle with a body on the blade');
+  combat.unpin();
+  for (let i = 0; i < 60; i++) combat.update(1 / 60, {});
+  assert.equal(combat.action, null, 'pulled out and back to rest');
+  assert.ok(!combat.impaling);
+});
