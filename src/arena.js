@@ -1,17 +1,16 @@
 import * as THREE from 'three';
-import { createKit, frameOf, glowTexture, blink, RED, AMBER } from './kit.js';
-import { floorStrip } from './lab.js';
+import { createKit, frameOf, glowTexture, createFloorLights, RED, AMBER, WHITE, EMBER } from './kit.js';
 import { deckGeometry } from './stage.js';
 
 /**
  * The room around the lab, after the reference: the deck is closed at the
- * back by two tall walls meeting in a corner — pillars carrying red light
- * columns, consoles with blinking indicators, a window onto a red-lit control
- * room, vents, a great octagonal door, pipes along the top — and open at the
- * front, where a railing runs along the edge of the deck above a lower level.
- * Red strips in the floor along the walls and the edge, grates glowing red
- * from below, worn hazard stripes. The floor lights blink slowly; haze hangs
- * round the light columns.
+ * back by two tall walls meeting in a corner — pillars carrying short light
+ * bars, consoles with blinking indicators, a window onto a dim control room,
+ * vents, a great door with a round boss, pipes along the top — and open at
+ * the front, where a railing runs along the edge of the deck above a lower
+ * level. Sober, as in the reference: gunmetal, warm white light bars and
+ * floor lights, a few grates glowing amber from below, worn hazard edging —
+ * red only as accents (the lights flanking the door, small diodes).
  *
  * Walls, consoles and railings join the lab's obstacles (kinds 'wall' and
  * 'rail'): walkers, bodies, bolts and grenades meet them; no one takes cover
@@ -26,22 +25,24 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
   group.name = 'Room';
   const { minX, maxX, minZ, maxZ, height: H, drop } = ARENA;
   const M = {
-    wall: new THREE.MeshStandardMaterial({ name: 'wall', color: 0x12151a, roughness: 0.62, metalness: 0.6 }),
-    panel: new THREE.MeshStandardMaterial({ name: 'wall panels', color: 0x1b1f26, roughness: 0.45, metalness: 0.72 }),
-    trim: new THREE.MeshStandardMaterial({ name: 'wall trim', color: 0x2d333c, roughness: 0.34, metalness: 0.8 }),
-    cap: new THREE.MeshStandardMaterial({ name: 'bright trim', color: 0x3c434e, roughness: 0.3, metalness: 0.82 }),
+    wall: new THREE.MeshStandardMaterial({ name: 'wall', color: 0x181c22, roughness: 0.6, metalness: 0.55 }),
+    panel: new THREE.MeshStandardMaterial({ name: 'wall panels', color: 0x232830, roughness: 0.46, metalness: 0.62 }),
+    trim: new THREE.MeshStandardMaterial({ name: 'wall trim', color: 0x353c46, roughness: 0.38, metalness: 0.7 }),
+    cap: new THREE.MeshStandardMaterial({ name: 'bright trim', color: 0x4a525d, roughness: 0.34, metalness: 0.7 }),
     dark: new THREE.MeshStandardMaterial({ name: 'recesses', color: 0x08090c, roughness: 0.75, metalness: 0.4 }),
     pipe: new THREE.MeshStandardMaterial({ name: 'pipes', color: 0x22272e, roughness: 0.28, metalness: 0.88 }),
     glass: new THREE.MeshStandardMaterial({ name: 'glass', color: 0x0a0e14, roughness: 0.04, metalness: 0.9, transparent: true, opacity: 0.45, depthWrite: false }),
+    light: new THREE.MeshBasicMaterial({ name: 'white lights', color: WHITE, toneMapped: false }),
     glow: new THREE.MeshBasicMaterial({ name: 'red lights', color: RED, toneMapped: false }),
     amber: new THREE.MeshBasicMaterial({ name: 'amber lights', color: AMBER, toneMapped: false }),
-    screen: new THREE.MeshBasicMaterial({ name: 'screens', color: new THREE.Color(0.32, 0.012, 0.01), toneMapped: false }),
-    room: new THREE.MeshBasicMaterial({ name: 'control room light', color: new THREE.Color(0.42, 0.02, 0.016), toneMapped: false }),
+    screen: new THREE.MeshBasicMaterial({ name: 'screens', color: new THREE.Color(0.05, 0.085, 0.11), toneMapped: false }),
+    room: new THREE.MeshBasicMaterial({ name: 'control room light', color: new THREE.Color(0.04, 0.055, 0.07), toneMapped: false }),
   };
   const kit = createKit();
   const obstacles = [];
   const block = (kind, min, max) => { const box = { kind, min, max, centre: min.clone().add(max).multiplyScalar(0.5) }; obstacles.push(box); return box; };
-  const indicators = [], hazes = [], strips = [], lights = [];
+  const indicators = [], lights = [];
+  const floorLights = createFloorLights(group);
 
   // ---- The back walls ---------------------------------------------------------
   // One along x at minZ (facing +z), one along z at minX (facing +x).
@@ -55,6 +56,7 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
     const toWorld = (a, y, n) => new THREE.Vector3(a, y, n).applyMatrix4(f);
     const pillars = [];
     for (let a = 0.45; a < L - 0.3; a += pitch) pillars.push(a);
+    const door = wall.bays.indexOf('door'), redPillars = new Set(door >= 0 ? [door, door + 1] : []);
     // Bays between the pillars; the wall slab is built bay by bay so windows can open in it.
     for (let i = 0; i < pillars.length; i++) {
       const from = pillars[i] + 0.31, to = (pillars[i + 1] ?? L) - (pillars[i + 1] ? 0.31 : 0), w = to - from, mid = (from + to) / 2;
@@ -63,8 +65,9 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
         kit.box(M.wall, w + 0.62, 1.05, 0.5, [mid, 0.525, -0.25], null, f);
         kit.box(M.wall, w + 0.62, H - 2.45, 0.5, [mid, (H + 2.45) / 2, -0.25], null, f);
         for (const side of [from, to]) kit.box(M.dark, 0.04, 1.4, 1.5, [side, 1.75, -0.75], null, f);
-        // The control room behind the glass: red-lit back wall, consoles in silhouette.
+        // The control room behind the glass: dim, cold, consoles in silhouette.
         kit.box(M.room, w, 1.4, 0.04, [mid, 1.75, -1.5], null, f);
+        for (let k = 0; k < 2; k++) kit.box(M.light, w * 0.25, 0.025, 0.02, [from + w * (0.3 + k * 0.4), 2.38, -1.2], null, f);
         kit.box(M.dark, w, 0.04, 1.5, [mid, 1.05, -0.75], null, f);
         kit.box(M.dark, w, 0.04, 1.5, [mid, 2.45, -0.75], null, f);
         for (let k = 0; k < 3; k++) {
@@ -85,17 +88,20 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
       kit.box(M.trim, w, 0.22, 0.08, [mid, 0.11, 0.04], null, f);
       kit.box(M.trim, w, 0.18, 0.24, [mid, TIER - 0.09, 0.12], null, f);
       kit.box(M.dark, w, 0.05, 0.2, [mid, TIER - 0.2, 0.08], null, f);
-      // The upper tier: plain dark panels, a gantry, small red lamps.
+      // The upper tier: plain dark panels, a gantry, a white light bar.
       kit.box(M.dark, w, 0.03, 0.02, [mid, TIER + 0.6, 0.005], null, f);
       kit.box(M.trim, w, 0.08, 0.5, [mid, TIER + 0.35, 0.25], null, f);
       kit.box(M.pipe, w, 0.03, 0.03, [mid, TIER + 0.85, 0.48], null, f);
-      for (let k = 0; k < 3; k++) kit.box(M.glow, 0.05, 0.05, 0.02, [from + w * (0.2 + k * 0.3), TIER + 1.2, 0.02], null, f);
+      kit.box(M.dark, 0.5, 0.07, 0.03, [mid, TIER + 1.2, 0.015], null, f);
+      kit.box(M.light, 0.44, 0.03, 0.02, [mid, TIER + 1.2, 0.03], null, f);
+      // A white light bar at mid height on plain bays, as on the reference's walls.
+      if (kind === 'vent' || kind === 'console') kit.box(M.dark, 0.5, 0.08, 0.03, [to - 0.45, 2.75, 0.015], null, f), kit.box(M.light, 0.42, 0.035, 0.02, [to - 0.45, 2.75, 0.03], null, f);
       if (kind === 'console') {
         // A desk with a sloping top, screens and blinking indicators; a monitor above.
         kit.box(M.panel, w * 0.82, 0.82, 0.5, [mid, 0.41, 0.27], null, f);
         kit.box(M.cap, w * 0.82, 0.06, 0.46, [mid, 0.86, 0.3], [0.42, 0, 0], f);
         for (let k = 0; k < 3; k++) kit.box(M.screen, w * 0.18, 0.012, 0.16, [from + w * (0.22 + k * 0.28), 0.892, 0.314], [0.42, 0, 0], f);
-        for (let k = 0; k < 12; k++) indicators.push({ at: toWorld(from + w * 0.13 + k * w * 0.06, 0.66, 0.525), turn: -Math.atan2(wall.along.z, wall.along.x), period: 0.4 + (k * 37 % 11) / 6, phase: (k * 0.37) % 1, color: k % 4 === 1 ? AMBER : RED });
+        for (let k = 0; k < 12; k++) indicators.push({ at: toWorld(from + w * 0.13 + k * w * 0.06, 0.66, 0.525), turn: -Math.atan2(wall.along.z, wall.along.x), period: 0.4 + (k * 37 % 11) / 6, phase: (k * 0.37) % 1, color: k % 5 === 1 ? RED : k % 3 === 0 ? AMBER : WHITE.clone().multiplyScalar(0.55) });
         kit.box(M.dark, w * 0.5, 0.62, 0.06, [mid, 1.75, 0.03], null, f);
         kit.box(M.screen, w * 0.44, 0.5, 0.01, [mid, 1.75, 0.065], null, f);
         for (let k = 0; k < 4; k++) kit.box(M.dark, w * 0.36 * (0.5 + (k % 3) * 0.25), 0.025, 0.004, [mid - w * 0.04, 1.62 + k * 0.08, 0.072], null, f);
@@ -110,47 +116,49 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
           for (const y of [0.6, 1.8, 2.8]) kit.box(M.trim, 0.2, 0.06, 0.2, [mid + side * w * 0.4, y, 0.1], null, f);
         }
       } else if (kind === 'door') {
-        // The great door: two leaves, an octagonal boss across both, a red bar and an amber lamp above.
+        // The great door: two leaves, a round boss across both, a white bar and an amber lamp above.
         kit.box(M.trim, 0.22, 3.05, 0.26, [from + 0.11, 1.525, 0.13], null, f);
         kit.box(M.trim, 0.22, 3.05, 0.26, [to - 0.11, 1.525, 0.13], null, f);
         kit.box(M.trim, w, 0.3, 0.26, [mid, 3.0, 0.13], null, f);
         for (const side of [-1, 1]) kit.box(M.panel, w / 2 - 0.24, 2.84, 0.1, [mid + side * (w / 4 - 0.01), 1.42, 0.05], null, f);
-        kit.add(M.cap, new THREE.CylinderGeometry(0.95, 0.95, 0.06, 8), [mid, 1.45, 0.12], [Math.PI / 2, Math.PI / 8, 0], f);
-        kit.add(M.dark, new THREE.CylinderGeometry(0.7, 0.7, 0.07, 8), [mid, 1.45, 0.13], [Math.PI / 2, Math.PI / 8, 0], f);
+        kit.add(M.cap, new THREE.CylinderGeometry(0.95, 0.95, 0.06, 40), [mid, 1.75, 0.12], [Math.PI / 2, 0, 0], f);
+        kit.add(M.dark, new THREE.CylinderGeometry(0.82, 0.82, 0.07, 40), [mid, 1.75, 0.13], [Math.PI / 2, 0, 0], f);
+        kit.add(M.trim, new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6), [mid, 1.75, 0.14], [Math.PI / 2, 0, 0], f);
+        for (let k = 0; k < 6; k++) kit.box(M.trim, 0.05, 0.3, 0.08, [mid + Math.sin(k * Math.PI / 3) * 0.66, 1.75 + Math.cos(k * Math.PI / 3) * 0.66, 0.14], [0, 0, -k * Math.PI / 3], f);
         kit.box(M.dark, 0.035, 2.84, 0.16, [mid, 1.42, 0.08], null, f);
         kit.box(M.dark, w * 0.6, 0.08, 0.02, [mid, 3.0, 0.27], null, f);
-        kit.box(M.glow, w * 0.55, 0.04, 0.012, [mid, 3.0, 0.28], null, f);
+        kit.box(M.light, w * 0.55, 0.04, 0.012, [mid, 3.0, 0.28], null, f);
         kit.box(M.amber, 0.12, 0.08, 0.05, [to - 0.32, 2.75, 0.28], null, f);
-        hazard(toWorld(mid, 0, 0.55), wall.along, w - 0.3, 0.4);
-        lights.push(pointLight(toWorld(mid, 2.6, 0.9), 1.8, 4));
+        hazard(toWorld(mid, 0, 0.55), wall.along, w - 0.3, 0.3);
+        lights.push(pointLight(toWorld(mid, 2.6, 0.9), 1.4, 4));
       }
       // Pipes running along the top, held by brackets.
       kit.cylinder(M.pipe, 0.06, 0.06, w + 0.02, 14, [mid, TIER - 0.48, 0.16], [0, 0, Math.PI / 2], f);
       kit.cylinder(M.pipe, 0.042, 0.042, w + 0.02, 12, [mid, TIER - 0.66, 0.12], [0, 0, Math.PI / 2], f);
     }
-    // Pillars: a light column each, in a dark housing, on a heavy base.
+    // Pillars: a short white light (red beside the door) in a dark housing, on a heavy base.
     for (const [index, a] of pillars.entries()) {
+      const red = redPillars.has(index);
       kit.box(M.panel, 0.62, H, 0.34, [a, H / 2, 0.17], null, f);
       for (const side of [-1, 1]) kit.box(M.trim, 0.06, H, 0.06, [a + side * 0.28, H / 2, 0.33], null, f);
       kit.box(M.cap, 0.74, 0.4, 0.42, [a, 0.2, 0.21], null, f);
       kit.box(M.cap, 0.74, 0.2, 0.42, [a, TIER - 0.3, 0.21], null, f);
-      kit.box(M.dark, 0.2, 1.95, 0.03, [a, 1.6, 0.35], null, f);
-      kit.box(M.glow, 0.08, 1.8, 0.02, [a, 1.6, 0.365], null, f);
-      kit.box(M.amber, 0.05, 0.05, 0.02, [a, 0.55, 0.43], null, f);
-      hazes.push(haze(toWorld(a, 1.6, 0.6), index * 0.31));
-      if (index % 2 === 0) lights.push(pointLight(toWorld(a, 1.5, 0.7), 2.2, 4.2));
+      kit.box(M.dark, 0.14, red ? 1.5 : 0.95, 0.03, [a, red ? 1.75 : 2.15, 0.35], null, f);
+      kit.box(red ? M.glow : M.light, red ? 0.045 : 0.06, red ? 1.38 : 0.82, 0.02, [a, red ? 1.75 : 2.15, 0.365], null, f);
+      kit.box(M.amber, 0.04, 0.04, 0.02, [a, 0.55, 0.43], null, f);
+      if (index % 2 === 0) lights.push(pointLight(toWorld(a, 2.1, 0.8), 1.3, 4.2));
     }
     // Walkers, bodies and bolts meet the wall and its pillars, on their real faces.
     const a0 = toWorld(-0.6, 0, -0.6), a1 = toWorld(L + 0.6, H, 0.01);
     block('wall', a0.clone().min(a1), a0.clone().max(a1));
     for (const a of pillars) { const p0 = toWorld(a - 0.37, 0, 0), p1 = toWorld(a + 0.37, H, 0.43); block('wall', p0.clone().min(p1), p0.clone().max(p1)); }
-    // A strip in the floor along its foot.
-    strips.push(floorStrip(group, toWorld(0.8, 0, 0.75), toWorld(L - 0.6, 0, 0.75), strips.length * 0.23));
+    // Light panels in the floor along its foot.
+    floorLights.add(toWorld(1.2, 0, 0.9), toWorld(L - 0.8, 0, 0.9), { every: 2.6 });
   }
   // The corner where the walls meet: a broad column with its own light.
   kit.box(M.panel, 1.0, H + 0.2, 1.0, [minX + 0.3, (H + 0.2) / 2, minZ + 0.3]);
   kit.box(M.dark, 0.03, 2.2, 0.24, [minX + 0.81, 1.7, minZ + 0.45]);
-  kit.box(M.glow, 0.02, 2.0, 0.1, [minX + 0.825, 1.7, minZ + 0.45]);
+  kit.box(M.light, 0.02, 0.9, 0.08, [minX + 0.825, 2.2, minZ + 0.45]);
   block('wall', new THREE.Vector3(minX - 0.2, 0, minZ - 0.2), new THREE.Vector3(minX + 0.8, H + 0.2, minZ + 0.8));
 
   // ---- The front edge: a railing above the lower level ---------------------------
@@ -174,9 +182,8 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
     // The face of the drop: panels, ribs and a red light line.
     kit.box(M.wall, L, drop - 0.38, 0.2, [L / 2, -(drop + 0.38) / 2, 0.06], null, f);
     for (let a = 0.8; a < L; a += 1.6) kit.box(M.trim, 0.08, drop - 0.4, 0.06, [a, -(drop + 0.4) / 2, 0.19], null, f);
-    kit.box(M.dark, L, 0.08, 0.03, [L / 2, -1.25, 0.18], null, f);
-    kit.box(M.glow, L, 0.035, 0.02, [L / 2, -1.25, 0.2], null, f);
-    strips.push(floorStrip(group, toWorld(0.4, 0, -0.42), toWorld(L - 0.3, 0, -0.42), strips.length * 0.23));
+    for (let a = 1.6; a < L - 0.5; a += 3.2) kit.box(M.light, 0.4, 0.03, 0.02, [a, -0.7, 0.2], null, f);
+    floorLights.add(toWorld(0.6, 0, -0.45), toWorld(L - 0.4, 0, -0.45), { every: 2.2 });
     const r0 = toWorld(-0.1, 0, -0.04), r1 = toWorld(L + 0.1, 1.12, 0.06);
     block('rail', r0.clone().min(r1), r0.clone().max(r1));
   }
@@ -201,10 +208,10 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
   for (const [x, z, w, h, d] of [[2, maxZ + 2.6, 1.6, 0.9, 1.1], [-4.5, maxZ + 3.4, 2.4, 0.7, 0.9], [maxX + 2.4, -2, 1.1, 1.0, 1.8], [maxX + 3.1, 3.5, 1.4, 0.8, 1.2], [maxX + 2.2, -7.5, 1.2, 1.2, 1.2]]) {
     kit.box(M.panel, w, h, d, [x, -drop + h / 2, z]);
     kit.box(M.trim, w + 0.04, 0.06, d + 0.04, [x, -drop + h - 0.03, z]);
-    kit.box(M.glow, w * 0.5, 0.04, 0.012, [x, -drop + h * 0.7, z + d / 2 + 0.008]);
+    kit.box(M.light, w * 0.3, 0.03, 0.012, [x, -drop + h * 0.7, z + d / 2 + 0.008]);
   }
   for (const [a, b] of [[[minX, maxZ + 4.6], [maxX + 4.6, maxZ + 4.6]], [[maxX + 4.6, minZ], [maxX + 4.6, maxZ + 4.6]]]) {
-    strips.push(floorStrip(group, new THREE.Vector3(a[0], 0, a[1]), new THREE.Vector3(b[0], 0, b[1]), 0.5 + strips.length * 0.11, { y: -drop }));
+    floorLights.add(new THREE.Vector3(a[0], 0, a[1]), new THREE.Vector3(b[0], 0, b[1]), { y: -drop, every: 3 });
   }
   const veil = new THREE.MeshBasicMaterial({ color: 0x05070b, transparent: true, opacity: 0.42, depthWrite: false });
   for (const bounds of lowerBounds) {
@@ -215,39 +222,37 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
     group.add(shade);
   }
 
-  // ---- Grates glowing red from below, wherever the floor is clear ---------------
-  const grateMaterial = new THREE.MeshBasicMaterial({ map: grateTexture(), color: RED.clone(), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  const grateGlow = new THREE.MeshBasicMaterial({ map: glowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  // ---- Grates, wherever the floor is clear: a few glow amber from below ----------
+  const grateMaterial = new THREE.MeshBasicMaterial({ map: grateTexture(), color: EMBER.clone(), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const darkGrate = new THREE.MeshStandardMaterial({ map: grateTexture(), color: 0x2a2f37, roughness: 0.5, metalness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const grateGlow = new THREE.MeshBasicMaterial({ map: glowTexture(), color: EMBER.clone().multiplyScalar(0.16), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   const clearOf = (x, z, hx, hz) => !(lab?.obstacles ?? []).concat(obstacles).some(box => x + hx > box.min.x - 0.3 && x - hx < box.max.x + 0.3 && z + hz > box.min.z - 0.3 && z - hz < box.max.z + 0.3);
   const grates = [];
   for (const [x, z, across] of [[-7.6, -9.9, true], [-2.2, -9.8, true], [3.6, -9.9, true], [-9.0, -6.3, false], [-9.0, 0.8, false], [-3.2, 6.0, true], [6.8, 5.6, true], [7.1, -5.2, false], [-1.6, -6.2, true], [1.8, 0.4, false]]) {
     const hx = across ? 0.8 : 0.45, hz = across ? 0.45 : 0.8;
     if (!clearOf(x, z, hx, hz)) continue;
-    const grate = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.9), grateMaterial);
+    const lit = grates.length % 3 === 0;
+    const grate = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.9), lit ? grateMaterial : darkGrate);
     grate.rotation.set(-Math.PI / 2, 0, across ? 0 : Math.PI / 2);
     grate.position.set(x, 0.003, z);
-    const glow = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 2.2), grateGlow);
-    glow.rotation.copy(grate.rotation);
-    glow.position.set(x, 0.013, z);
-    glow.renderOrder = 2;
-    group.add(grate, glow);
+    group.add(grate);
+    if (lit) {
+      const glow = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.8), grateGlow);
+      glow.rotation.copy(grate.rotation);
+      glow.position.set(x, 0.013, z);
+      glow.renderOrder = 2;
+      group.add(glow);
+    }
     grates.push(grate);
   }
 
   // ---- Lights, haze, indicators --------------------------------------------------
   function pointLight(at, intensity, distance) {
-    const light = new THREE.PointLight(0xff2a20, intensity, distance, 1.6);
+    const light = new THREE.PointLight(0xffe4c4, intensity, distance, 1.6);
     light.position.copy(at);
     light.userData.base = intensity;
     group.add(light);
     return light;
-  }
-  function haze(at, phase) {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: RED.clone().multiplyScalar(0.3), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-    sprite.position.copy(at);
-    sprite.scale.set(1.1, 2.8, 1);
-    group.add(sprite);
-    return { sprite, phase };
   }
   function hazard(centre, along, length, width) {
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(length, width), hazardMaterial());
@@ -266,25 +271,19 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
   lamp.count = indicators.length;
   group.add(lamp);
 
+  floorLights.build();
   kit.build(group, { name: 'Room' });
   scene.add(group);
   if (lab) lab.obstacles.push(...obstacles);
 
   function update(time) {
-    for (const strip of strips) strip.update(time);
-    const k = blink(time, 0.6, 4.1);
-    grateMaterial.color.copy(RED).multiplyScalar(0.25 + 0.75 * k);
-    grateGlow.color.copy(RED).multiplyScalar(0.45 * k);
-    for (const { sprite, phase } of hazes) sprite.material.color.copy(RED).multiplyScalar(0.3 + 0.08 * Math.sin(time * 1.3 + phase * 6));
-    // One light column flickers, as a failing tube does.
-    if (hazes[3]) hazes[3].sprite.material.color.multiplyScalar(Math.sin(time * 23) > 0.6 && Math.sin(time * 1.7) > 0.2 ? 0.25 : 1);
     indicators.forEach((indicator, index) => {
       const on = Math.sin((time / indicator.period + indicator.phase) * Math.PI * 2) > -0.2;
       lamp.setColorAt(index, lampColor.copy(indicator.color).multiplyScalar(on ? 1 : 0.12));
     });
     if (lamp.instanceColor) lamp.instanceColor.needsUpdate = true;
   }
-  return { group, obstacles, strips, grates, lights, update, bounds: ARENA };
+  return { group, obstacles, floorLights, grates, lights, update, bounds: ARENA };
 }
 
 let grate = null;
@@ -315,7 +314,7 @@ function hazardMaterial() {
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const stripe = Math.floor((x + y) / 8) % 2 === 0;
     const worn = random() < 0.22 || (y === 0 || y === h - 1) && random() < 0.5;
-    const colour = stripe ? [150, 104, 22] : [16, 16, 18];
+    const colour = stripe ? [122, 84, 22] : [16, 16, 18];
     data.set([...colour, worn ? 0 : 230], (y * w + x) * 4);
   }
   const map = new THREE.DataTexture(data, w, h);

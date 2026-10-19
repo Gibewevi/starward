@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createKit, frameOf, blink, lineGlowTexture, RED, AMBER } from './kit.js';
+import { createKit, frameOf, blink, createFloorLights, glowTexture, RED, AMBER, WHITE } from './kit.js';
 
 /**
  * The AI laboratory: crates, stacked crates, barrels and low barriers on the
@@ -40,17 +40,20 @@ const LAYOUT = [
 export function createLab(scene) {
   const group = new THREE.Group();
   group.name = 'AI lab';
-  // Gunmetal cases: a dark shell, a brighter frame and caps that catch the
-  // light, recessed panels, black vents, pale stencils, red and amber lights.
+  // Gunmetal cases, as in the reference: dark sides, lids and frames that
+  // catch the light from above, recessed panels, black vents, X braces, pale
+  // stencils; white light bars, and only small red and amber diodes.
   const M = {
-    metal: new THREE.MeshStandardMaterial({ name: 'shell', color: 0x1b1f26, roughness: 0.42, metalness: 0.75 }),
-    trim: new THREE.MeshStandardMaterial({ name: 'frame', color: 0x39404b, roughness: 0.32, metalness: 0.8 }),
-    cap: new THREE.MeshStandardMaterial({ name: 'caps', color: 0x4a525e, roughness: 0.28, metalness: 0.82 }),
-    panel: new THREE.MeshStandardMaterial({ name: 'panels', color: 0x15181d, roughness: 0.55, metalness: 0.6 }),
+    metal: new THREE.MeshStandardMaterial({ name: 'shell', color: 0x1b2026, roughness: 0.45, metalness: 0.65 }),
+    trim: new THREE.MeshStandardMaterial({ name: 'frame', color: 0x3b424c, roughness: 0.4, metalness: 0.7 }),
+    cap: new THREE.MeshStandardMaterial({ name: 'caps', color: 0x59626e, roughness: 0.36, metalness: 0.66 }),
+    lid: new THREE.MeshStandardMaterial({ name: 'lids', color: 0x2c323a, roughness: 0.32, metalness: 0.72 }),
+    panel: new THREE.MeshStandardMaterial({ name: 'panels', color: 0x181c22, roughness: 0.55, metalness: 0.55 }),
     dark: new THREE.MeshStandardMaterial({ name: 'vents', color: 0x090a0d, roughness: 0.75, metalness: 0.4 }),
-    stencil: new THREE.MeshStandardMaterial({ name: 'stencils', color: 0x59606b, roughness: 0.7, metalness: 0.2 }),
-    glow: new THREE.MeshBasicMaterial({ name: 'red lights', color: RED, toneMapped: false }),
-    amber: new THREE.MeshBasicMaterial({ name: 'amber lights', color: AMBER, toneMapped: false }),
+    stencil: new THREE.MeshStandardMaterial({ name: 'stencils', color: 0x6a717c, roughness: 0.7, metalness: 0.2 }),
+    light: new THREE.MeshBasicMaterial({ name: 'white lights', color: WHITE, toneMapped: false }),
+    glow: new THREE.MeshBasicMaterial({ name: 'red diodes', color: RED, toneMapped: false }),
+    amber: new THREE.MeshBasicMaterial({ name: 'amber diodes', color: AMBER, toneMapped: false }),
   };
   const kit = createKit();
 
@@ -61,27 +64,39 @@ export function createLab(scene) {
     const min = new THREE.Vector3(centre.x - sx / 2, base, centre.z - sz / 2), max = new THREE.Vector3(centre.x + sx / 2, base + sy, centre.z + sz / 2);
     obstacles.push({ kind, min, max, centre: new THREE.Vector3(centre.x, base + sy / 2, centre.z) });
     if (kind === 'barrel') dressBarrel(kit, M, min, max);
-    else dressCase(kit, M, min, max, kind === 'barrier');
+    else dressCase(kit, M, min, max, kind === 'barrier', obstacles.length % 3 === 1);
   }
   kit.build(group, { name: 'Lab cases' });
 
-  // Red neon strips set into the floor, along the grid, like the reference:
-  // each in a dark channel, with the red light it spills on the wet floor.
-  // They blink slowly, each a little out of step with the next.
-  const strips = [[[-9, -4.3], [5, -4.3]], [[-6.2, -9], [-6.2, 2.5]], [[4.6, -9], [4.6, 0.5]], [[-9, -8.2], [7, -8.2]], [[-1.8, 2.4], [3.4, 2.4]]].map(([from, to], index) => {
-    const a = new THREE.Vector3(from[0], 0, from[1]), b = new THREE.Vector3(to[0], 0, to[1]);
-    return floorStrip(group, a, b, index * 0.17);
-  });
-  // Red light spills onto the troopers and the floor around the crates.
+  // Short white light panels set into the floor along the deck's lanes,
+  // wherever no case stands on them.
+  const floorLights = createFloorLights(group);
+  for (const [from, to] of [[[-9, -4.3], [5, -4.3]], [[-6.2, -9], [-6.2, 2.5]], [[4.6, -9], [4.6, 0.5]], [[-9, -8.2], [7, -8.2]], [[-1.8, 2.4], [3.4, 2.4]]]) {
+    floorLights.add(new THREE.Vector3(from[0], 0, from[1]), new THREE.Vector3(to[0], 0, to[1]), { every: 2.4 });
+  }
+  floorLights.spots.splice(0, floorLights.spots.length, ...floorLights.spots.filter(({ at }) => !obstacles.some(box => at.x > box.min.x - 0.4 && at.x < box.max.x + 0.4 && at.z > box.min.z - 0.4 && at.z < box.max.z + 0.4)));
+  floorLights.build();
+  // Red hatched warning panels before a few cases: lit from beneath, they
+  // breathe slowly — the one red light on the floor.
+  const markings = [];
+  for (const index of [1, 7, 15, 9]) {
+    const box = obstacles[index];
+    if (!box || box.min.y > 0) continue;
+    const centre = new THREE.Vector3((box.min.x + box.max.x) / 2, 0, box.max.z + 0.42);
+    const length = box.max.x - box.min.x;
+    if (obstacles.some(other => other !== box && centre.x + length / 2 > other.min.x && centre.x - length / 2 < other.max.x && centre.z + 0.2 > other.min.z && centre.z - 0.2 < other.max.z)) continue;
+    markings.push(warningPanel(group, centre, length, 0.36, markings.length * 0.29));
+  }
+  // A soft warm light over the cases, so their lids read as in the reference.
   const lights = [onScreen(-2.2, 3.9), onScreen(2.6, 4.4), onScreen(0, 6.6)].map(at => {
-    const light = new THREE.PointLight(0xff3328, 3.2, 5.5, 1.6);
-    light.position.copy(at).setY(0.9);
+    const light = new THREE.PointLight(0xffe2c0, 1.6, 5.5, 1.6);
+    light.position.copy(at).setY(2.2);
     group.add(light);
     return light;
   });
   scene.add(group);
   function update(time) {
-    for (const strip of strips) strip.update(time);
+    for (const marking of markings) marking.update(time);
   }
 
   const temp = new THREE.Vector3();
@@ -160,11 +175,11 @@ export function createLab(scene) {
     }
     return spots;
   }
-  return { group, obstacles, lights, strips, pushOut, segmentHit, clear, coverSpots, update };
+  return { group, obstacles, lights, floorLights, markings, pushOut, segmentHit, clear, coverSpots, update };
 }
 
 /** A case seen from the camera (+X, +Z and its lid): frame, caps, panels, vents, handles, lights. */
-function dressCase(kit, M, min, max, barrier) {
+function dressCase(kit, M, min, max, barrier, braced = false) {
   const sx = max.x - min.x, sy = max.y - min.y, sz = max.z - min.z;
   const cx = (min.x + max.x) / 2, cy = (min.y + max.y) / 2, cz = (min.z + max.z) / 2, t = 0.07;
   kit.box(M.metal, sx - 0.04, sy - 0.03, sz - 0.04, [cx, cy - 0.015, cz]);
@@ -175,7 +190,7 @@ function dressCase(kit, M, min, max, barrier) {
   }
   for (const dx of [-1, 1]) for (const dz of [-1, 1]) kit.box(M.cap, 0.13, 0.05, 0.13, [cx + dx * (sx / 2 - 0.055), max.y - 0.015, cz + dz * (sz / 2 - 0.055)]);
   // The lid: an inset panel, a raised spine, two latches.
-  kit.box(M.panel, sx - 0.2, 0.02, sz - 0.2, [cx, max.y - 0.006, cz]);
+  kit.box(M.lid, sx - 0.1, 0.02, sz - 0.1, [cx, max.y - 0.006, cz]);
   kit.box(M.trim, sx > sz ? sx - 0.36 : 0.05, 0.02, sx > sz ? 0.05 : sz - 0.36, [cx, max.y + 0.004, cz]);
   for (const side of [-1, 1]) kit.box(M.cap, 0.09, 0.03, 0.05, [cx + side * sx * 0.25, max.y + 0.008, cz + sz / 2 - 0.1]);
   const faces = [
@@ -193,27 +208,33 @@ function dressCase(kit, M, min, max, barrier) {
       for (let r = 0; r < 3; r++) kit.box(M.trim, span - 0.14, 0.022, 0.018, [a, sy * (0.22 + r * 0.075), 0.016], null, f);
     }
     if (long) {
-      // A red light along the top of the long side, two amber at its ends.
-      kit.box(M.dark, width - 0.22, 0.07, 0.016, [0, sy - 0.13, 0.006], null, f);
-      kit.box(M.glow, width - 0.3, 0.035, 0.012, [0, sy - 0.13, 0.016], null, f);
-      for (const side of [-1, 1]) kit.box(M.amber, 0.035, 0.025, 0.014, [side * (width / 2 - 0.13), sy - 0.13, 0.016], null, f);
+      // A white light bar along the long side, a red diode at one end, amber at the other.
+      kit.box(M.dark, width * 0.42, 0.07, 0.016, [width * 0.12, sy - 0.16, 0.006], null, f);
+      kit.box(M.light, width * 0.38, 0.03, 0.012, [width * 0.12, sy - 0.16, 0.016], null, f);
+      kit.box(M.glow, 0.05, 0.022, 0.014, [-(width / 2 - 0.14), sy - 0.16, 0.016], null, f);
+      kit.box(M.amber, 0.03, 0.022, 0.014, [width / 2 - 0.13, sy - 0.16, 0.016], null, f);
       continue;
     }
     if (main) {
-      // A vent, a horizontal red light, amber indicators and stencilled marks.
+      // A vent, a short white light bar, amber diodes and stencilled marks.
       kit.box(M.dark, width * 0.3, 0.2, 0.012, [-width * 0.2, sy * 0.68, 0.01], null, f);
       for (let i = 0; i < 5; i++) kit.box(M.trim, width * 0.27, 0.014, 0.022, [-width * 0.2, sy * 0.68 - 0.08 + i * 0.04, 0.016], null, f);
-      kit.box(M.dark, width * 0.4, 0.075, 0.016, [width * 0.16, sy * 0.82, 0.006], null, f);
-      kit.box(M.glow, width * 0.34, 0.04, 0.012, [width * 0.16, sy * 0.82, 0.016], null, f);
-      for (let i = 0; i < 2; i++) kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.06 + i * 0.05, sy * 0.71, 0.016], null, f);
+      kit.box(M.dark, width * 0.3, 0.06, 0.016, [width * 0.18, sy * 0.8, 0.006], null, f);
+      kit.box(M.light, width * 0.25, 0.026, 0.012, [width * 0.18, sy * 0.8, 0.016], null, f);
+      for (let i = 0; i < 2; i++) kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.06 + i * 0.05, sy * 0.69, 0.016], null, f);
       for (let i = 0; i < 3; i++) kit.box(M.stencil, 0.05 + (i % 2) * 0.03, 0.018, 0.006, [width * 0.08 + i * 0.075, sy * 0.13, 0.016], null, f);
     } else {
-      // A vertical red light in its housing, a handle on standoffs.
-      kit.box(M.dark, 0.085, sy * 0.48, 0.016, [width * 0.3, sy * 0.5, 0.006], null, f);
-      kit.box(M.glow, 0.035, sy * 0.42, 0.012, [width * 0.3, sy * 0.5, 0.016], null, f);
-      kit.box(M.cap, 0.24, 0.026, 0.026, [-width * 0.12, sy * 0.66, 0.05], null, f);
-      for (const side of [-1, 1]) kit.box(M.trim, 0.026, 0.026, 0.05, [-width * 0.12 + side * 0.1, sy * 0.66, 0.025], null, f);
-      kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.3, sy * 0.78, 0.016], null, f);
+      if (braced) {
+        // An X brace across the side panel.
+        const w = width - 0.2, h = sy * 0.58, angle = Math.atan2(h, w), span = Math.hypot(w, h);
+        for (const turn of [angle, -angle]) kit.box(M.trim, span, 0.045, 0.03, [0, sy * 0.44, 0.028], [0, 0, turn], f);
+      }
+      // A thin red diode in its housing, a handle on standoffs.
+      kit.box(M.dark, 0.06, sy * 0.3, 0.016, [width * 0.33, sy * 0.55, 0.006], null, f);
+      kit.box(M.glow, 0.022, sy * 0.24, 0.012, [width * 0.33, sy * 0.55, 0.016], null, f);
+      kit.box(M.cap, 0.24, 0.026, 0.026, [-width * 0.12, sy * 0.78, 0.05], null, f);
+      for (const side of [-1, 1]) kit.box(M.trim, 0.026, 0.026, 0.05, [-width * 0.12 + side * 0.1, sy * 0.78, 0.025], null, f);
+      kit.box(M.amber, 0.03, 0.022, 0.012, [width * 0.33, sy * 0.78, 0.016], null, f);
     }
   }
 }
@@ -224,39 +245,56 @@ function dressBarrel(kit, M, min, max) {
   kit.cylinder(M.metal, r - 0.008, r, sy - 0.02, n, [cx, min.y + sy / 2 - 0.01, cz]);
   kit.cylinder(M.dark, r + 0.006, r + 0.006, 0.06, n, [cx, min.y + 0.03, cz]);
   for (const y of [0.22, 0.5]) kit.cylinder(M.trim, r + 0.014, r + 0.014, 0.045, n, [cx, min.y + sy * y, cz]);
-  kit.cylinder(M.dark, r + 0.008, r + 0.008, 0.075, n, [cx, min.y + sy * 0.82, cz]);
-  kit.cylinder(M.glow, r + 0.012, r + 0.012, 0.034, n, [cx, min.y + sy * 0.82, cz]);
+  kit.cylinder(M.dark, r + 0.008, r + 0.008, 0.06, n, [cx, min.y + sy * 0.82, cz]);
+  kit.cylinder(M.glow, r + 0.012, r + 0.012, 0.024, n, [cx, min.y + sy * 0.82, cz]);
   kit.cylinder(M.trim, r - 0.004, r - 0.004, 0.03, n, [cx, max.y - 0.01, cz]);
-  kit.cylinder(M.panel, r * 0.8, r * 0.8, 0.012, n, [cx, max.y + 0.008, cz]);
+  kit.cylinder(M.lid, r * 0.8, r * 0.8, 0.012, n, [cx, max.y + 0.008, cz]);
   kit.cylinder(M.cap, 0.035, 0.035, 0.06, 10, [cx + r * 0.4, max.y + 0.03, cz + r * 0.25]);
   kit.box(M.stencil, 0.12, 0.02, 0.006, [cx, min.y + sy * 0.36, cz + r + 0.004]);
 }
 
-/** A neon strip in the floor from a to b, its channel, and the light it pools around it; update(time) blinks it. */
-export function floorStrip(parent, a, b, phase = 0, { width = 0.05, glow = 0.55, y = 0 } = {}) {
-  const length = a.distanceTo(b), along = b.clone().sub(a).normalize(), centre = a.clone().add(b).multiplyScalar(0.5);
-  const angle = Math.atan2(along.x, along.z);
-  const channel = new THREE.Mesh(new THREE.BoxGeometry(width + 0.08, 0.01, length + 0.08), new THREE.MeshStandardMaterial({ color: 0x07080a, roughness: 0.6, metalness: 0.5 }));
-  channel.position.copy(centre).setY(y + 0.004);
-  channel.rotation.y = angle;
-  channel.receiveShadow = true;
-  const material = new THREE.MeshBasicMaterial({ color: RED.clone(), toneMapped: false });
-  const core = new THREE.Mesh(new THREE.BoxGeometry(width, 0.012, length), material);
-  core.position.copy(centre).setY(y + 0.007);
-  core.rotation.y = angle;
-  // The light it throws on the floor: additive, as wide as a stride.
-  const poolMaterial = new THREE.MeshBasicMaterial({ map: lineGlowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-  const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.5, length + 1.2), poolMaterial);
-  pool.rotation.set(-Math.PI / 2, 0, angle);
-  pool.position.copy(centre).setY(y + 0.012);
-  pool.renderOrder = 2;
-  for (const mesh of [channel, core, pool]) parent.add(mesh);
+/**
+ * A red hatched warning panel set into the floor, lit from beneath: dim red
+ * stripes that breathe slowly, and a faint red glow on the steel around.
+ */
+export function warningPanel(parent, centre, length, width, phase = 0, { along = new THREE.Vector3(1, 0, 0), y = 0 } = {}) {
+  const angle = Math.atan2(along.z, along.x) * -1;
+  const material = new THREE.MeshBasicMaterial({ map: hatchTexture(), color: RED.clone(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(length, width), material);
+  panel.rotation.set(-Math.PI / 2, 0, angle);
+  panel.position.copy(centre).setY(y + 0.005);
+  const glowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(length + 0.8, width + 0.9), glowMaterial);
+  glow.rotation.copy(panel.rotation);
+  glow.position.copy(centre).setY(y + 0.013);
+  glow.renderOrder = 2;
+  parent.add(panel, glow);
   return {
-    core, pool, phase,
+    panel,
     update(time) {
-      const k = blink(time, phase);
-      material.color.copy(RED).multiplyScalar(k);
-      poolMaterial.color.copy(RED).multiplyScalar(glow * k);
+      const k = blink(time, phase, 4.6);
+      material.color.copy(RED).multiplyScalar(0.3 + 0.38 * k);
+      glowMaterial.color.copy(RED).multiplyScalar(0.07 * k);
     },
   };
+}
+
+let hatch = null;
+/** Diagonal stripes inside a thin frame, worn at random. */
+function hatchTexture() {
+  if (hatch) return hatch;
+  const w = 96, h = 16, data = new Uint8Array(w * h * 4);
+  let seed = 11;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const frame = y === 0 || y === h - 1 || x === 0 || x === w - 1;
+    const stripe = Math.floor((x + y) / 4) % 2 === 0;
+    const alpha = frame ? 200 : stripe && random() > 0.12 ? 210 : 0;
+    data.set([255, 255, 255, alpha], (y * w + x) * 4);
+  }
+  hatch = new THREE.DataTexture(data, w, h);
+  hatch.magFilter = THREE.NearestFilter;
+  hatch.minFilter = THREE.LinearFilter;
+  hatch.needsUpdate = true;
+  return hatch;
 }

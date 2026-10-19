@@ -25,6 +25,7 @@ import { createSquadMind } from './trooper-ai.js';
 import { returnDirection } from './deflect.js';
 import { createExplosions, loadExplosionAssets } from './explosions.js';
 import { createScorchMarks } from './scorch-marks.js';
+import { createSaberScars } from './saber-scars.js';
 import { createDebris } from './debris.js';
 import { createGrenades } from './grenades.js';
 import { createHeroRagdoll } from './hero-ragdoll.js';
@@ -142,6 +143,9 @@ function init() {
   // laid over the iso view; everything around it is live.
   // Burns that stay: blasts and bolts mark the floor and the crates for good.
   const marks = createScorchMarks(scene, { lab });
+  // The blade melts what it goes into: molten trails that cool, cuts that stay.
+  const scars = createSaberScars(scene, { lab, bounds: ARENA });
+  let scarSparks = 0, scarSizzle = 0;
   const explosions = createExplosions(scene, { marks, slots: 5 });
   camera.layers.enable(1);
   loadExplosionAssets(explosions).catch(error => console.error('Chargement de l’explosion interrompu :', error));
@@ -185,7 +189,7 @@ function init() {
     skewered = thrust = null;
     combat.unpin();
     for (const trooper of troopers) trooper.reset();
-    effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear();
+    effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear(); scars.clear();
     debris.clear(); debris.scatter();
   }
   // Hit stops: at most one per enemy and per attack sequence.
@@ -763,6 +767,21 @@ function init() {
           }
         }
       });
+      // The lit blade in a case, a wall, the floor: a molten line follows it, sparks and a sizzle.
+      if (saber.extension > 0.6 && bladeReady && !down && sim > 0) {
+        // Held low while he walks, the tip dips into the deck: only a strike marks the floor.
+        const contacts = scars.cut(bladeBase, bladeTip, time, { floor: combat.busy && action.trail > 0.2 });
+        scarSparks -= sim; scarSizzle -= sim;
+        for (const contact of contacts) {
+          if (!contact.fresh && scarSparks > 0) continue;
+          const along = new THREE.Vector3().subVectors(bladeTip, lastTip).projectOnPlane(contact.normal);
+          if (along.lengthSq() < 1e-8) along.set(contact.normal.z, 0, -contact.normal.x);
+          effects.sparks(contact.point, contact.normal.clone().addScaledVector(along.normalize(), -0.6).normalize(), along, { count: contact.fresh ? 9 : 3, speed: 2.4, saber: 0.35 });
+        }
+        if (contacts.length && scarSparks <= 0) scarSparks = 0.05;
+        if (contacts.length && scarSizzle <= 0) { scarSizzle = 0.3; audio.sizzle(); }
+      }
+      scars.update(sim);
       bladeReady = saber.extension > 0.6;
       lastBase.copy(bladeBase);
       lastTip.copy(bladeTip);
@@ -827,7 +846,10 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, arena, blasters, troopers, grenades, explosions, debris, knockdown, marks,
+    squad, lab, arena, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars,
+    camera,
+    /** For checks: the lit blade this frame. */
+    blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),
     /** For checks: a grenade thrown by trooper `index` (or dropped) at (x, z). */
     grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
     explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },

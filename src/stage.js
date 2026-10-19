@@ -55,10 +55,12 @@ function paintSteelAtlas() {
     for (let column = 0; column < size / plate; column++) {
       const random = seededRandom(91813 + row * 7919 + column * 104729);
       const x = column * plate, y = row * plate, inner = plate - seam;
-      const kind = random(), tone = 33 + Math.floor(random() * 16);
+      const kind = random(), tone = 27 + Math.floor(random() * 13);
       steel(tone);
       albedo.ctx.fillRect(x + seam, y + seam, inner - 1, inner - 1);
-      roughness.ctx.fillStyle = color(150 + random() * 40);
+      // Each plate its own sheen, as in the reference: some glossy, some matt.
+      const sheen = 95 + random() * 110;
+      roughness.ctx.fillStyle = color(sheen);
       roughness.ctx.fillRect(x + seam, y + seam, inner - 1, inner - 1);
       height.ctx.fillStyle = '#a0a0a0';
       height.ctx.fillRect(x + seam, y + seam, inner - 1, inner - 1);
@@ -99,7 +101,34 @@ function paintSteelAtlas() {
           steel(tone + 16);
           albedo.ctx.fillRect(hx + 2, y + plate / 2 - 1, 12, 2);
         }
-      } else if (kind < 0.62) {
+      } else if (kind < 0.46) {
+        // A fan vent: a square recess, a ring, six blades round a hub.
+        const m = 40, cx = x + plate / 2, cy = y + plate / 2, radius = plate / 2 - m - 8;
+        albedo.ctx.fillStyle = '#0a0c0f';
+        albedo.ctx.fillRect(x + m - 3, y + m - 3, plate - 2 * m + 6, plate - 2 * m + 6);
+        steel(tone - 2);
+        albedo.ctx.fillRect(x + m, y + m, plate - 2 * m, plate - 2 * m);
+        steel(tone + 22);
+        albedo.ctx.fillRect(x + m, y + m, plate - 2 * m, 2);
+        albedo.ctx.fillRect(x + m, y + m, 2, plate - 2 * m);
+        albedo.ctx.fillStyle = '#07080a';
+        albedo.ctx.beginPath(); albedo.ctx.arc(cx, cy, radius + 4, 0, Math.PI * 2); albedo.ctx.fill();
+        steel(tone + 6);
+        for (let blade = 0; blade < 6; blade++) {
+          const a = blade * Math.PI / 3 + random() * 0.2;
+          albedo.ctx.beginPath();
+          albedo.ctx.moveTo(cx, cy);
+          albedo.ctx.arc(cx, cy, radius, a, a + 0.62);
+          albedo.ctx.closePath();
+          albedo.ctx.fill();
+        }
+        steel(tone + 16);
+        albedo.ctx.beginPath(); albedo.ctx.arc(cx, cy, 9, 0, Math.PI * 2); albedo.ctx.fill();
+        height.ctx.fillStyle = '#404040';
+        height.ctx.beginPath(); height.ctx.arc(cx, cy, radius + 4, 0, Math.PI * 2); height.ctx.fill();
+        roughness.ctx.fillStyle = color(170);
+        roughness.ctx.fillRect(x + m, y + m, plate - 2 * m, plate - 2 * m);
+      } else if (kind < 0.66) {
         // Split plate: a second seam across.
         const across = random() < 0.5, at = Math.floor(plate * (0.35 + random() * 0.3));
         albedo.ctx.fillStyle = '#0a0c0f';
@@ -123,6 +152,17 @@ function paintSteelAtlas() {
         if (along) albedo.ctx.fillRect(x + seam + start, y + (random() < 0.5 ? seam + offset : plate - offset - 2), length, 1);
         else albedo.ctx.fillRect(x + (random() < 0.5 ? seam + offset : plate - offset - 2), y + seam + start, 1, length);
       }
+      // A row of rivets along one edge of some plates.
+      if (random() < 0.4) {
+        const vertical = random() < 0.5;
+        for (let r = 22; r < plate - 22; r += 14) {
+          const rx = vertical ? x + seam + 6 : x + r, ry = vertical ? y + r : y + seam + 6;
+          albedo.ctx.fillStyle = '#0c0e11';
+          albedo.ctx.fillRect(rx - 1, ry - 1, 3, 3);
+          steel(tone + 20);
+          albedo.ctx.fillRect(rx, ry, 1, 1);
+        }
+      }
       // Bolts in the corners.
       for (const [bx, by] of [[10, 10], [plate - 12, 10], [10, plate - 12], [plate - 12, plate - 12]]) {
         albedo.ctx.fillStyle = '#0b0d10';
@@ -145,17 +185,17 @@ function paintSteelAtlas() {
     }
   }
 
-  // Puddles: smooth (wet) where the noise is high, a little darker too.
+  // Wet areas: broad and gentle — a smoother sheen, barely darker; no blotches.
   const wet = tilingNoise(4242, 6), detail = tilingNoise(777, 24);
   const rough = roughness.ctx.getImageData(0, 0, size, size), base = albedo.ctx.getImageData(0, 0, size, size);
   for (let i = 0; i < size * size; i++) {
     const u = (i % size) / size, v = Math.floor(i / size) / size;
-    const puddle = Math.min(1, Math.max(0, (wet(u, v) * 0.8 + detail(u, v) * 0.2 - 0.47) / 0.12));
+    const puddle = Math.min(1, Math.max(0, (wet(u, v) * 0.85 + detail(u, v) * 0.15 - 0.5) / 0.22));
     if (puddle <= 0) continue;
     const k = i * 4;
-    const r = rough.data[k] * (1 - puddle) + 62 * puddle;
+    const r = rough.data[k] * (1 - 0.6 * puddle) + 70 * 0.6 * puddle;
     rough.data[k] = rough.data[k + 1] = rough.data[k + 2] = r;
-    for (let c = 0; c < 3; c++) base.data[k + c] *= 1 - 0.18 * puddle;
+    for (let c = 0; c < 3; c++) base.data[k + c] *= 1 - 0.04 * puddle;
   }
   roughness.ctx.putImageData(rough, 0, 0);
   albedo.ctx.putImageData(base, 0, 0);
@@ -193,8 +233,8 @@ export function createStage(scene, { bounds = { minX: -40, maxX: 40, minZ: -40, 
     color: 0xd8dce7,
     map: textures.colorTexture,
     roughnessMap: textures.roughnessTexture,
-    roughness: 0.95,
-    metalness: 0.62,
+    roughness: 0.85,
+    metalness: 0.7,
     bumpMap: textures.heightTexture,
     bumpScale: 0.014,
     // The puddles mirror the room itself (main.js), not a generic studio.

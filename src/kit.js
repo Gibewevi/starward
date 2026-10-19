@@ -91,6 +91,48 @@ export function blink(time, phase = 0, period = 3.4) {
 }
 
 // Red the bloom keeps red: the frame is tone-mapped (ACES) after the bloom, and
-// brighter than this, red turns orange.
+// brighter than this, red turns orange. Red is an accent here, never the light.
 export const RED = new THREE.Color(0.78, 0.008, 0.008);
 export const AMBER = new THREE.Color(0.8, 0.3, 0.015);
+// The room's light: a warm white, bright enough to bloom softly.
+export const WHITE = new THREE.Color(1.45, 1.36, 1.18);
+// The glow under the grates: deep amber.
+export const EMBER = new THREE.Color(0.95, 0.38, 0.07);
+
+/**
+ * Short light panels set into the floor (as in the reference): dashes in dark
+ * housings along a path, each with a faint pool of light. All of them are two
+ * instanced meshes and one instanced glow; add() paths, then build().
+ */
+export function createFloorLights(parent, { color = WHITE, length = 0.55, width = 0.07, spacing = 2.1, glow = 0.16 } = {}) {
+  const spots = [];
+  const temp = new THREE.Matrix4(), turn = new THREE.Quaternion(), one = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0);
+  return {
+    spots,
+    /** Dashes from a to b (world, on the floor at height y), evenly spaced, centred on the path. */
+    add(a, b, { y = 0, every = spacing } = {}) {
+      const along = b.clone().sub(a), total = along.length();
+      along.normalize();
+      const count = Math.max(1, Math.floor(total / every)), start = (total - (count - 1) * every) / 2;
+      for (let i = 0; i < count; i++) spots.push({ at: a.clone().addScaledVector(along, start + i * every).setY(y), angle: Math.atan2(along.x, along.z) });
+    },
+    build() {
+      const housing = new THREE.InstancedMesh(new THREE.BoxGeometry(width + 0.06, 0.012, length + 0.06), new THREE.MeshStandardMaterial({ color: 0x0b0d10, roughness: 0.5, metalness: 0.7 }), spots.length);
+      const core = new THREE.InstancedMesh(new THREE.BoxGeometry(width, 0.014, length), new THREE.MeshBasicMaterial({ color, toneMapped: false }), spots.length);
+      const pool = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.9, length + 0.9).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: glowTexture(), color: color.clone().multiplyScalar(glow), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), spots.length);
+      spots.forEach(({ at, angle }, index) => {
+        turn.setFromAxisAngle(Y, angle);
+        housing.setMatrixAt(index, temp.compose(at.clone().setY(at.y + 0.004), turn, one));
+        core.setMatrixAt(index, temp.compose(at.clone().setY(at.y + 0.008), turn, one));
+        pool.setMatrixAt(index, temp.compose(at.clone().setY(at.y + 0.014), turn, one));
+      });
+      housing.name = 'Floor light housings';
+      core.name = 'Floor lights';
+      pool.name = 'Floor light glow';
+      housing.receiveShadow = true;
+      pool.renderOrder = 2;
+      for (const mesh of [housing, core, pool]) { mesh.frustumCulled = false; parent.add(mesh); }
+      return { housing, core, pool };
+    },
+  };
+}

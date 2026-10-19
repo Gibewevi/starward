@@ -23,7 +23,7 @@ test('the room closes the deck: walls at the back, a railing along the front edg
   // Nobody takes cover against a wall or a railing.
   const spots = lab.coverSpots(new THREE.Vector3(0, 0, 0), { minDistance: 1 });
   assert.ok(spots.length > 0 && spots.every(spot => spot.box.kind !== 'wall' && spot.box.kind !== 'rail'));
-  assert.ok(arena.strips.length >= 4 && arena.grates.length >= 4, 'red strips and grates');
+  assert.ok(arena.floorLights.spots.length >= 10 && arena.grates.length >= 4, 'floor lights and grates');
 });
 
 test('a bolt strikes the back wall and scorches it there; one flies between the railing bars, over the drop', () => {
@@ -40,7 +40,7 @@ test('a bolt strikes the back wall and scorches it there; one flies between the 
   assert.ok(!events.some(event => event.type === 'impact' && event.point.z > ARENA.maxZ - 0.5), 'not stopped by the railing');
 });
 
-test('the floor lights blink slowly: fully on and nearly off within a few seconds, never black', () => {
+test('the red warning panels breathe slowly: fully on and nearly off within a few seconds, never black', () => {
   const values = Array.from({ length: 400 }, (_, i) => blink(i * 0.01));
   assert.ok(Math.max(...values) > 0.97 && Math.min(...values) < 0.2 && Math.min(...values) > 0.15);
   const { arena } = room();
