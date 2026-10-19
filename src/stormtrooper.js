@@ -63,6 +63,8 @@ const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0), X_AXI
 // The rifle at low ready across the belly; shouldered, its stock against the right shoulder.
 const LOW_READY = { position: new THREE.Vector3(-0.065, 0.075, 0.22), quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.32, 1.12, 0, 'YXZ')) };
 const SHOULDERED = new THREE.Vector3(-0.125, 0.27, 0.23);
+// Blind fire from cover: the rifle held up over it at arm's length, in the spine's frame.
+const BLIND = new THREE.Vector3(-0.04, 0.86, 0.26), blindAt = new THREE.Vector3();
 // Throwing a grenade, the left hand's path in the spine's frame: from the
 // rifle's foregrip, wound up behind the shoulder, swung over the top, released
 // in front, following through across the body.
@@ -336,11 +338,11 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
       kneel: 0, yank: 0, daze: 0, reachFor: null,
       knock: new THREE.Vector3(), spin: 0, run: 0, dangle: 0, stride: 0, choke: 0,
-      gait: 1, crouch: 0, aim: 0, attention: 0, recoil: 0, vrecoil: 0,
+      gait: 1, crouch: 0, aim: 0, blind: 0, attention: 0, recoil: 0, vrecoil: 0,
     });
-    Object.assign(reaction.linear, { crouch: 0, aim: 0 });
+    Object.assign(reaction.linear, { crouch: 0, aim: 0, blind: 0 });
     // Orders from his brain: how to move, where to face, what to aim at, whether to crouch.
-    trooper.order = { velocity: new THREE.Vector3(), face: null, aimAt: null, aim: false, crouch: false, look: null };
+    trooper.order = { velocity: new THREE.Vector3(), face: null, aimAt: null, aim: false, crouch: false, blind: false, over: null, look: null };
     Object.assign(loco, { turnRate: 0, hipYaw: 0, backward: false, lean: 0, bank: 0, lastYaw: heading });
     loco.velocity.set(0, 0, 0);
     base = joints.pelvis.position.clone();
@@ -448,6 +450,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     glide('crouch', able && o.crouch && !r.wound ? 1 : 0, 0.3, ease.inOutCubic);
     const aimTarget = o.aimAt;
     glide('aim', able && o.aim && aimTarget && trooper.holding && !r.wound && r.daze < 0.3 ? 1 : 0, o.aim ? 0.24 : 0.4, ease.outCubic);
+    // Blind fire: crouched behind cover, the rifle up over it, head down.
+    glide('blind', able && o.blind && aimTarget && trooper.holding && !r.wound && r.daze < 0.3 ? 1 : 0, 0.32, ease.inOutCubic);
     const lookAt = o.look ?? (o.aim ? aimTarget : null);
     r.attention = approach(r.attention, lookAt && !choking ? 1 : 0, dt / 0.3);
     const crouch = r.crouch, aim = r.aim, attend = r.attention;
@@ -533,6 +537,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // Aiming, his cheek goes down onto the stock.
     off(joints.neck, 0.05 * keep + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 * (1 - choke) + dazed * 0.15 - choke * 0.5 + writhe(19.7, 29.3, 9.1) * 0.18 + ((lookPitch - aimPitch * 0.4) * attend + aim * 0.12 - crouch * 0.28) * (1 - choke),
       (look + lookYaw * attend - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3) * (1 - choke) + writhe(16.3, 25.9, 7.7) * 0.32, r.roll * -0.3 + r.headRoll + loll - aim * 0.14 + writhe(17.3, 27.1, 8.9) * 0.2);
+    // Blind fire: head down behind the cover, back bent over.
+    if (r.blind > 0.001) { off(joints.neck, 0.45 * r.blind, 0, 0); off(joints.spine, 0.14 * r.blind, 0, 0); }
     for (const [side, sign] of SIDES) {
       // In the air the legs kick frantically and out of step; slower while only dangling.
       const kick = (Math.sin(time * 4.6 + sign * 1.3) * 0.3 * (1 - choke) + jitter(time + sign * 3.1, 7.9, 12.1, 4.3) * 0.5 * fight) * dangle;
@@ -553,6 +559,24 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       joints.spine.worldToLocal(temp.copy(aimTarget)).sub(SHOULDERED);
       aimMatrix.lookAt(temp, ORIGIN, UP);
       holder.quaternion.slerp(quaternion.setFromRotationMatrix(aimMatrix), aim);
+    }
+    if (aimTarget && r.blind > 0.001) {
+      // Over the top (as high as the cover asks, within reach), pointed roughly
+      // his way, wavering: he cannot see where it goes.
+      joints.spine.updateWorldMatrix(true, false);
+      const over = blindAt.copy(BLIND);
+      if (o.over) {
+        joints.spine.localToWorld(over);
+        over.y = Math.max(over.y, o.over);
+        joints.spine.worldToLocal(over);
+        over.clampLength(0, 1.08);
+      }
+      holder.position.lerp(over, r.blind);
+      joints.spine.worldToLocal(temp.copy(aimTarget)).sub(over);
+      temp.x += Math.sin(time * 5.1 + seed * 2) * 0.45;
+      temp.y += Math.sin(time * 7.3 + seed) * 0.35;
+      aimMatrix.lookAt(temp, ORIGIN, UP);
+      holder.quaternion.slerp(quaternion.setFromRotationMatrix(aimMatrix), r.blind);
     }
     holder.position.z -= r.recoil * 0.05;
     holder.quaternion.multiply(offsetQuaternion.setFromAxisAngle(X_AXIS, -r.recoil * 0.3));
@@ -2152,7 +2176,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
 
   /** Pulls the trigger: a bolt leaves the muzzle along the barrel (null when he cannot fire). */
   function fire() {
-    if (!trooper.holding || !free() || reaction.aim < 0.75 || reaction.wound) return null;
+    if (!trooper.holding || !free() || (reaction.aim < 0.75 && reaction.blind < 0.75) || reaction.wound) return null;
     holder.updateWorldMatrix(true, false);
     const from = holder.localToWorld(MUZZLE.clone());
     const direction = new THREE.Vector3(0, 0, 1).transformDirection(holder.matrixWorld);

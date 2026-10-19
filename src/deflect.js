@@ -2,12 +2,13 @@ import * as THREE from 'three';
 import { FEEL, pick } from './feel.js';
 
 /**
- * Where a bolt goes once the blade has met it. With probability `precision`,
- * raised towards certainty by `closeness` (0 far from the shooter, 1 right on
- * top of him), it is sent at an enemy — roughly back where it came from, its
- * shooter first — with an aim error that shrinks as that chance grows. Otherwise it is
- * left to chance: back out, thrown off to one side by a random angle and a
- * little up, never aimed at anyone (it may still find someone by luck).
+ * Where a bolt goes once the blade has met it. Distance decides: close to
+ * the shooter (`closeness` 1) it goes straight back at him; far off
+ * (`closeness` 0) it glances off the blade at random. In between, the chance
+ * that it is sent at an enemy — back where it came from, its shooter first —
+ * falls with the distance, and its aim error grows. Training (`precision`)
+ * adds a little. Left to chance, it flies off to either side, into the floor
+ * or up, never aimed at anyone (it may still find someone by luck).
  *
  * enemies: [{ point, shooter, down }] — where each could be hit.
  * Returns { aim (unit vector), target (the enemy aimed at, or null) }.
@@ -15,7 +16,8 @@ import { FEEL, pick } from './feel.js';
 const UP = new THREE.Vector3(0, 1, 0);
 export function returnDirection({ at, incoming, precision = 0, closeness = 0, enemies = [], random = Math.random }) {
   const back = incoming.clone().normalize().negate();
-  const chance = precision + (1 - precision) * THREE.MathUtils.clamp(closeness, 0, 1);
+  const near = THREE.MathUtils.clamp(closeness, 0, 1);
+  const chance = Math.min(1, THREE.MathUtils.lerp(0.04, 1, near ** 1.3) + FEEL.deflect.precision.bonus * precision * near);
   if (random() < chance) {
     let best = null, score = Infinity;
     for (const enemy of enemies) {
@@ -27,7 +29,7 @@ export function returnDirection({ at, incoming, precision = 0, closeness = 0, en
       if (value < score) { score = value; best = enemy; }
     }
     if (best) {
-      const error = FEEL.deflect.error * (1 - chance);
+      const error = FEEL.deflect.error * (1 - near);
       const aim = best.point.clone().sub(at).normalize();
       aim.x += (random() - 0.5) * error * 2;
       aim.y += (random() - 0.5) * error;

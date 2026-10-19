@@ -78,9 +78,9 @@ export const FEEL = {
   blaster: {
     speed: 12.5, // m/s: fast, yet readable and deflectable
     spread: 0.035, // rad: the aim's scatter on a shot meant to hit
-    miss: 0.35, // share of shots that go wide (near misses that whizz past)
-    burst: [2, 4], gap: [0.13, 0.24], // shots per burst; seconds between shots
-    firing: 2, // troopers shooting at the same moment, at most
+    miss: 0.3, // share of shots that go wide (near misses that whizz past)
+    burst: [3, 5], gap: [0.09, 0.15], // shots per burst; seconds between shots
+    firing: 3, // troopers shooting at the same moment, at most
   },
   deflect: {
     reach: 0.9, // m: the blade meets a bolt this far from his chest
@@ -89,11 +89,13 @@ export const FEEL = {
     reactBack: 0.26, // s: the same from behind (the blade has to go over his shoulder and down his back)
     blade: 0.32, // m: a bolt from behind is stopped where it passes this close to the blade down his back…
     body: 0.6, // m: …or, the blade being behind him, before it gets this close to his chest
-    close: [2.5, 9], // m from the shooter: the closer the hero, the likelier the return goes back at him
-    yaw: [0.15, 0.9], lift: [-0.04, 0.18], // scatter (rad) of a return left to chance
+    // m from the shooter: this close, a return goes straight back at him; this
+    // far, it glances off the blade at random. In between, ever less sure.
+    close: [3, 12],
+    yaw: [0.25, 1.55], lift: [-0.22, 0.5], // scatter (rad) of a return left to chance: either side, into the floor or up
     speedUp: 1.3, // a sent-back bolt flies faster
-    precision: { start: 0.1, gain: 0.003, hitGain: 0.006, max: 0.95 }, // chance a return goes for an enemy: grows per deflection, more per hit
-    error: 0.14, // rad: aim error of such a return at zero precision (none at full)
+    precision: { start: 0.1, gain: 0.003, hitGain: 0.006, max: 0.95, bonus: 0.12 }, // training: grows per deflection, more per hit; adds at most `bonus` to the chance
+    error: 0.16, // rad: aim error of an aimed return made from far off (none close by)
   },
   senses: {
     sight: 11, cone: 1.05, peripheral: 1.75, // m; half-angles (rad): full view, corner of the eye
@@ -118,11 +120,18 @@ export const FEEL = {
     shake: 0.42, kick: 0.09, punch: 0.035, // camera
   },
   ai: {
-    startle: [0.28, 0.5], // s from "!" to acting on it
-    hide: [0.7, 1.7], // s crouched behind cover between bursts
-    cycles: [2, 4], // bursts from one cover before moving to another
-    range: [4, 8.5], // m from the hero a good cover lies
-    close: 2.6, // m: closer than this, he backs away
+    startle: [0.18, 0.32], // s from "!" to acting on it
+    hide: [0.35, 0.9], // s crouched behind cover between bursts
+    cycles: [2, 3], // bursts from one cover (or one stop in the open) before moving on
+    range: [4.5, 9], // m from the hero a good cover lies (anchors)
+    flankRange: [3.5, 7], // m: the same for a flanker, at the hero's side
+    advance: 4.5, // m: how close a rusher comes before he stops to fire
+    close: 2.4, // m: closer than this, he backs away
+    pursue: 1, // s out of sight before they go after him
+    search: 7, // s out of sight before they search where he was last seen
+    kneel: 0.5, // chance he kneels to fire in the open (else he stands)
+    blind: 0.35, // chance, behind a low crate, of a blind burst over it
+    blindBurst: [5, 8], blindGap: [0.06, 0.1], blindSpread: 0.16, // shots, s between them, rad of scatter
   },
 };
 

@@ -164,7 +164,7 @@ test('he sees the hero in front of him, not behind his back; a sprint behind him
   assert.ok(Math.abs(wrap(heard.trooper.heading - Math.PI)) < 0.6, `he turns towards the noise (${heard.trooper.heading.toFixed(2)})`);
 });
 
-test('in a fight the squad calls it out, takes cover behind crates, and fires in bursts — a couple at a time', () => {
+test('in a fight the squad calls it out, takes cover behind crates, and fires in bursts — a few at a time', () => {
   const lab = createLab(new THREE.Scene());
   const at = (x, z) => new THREE.Vector3(x, 0, z);
   const spots = [at(-5.3, -2.6), at(-3.3, -4.8), at(-0.9, -5.9)];
@@ -178,8 +178,11 @@ test('in a fight the squad calls it out, takes cover behind crates, and fires in
     const thought = squad.update(1 / 60, { hero });
     shots += thought.shots.length;
     for (const shot of thought.shots) {
-      assert.ok(shot.direction.angleTo(hero.clone().setY(1.05).sub(shot.from)) < 0.35, 'shots go at the hero (or just past him)');
-      assert.ok(lab.clear(shot.from, hero.clone().setY(1.05)), 'never into a crate');
+      // A near miss passes up to a metre off him: from close by, that is a wider angle.
+      const range = hero.clone().setY(1.05).distanceTo(shot.from), allowed = Math.max(0.35, Math.atan2(1.1, range) + 0.08);
+      if (!shot.blind) assert.ok(shot.direction.angleTo(hero.clone().setY(1.05).sub(shot.from)) < allowed, `shots go at the hero (or just past him) from ${range.toFixed(1)} m`);
+      else assert.ok(shot.direction.angleTo(hero.clone().setY(1.05).sub(shot.from)) < 0.9, 'a blind burst goes roughly his way');
+      assert.ok(lab.clear(shot.from, shot.from.clone().addScaledVector(shot.direction, 1.2)), 'never into his own crate');
     }
     together = Math.max(together, squad.minds.filter(mind => mind.token).length);
     for (const trooper of troopers) trooper.update(1 / 60, time);
@@ -187,31 +190,44 @@ test('in a fight the squad calls it out, takes cover behind crates, and fires in
     hidden = Math.max(hidden, squad.minds.filter(mind => mind.tactic === 'hide' && mind.trooper.reaction.crouch > 0.8 && lab.segmentHit(hero.clone().setY(1.45), mind.trooper.root.position.clone().setY(1.0))).length);
   }
   assert.ok(squad.minds.every(mind => mind.mode === 'combat'), 'the call went round');
-  assert.ok(hidden >= 2, `crouched behind crates, out of his sight (${hidden})`);
-  assert.ok(shots >= 4, `bursts fired (${shots} shots)`);
+  assert.ok(hidden >= 1, `crouched behind crates, out of his sight (${hidden})`);
+  assert.ok(shots >= 8, `bursts fired (${shots} shots)`);
   assert.ok(together <= FEEL.blaster.firing, `never more than ${FEEL.blaster.firing} shooting at once`);
   assert.ok(troopers.every(trooper => !trooper.dead), 'nobody hurt himself');
 });
 
-test('a bolt the blade sends back is never aimed by chance, and nearly always aimed with full precision', () => {
+test('a bolt the blade sends back goes straight back at the shooter close by, and glances off at random from far away', () => {
   const at = new THREE.Vector3(0, 1.1, 0), incoming = new THREE.Vector3(0, 0, -1);
   const enemies = [{ point: new THREE.Vector3(0.4, 1.1, 8), shooter: true }, { point: new THREE.Vector3(-5, 1.1, 5) }];
   const random = seeded(9);
-  for (let i = 0; i < 200; i++) {
-    const { aim, target } = returnDirection({ at, incoming, precision: 0, enemies, random });
-    assert.equal(target, null);
+  // Far off: nearly always left to chance — either side, up or into the floor.
+  let aimedFar = 0, left = 0, right = 0, down = 0;
+  for (let i = 0; i < 300; i++) {
+    const { aim, target } = returnDirection({ at, incoming, precision: 0.95, closeness: 0, enemies, random });
+    if (target) { aimedFar++; continue; }
     const angle = new THREE.Vector3(aim.x, 0, aim.z).angleTo(new THREE.Vector3(0, 0, 1));
-    assert.ok(angle > FEEL.deflect.yaw[0] - 0.01 && angle < FEEL.deflect.yaw[1] + 0.01, 'thrown off to one side, back out');
+    assert.ok(angle > FEEL.deflect.yaw[0] - 0.01 && angle < FEEL.deflect.yaw[1] + 0.01, 'thrown off, back out');
+    if (aim.x < 0) left++; else right++;
+    if (aim.y < 0) down++;
   }
-  let aimed = 0;
+  assert.ok(aimedFar < 30, `rarely aimed from far (${aimedFar}/300)`);
+  assert.ok(left > 80 && right > 80 && down > 20, `at random (${left} left, ${right} right, ${down} down)`);
+  // Close: always straight back at the shooter.
   for (let i = 0; i < 200; i++) {
-    const { aim, target } = returnDirection({ at, incoming, precision: 0.95, enemies, random });
-    if (!target) continue;
-    aimed++;
-    assert.ok(aim.angleTo(target.point.clone().sub(at)) < 0.05, 'straight at him');
-    assert.ok(target.shooter, 'the shooter first');
+    const { aim, target } = returnDirection({ at, incoming, precision: 0, closeness: 1, enemies, random });
+    assert.ok(target?.shooter, 'the shooter');
+    assert.ok(aim.angleTo(target.point.clone().sub(at)) < 1e-6, 'exactly at him');
   }
-  assert.ok(aimed > 170, `${aimed}/200 sent at an enemy`);
+  // Halfway: sometimes aimed, and then less exactly.
+  let aimedMid = 0, error = 0;
+  for (let i = 0; i < 300; i++) {
+    const { aim, target } = returnDirection({ at, incoming, precision: 0, closeness: 0.5, enemies, random });
+    if (!target) continue;
+    aimedMid++;
+    error = Math.max(error, aim.angleTo(target.point.clone().sub(at)));
+  }
+  assert.ok(aimedMid > 60 && aimedMid < 240, `halfway, about half aimed (${aimedMid}/300)`);
+  assert.ok(error > 0.01, 'with some error');
 });
 
 test('bolts fly straight, burst on crates, and the blade can send them back', () => {
@@ -257,5 +273,5 @@ test('the closer the hero is to the shooter, the surer the return goes back at h
     return aimed / 400;
   };
   const far = rate(0), half = rate(0.5), close = rate(1);
-  assert.ok(far < 0.16 && half > 0.45 && half < 0.65 && close === 1, `${far} → ${half} → ${close}`);
+  assert.ok(far < 0.08 && half > 0.3 && half < 0.55 && close === 1, `${far} → ${half} → ${close}`);
 });

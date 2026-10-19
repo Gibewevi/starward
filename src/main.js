@@ -9,6 +9,7 @@ import { createCharacter } from './character.js';
 import { createCoat } from './coat.js';
 import { createStage, deckGeometry } from './stage.js';
 import { createArena, ARENA } from './arena.js';
+import { createNav } from './nav.js';
 import { createLighting } from './lighting.js';
 import { createSaber } from './saber.js';
 import { MotionController, damp } from './motion.js';
@@ -154,7 +155,9 @@ function init() {
   const grenades = createGrenades(scene, { lab, reach: FEEL.grenade.reach, onBeep: (grenade, progress) => audio.beep(progress, grenade.position.distanceTo(character.root.position)) });
   const knockdown = createHeroRagdoll(character, { lab });
   const blasters = createBlasters(scene, { effects, lab, marks });
-  const squad = createSquadMind({ troopers, lab, alerts, posts: POSTS, cameraRight: screenRight });
+  // The squad finds its way round the crates and walls on a navigation grid.
+  const nav = createNav(lab, ARENA);
+  const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
   const noises = [];
   const noise = (position, radius, options = {}) => noises.push({ position: position.clone(), radius, ...options });
@@ -638,7 +641,8 @@ function init() {
         if (length > 0.16) { const gain = Math.min(1, (length - 0.16) / 0.8) / length; x += ax * gain; y += ay * gain; analog = true; }
         // Standard mapping: B (1) strikes; RB (5) guards and a press parries
         // (A, 0, guards too); LT (6) pulls and RT (7) pushes with the Force.
-        const guardButton = !!gamepad.buttons[5]?.pressed;
+        // LB (4) or RB (5): the guard that takes the bolts.
+        const guardButton = !!gamepad.buttons[5]?.pressed || !!gamepad.buttons[4]?.pressed;
         if (guardButton && !padGuard) parryPressed = true;
         padGuard = guardButton;
         guard ||= guardButton || !!gamepad.buttons[0]?.pressed;

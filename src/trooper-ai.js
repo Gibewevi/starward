@@ -10,15 +10,22 @@ import { PACE } from './stormtrooper.js';
  * it, then goes to have a look, rifle up; full, he has spotted the hero
  * ("!"): he flinches, calls it out to the squad, and fights.
  *
- * Fighting is a cycle: run to cover (a crate between him and the hero, at a
- * good range, not taken by a squadmate, not reached by running past the
- * hero), crouch, wait, come up — or lean out from a tall stack — aim, fire a
- * burst, duck back down; after a few bursts, or as soon as the hero flanks
- * his cover, move to another. No cover: he shoots in the open, side-stepping
- * between bursts. Too close: he backs away, firing. Disarmed: he runs for his
- * rifle. Lost sight of the hero: he searches where he was last seen, then
- * calms down. Only a couple of them shoot at the same moment, so the fire
- * comes in waves rather than as a wall.
+ * Fighting, each has a part, handed out by distance to the hero: the one
+ * nearest rushes him, two swing round his flanks, the rest hold cover. An
+ * anchor runs to cover (a crate between him and the hero, at a good range,
+ * not taken by a squadmate, away from the others' line), crouches, comes up
+ * — standing behind the crate, leaning out past it, or holding his rifle up
+ * over it for a blind burst — fires, ducks back; after a few bursts, or as
+ * soon as the hero flanks him, he moves on. A rusher closes in, then kneels
+ * or stands to fire, and closes in again; a flanker does the same from the
+ * hero's side. Lose sight of the hero and they go after him at a run; still
+ * nothing, they search where he was last seen, then calm down. Too close: he
+ * backs away, firing. Disarmed: he runs for his rifle. Nobody fires through
+ * a squadmate, and a few at most shoot at the same moment.
+ *
+ * With a navigation grid (nav.js) they find their way round the crates and
+ * walls; whoever stops moving while trying to steps aside and finds another
+ * way, or another plan.
  *
  * update(dt, { hero, noises }) writes each trooper's orders and returns the
  * shots fired and the moments worth a sound: { shots, cues }.
@@ -27,15 +34,20 @@ const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle));
 const flat = vector => vector.clone().setY(0);
 // Heights: the hero's chest and head; the muzzle of a shouldered rifle (a little low, to be safe).
 const CHEST = 1.05, HEAD = 1.55, MUZZLE = 1.1;
+const UP = new THREE.Vector3(0, 1, 0);
+// Parts in a fight, nearest the hero first (a lone trooper holds cover; two, one of them flanks).
+const ROLES = ['rusher', 'flanker', 'anchor', 'flanker', 'anchor'];
+const rolesFor = count => (count === 1 ? ['anchor'] : count === 2 ? ['flanker', 'anchor'] : ROLES);
 
-export function createSquadMind({ troopers, lab, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
+export function createSquadMind({ troopers, lab, nav = null, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
-  let firing = 0, grenadeClock = Infinity;
+  let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
 
   function reset() {
     firing = 0;
     grenadeClock = Infinity;
+    roleClock = Infinity;
     for (const mind of minds) {
       const { trooper, post } = mind;
       Object.assign(mind, {
@@ -44,6 +56,7 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         startle: 0, callout: null, routeIndex: 0, wait: 0, strafe: random() < 0.5 ? 1 : -1, step: 0, glance: 0, heard: 0,
         aimPoint: new THREE.Vector3(), progress: { at: new THREE.Vector3(), time: 0 }, searchTime: 0, side: 1, grenadeClock: Infinity, thrown: false,
         home: (post.position ?? trooper.root.position).clone(), homeHeading: post.heading ?? trooper.heading, route: post.route ?? null,
+        role: null, path: null, stance: 'stand', detour: 0, detourSide: new THREE.Vector3(), stuck: { at: new THREE.Vector3(), time: 0, stamp: -1 }, stuckCount: 0, advanceTo: null,
       });
     }
     alerts?.clear();
@@ -144,29 +157,58 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
   }
 
   // ---- Getting about -------------------------------------------------------
-  /** Sets his steps towards a point, round the crates and clear of squadmates; true once there. */
+  /**
+   * Sets his steps towards a point — along a path round the crates and walls
+   * when there is a navigation grid — clear of squadmates; true once there.
+   * Stopped while trying to move, he steps aside and finds another way.
+   */
   function steer(mind, target, speed, arrive = 0.25) {
-    const t = mind.trooper, o = t.order, at = t.root.position;
-    const to = flat(target).sub(flat(at)), distance = to.length();
-    if (distance < arrive) { o.velocity.set(0, 0, 0); return true; }
+    const t = mind.trooper, o = t.order, at = flat(t.root.position);
+    const goal = flat(target), to = goal.clone().sub(at), distance = to.length();
+    if (distance < arrive) { o.velocity.set(0, 0, 0); mind.path = null; return true; }
     const direction = to.clone().divideScalar(distance);
-    // Round an obstacle in the way: along its face, on the side nearer the goal.
-    const probe = Math.min(distance, 1.3);
-    const hit = lab.segmentHit(temp.copy(at).setY(0.45), temp2.copy(at).addScaledVector(direction, probe).setY(0.45));
-    if (hit && Math.abs(hit.normal.y) < 0.5) {
-      const tangent = new THREE.Vector3(-hit.normal.z, 0, hit.normal.x);
-      const ahead = hit.point.clone().setY(0);
-      if (ahead.clone().add(tangent).distanceTo(flat(target)) > ahead.clone().sub(tangent).distanceTo(flat(target))) tangent.negate();
-      direction.copy(tangent).addScaledVector(hit.normal, 0.3).normalize();
+    const plain = distance < 1.6 && !lab.segmentHit(temp.copy(at).setY(0.45), temp2.copy(goal).setY(0.45));
+    if (nav && !plain) {
+      let way = mind.path;
+      if (!way || way.goal.distanceTo(goal) > 0.6 || (way.age += tick) > 1.5) mind.path = way = { goal, points: nav.path(at, goal) ?? [], age: 0 };
+      while (way.points.length > 1 && at.distanceTo(way.points[0]) < 0.3) way.points.shift();
+      const next = way.points[0];
+      if (next && at.distanceTo(next) > 1e-3) direction.copy(next).sub(at).normalize();
+    } else if (!nav) {
+      // Round an obstacle in the way: along its face, on the side nearer the goal.
+      const probe = Math.min(distance, 1.3);
+      const hit = lab.segmentHit(temp.copy(at).setY(0.45), temp2.copy(at).addScaledVector(direction, probe).setY(0.45));
+      if (hit && Math.abs(hit.normal.y) < 0.5) {
+        const tangent = new THREE.Vector3(-hit.normal.z, 0, hit.normal.x);
+        const ahead = hit.point.clone().setY(0);
+        if (ahead.clone().add(tangent).distanceTo(goal) > ahead.clone().sub(tangent).distanceTo(goal)) tangent.negate();
+        direction.copy(tangent).addScaledVector(hit.normal, 0.3).normalize();
+      }
     }
+    if (mind.detour > 0) { mind.detour -= tick; direction.addScaledVector(mind.detourSide, 1.3).normalize(); }
     // Keep clear of squadmates.
     for (const other of troopers) {
       if (other === t || other.fallen) continue;
-      const away = flat(at).sub(flat(other.root.position)), gap = away.length();
+      const away = at.clone().sub(flat(other.root.position)), gap = away.length();
       if (gap < 0.95 && gap > 1e-4) direction.addScaledVector(away.divideScalar(gap), (0.95 - gap) * 2);
     }
     direction.normalize();
     o.velocity.copy(direction).multiplyScalar(speed * Math.min(1, distance / 0.8 + 0.25));
+    // Hardly moved for most of a second while trying to: a step aside, a new way.
+    const stuck = mind.stuck;
+    if (clock - stuck.stamp > 0.25) { stuck.at.copy(at); stuck.time = 0; }
+    stuck.stamp = clock;
+    stuck.time += tick;
+    if (stuck.time > 0.9) {
+      if (at.distanceTo(stuck.at) < 0.2 && speed > 0.5) {
+        mind.path = null;
+        mind.detour = 0.55;
+        mind.detourSide.set(-direction.z, 0, direction.x).multiplyScalar(random() < 0.5 ? 1 : -1);
+        mind.stuckCount++;
+      } else mind.stuckCount = 0;
+      stuck.at.copy(at);
+      stuck.time = 0;
+    }
     return false;
   }
   const headingTo = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
@@ -175,9 +217,15 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     const hit = lab.segmentHit(temp.copy(threat).setY(1.45), temp2.copy(spot).setY(1.0));
     return Boolean(hit);
   }
+  /** Where the rest of the squad stands, seen from the hero (unit vectors). */
+  function bearings(mind, threat) {
+    return minds.filter(other => other !== mind && other.mode === 'combat' && !other.trooper.dead)
+      .map(other => flat(other.cover?.position ?? other.trooper.root.position).sub(flat(threat)).normalize());
+  }
   function chooseCover(mind) {
     const t = mind.trooper, at = flat(t.root.position), threat = mind.lastKnown;
-    const [near, far] = FEEL.ai.range;
+    const [near, far] = mind.role === 'flanker' ? FEEL.ai.flankRange : FEEL.ai.range;
+    const others = bearings(mind, threat);
     let best = null, bestScore = Infinity;
     for (const spot of lab.coverSpots(threat, { minDistance: near - 0.5 })) {
       if (minds.some(other => other !== mind && other.cover && !other.trooper.dead && other.cover.position.distanceTo(spot.position) < 1.1)) continue;
@@ -187,8 +235,12 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
       // The way there should not run past the hero.
       const line = new THREE.Line3(at, spot.position), closest = line.closestPointToPoint(threat, true, new THREE.Vector3());
       const exposed = closest.distanceTo(threat) < 2.2 ? 5 : 0;
+      // Spread round him: no two on the same line; a flanker wants his side.
+      const bearing = flat(spot.position).sub(flat(threat)).normalize();
+      const crowd = others.reduce((sum, other) => sum + (bearing.angleTo(other) < 0.55 ? 2.2 : 0), 0);
+      const flank = mind.role === 'flanker' && others.length ? (Math.min(...others.map(other => bearing.angleTo(other))) > 1 ? -2.5 : 1.5) : 0;
       const score = travel * 0.75 + (range < near ? (near - range) * 3 : range > far ? (range - far) * 1.2 : Math.abs(range - (near + far) / 2) * 0.3) + exposed
-        + (mind.previousCover && spot.position.distanceTo(mind.previousCover.position) < 0.5 ? 4 : 0) + random() * 0.8;
+        + crowd + flank + (mind.previousCover && spot.position.distanceTo(mind.previousCover.position) < 0.5 ? 4 : 0) + random() * 0.8;
       if (score < bestScore) { bestScore = score; best = spot; }
     }
     return best;
@@ -283,13 +335,35 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
       alerts?.show(t, '?');
     }
   }
-  /** Pulls the trigger: aimed at the hero's chest, or a deliberate near miss that whizzes past. */
-  function shoot(mind, hero, heroVelocity, shots) {
+  /** Is a squadmate in the way of a shot from `from` to `to`? */
+  function friendInLine(t, from, to) {
+    const line = new THREE.Line3(from, to), point = new THREE.Vector3();
+    return troopers.some(other => {
+      if (other === t || other.fallen) return false;
+      const chest = flat(other.root.position).setY(1.05);
+      line.closestPointToPoint(chest, true, point);
+      return point.distanceTo(chest) < 0.5 && point.distanceTo(to) > 0.6;
+    });
+  }
+  /**
+   * Pulls the trigger: aimed at the hero's chest, or a deliberate near miss
+   * that whizzes past; blind (the rifle up over his cover), only roughly his way.
+   */
+  function shoot(mind, hero, heroVelocity, shots, { blind = false } = {}) {
     const t = mind.trooper;
-    // Never into his own cover.
-    if (!lineOfFire(t, new THREE.Vector3().copy(hero).setY(CHEST))) return false;
+    const aimAt = blind ? flat(mind.lastKnown).add(new THREE.Vector3((random() - 0.5) * 2.4, 0, (random() - 0.5) * 2.4)).setY(CHEST + (random() - 0.4) * 0.8) : new THREE.Vector3().copy(hero).setY(CHEST);
+    // Never into his own cover, never through a squadmate.
+    if (!lineOfFire(t, aimAt) || friendInLine(t, t.muzzle, aimAt)) return false;
     const shot = t.fire();
     if (!shot) return false;
+    if (blind) {
+      const direction = aimAt.sub(shot.from).normalize();
+      direction.x += (random() - 0.5) * FEEL.ai.blindSpread * 2;
+      direction.y += (random() - 0.5) * FEEL.ai.blindSpread;
+      direction.z += (random() - 0.5) * FEEL.ai.blindSpread * 2;
+      shots.push({ from: shot.from, direction: direction.normalize(), trooper: t, blind: true });
+      return true;
+    }
     const target = new THREE.Vector3().copy(hero).setY(CHEST + (random() - 0.5) * 0.3);
     // A slight lead on a moving target, imperfect.
     target.addScaledVector(heroVelocity, shot.from.distanceTo(target) / FEEL.blaster.speed * (0.3 + random() * 0.5));
@@ -317,6 +391,36 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     if (troopers.some(other => other !== t && !other.dead && flat(other.root.position).distanceTo(flat(threat)) < g.safe)) return false;
     return random() < (mind.sees ? g.chance : g.chanceHidden);
   }
+  /** Hands out the parts by distance to the hero: rusher, flankers, anchors. */
+  function assignRoles(hero) {
+    const fighters = minds.filter(mind => mind.mode === 'combat' && !mind.trooper.dead && !mind.trooper.impaled);
+    fighters.sort((a, b) => flat(a.trooper.root.position).distanceTo(flat(hero)) - flat(b.trooper.root.position).distanceTo(flat(hero)));
+    const roles = rolesFor(fighters.length);
+    fighters.forEach((mind, index) => { mind.role = roles[index % roles.length]; });
+  }
+  /** Where a rusher or a flanker heads: short of the hero, or round to his side. */
+  function approach(mind, threat) {
+    const at = flat(mind.trooper.root.position), from = flat(threat), away = at.clone().sub(from);
+    if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
+    away.normalize();
+    if (mind.role === 'flanker') {
+      // Round to whichever side is further from the rest of the squad.
+      const others = bearings(mind, threat), mean = others.reduce((sum, b) => sum.add(b), new THREE.Vector3());
+      const left = away.clone().applyAxisAngle(UP, 1.2), right = away.clone().applyAxisAngle(UP, -1.2);
+      const side = mean.lengthSq() > 1e-4 ? (left.dot(mean) < right.dot(mean) ? left : right) : (mind.strafe > 0 ? left : right);
+      away.copy(side);
+    }
+    const range = mind.role === 'flanker' ? FEEL.ai.flankRange[0] + 0.8 : FEEL.ai.advance;
+    const goal = from.addScaledVector(away, range);
+    return nav && !nav.walkable(goal) ? from.clone().add(away.multiplyScalar(range * 0.6)) : goal;
+  }
+  /** Rifle up and a burst: kneeling, standing, or blind over his cover. */
+  function stanceOrders(mind, o) {
+    o.crouch = mind.stance !== 'stand';
+    o.aim = mind.stance !== 'blind';
+    o.blind = mind.stance === 'blind';
+    o.over = o.blind && mind.cover?.box ? mind.cover.box.max.y + 0.22 : null;
+  }
   function fight(mind, dt, hero, heroVelocity, shots) {
     const t = mind.trooper, o = t.order, at = t.root.position;
     const threat = mind.sees ? hero : mind.lastKnown;
@@ -324,13 +428,14 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
     o.aimAt = mind.aimPoint;
     o.look = temp.copy(threat).setY(HEAD).clone();
     if (mind.startle > 0) { mind.startle -= dt; o.face = headingTo(at, threat); return; }
-    // Lost him: go and look where he was.
-    if (mind.seen > 6) {
+    // Lost him for long: go and look where he was.
+    if (mind.seen > FEEL.ai.search) {
       release(mind);
       mind.mode = 'searching';
       mind.searchTime = 0;
       mind.glance = 0;
       mind.cover = null;
+      mind.tactic = null;
       return;
     }
     // Disarmed: the rifle first; failing that, away to cover.
@@ -338,20 +443,28 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
       release(mind);
       const rifle = t.rifle;
       if (rifle && flat(at).distanceTo(rifle) < 10) { steer(mind, rifle, PACE.run, 0.5); return; }
-      mind.tactic = mind.tactic === 'cower' ? 'cower' : null;
+      if (!['move', 'hide', 'cower'].includes(mind.tactic)) mind.tactic = null;
     }
+    // Stuck again and again: a new plan.
+    if (mind.stuckCount >= 3) { mind.stuckCount = 0; release(mind); mind.tactic = null; }
     const distance = flat(at).distanceTo(flat(threat));
-    if (mind.sees && distance < FEEL.ai.close && t.holding && mind.tactic !== 'evade') { mind.tactic = 'evade'; mind.timer = 0; }
+    if (mind.sees && distance < FEEL.ai.close && t.holding && mind.tactic !== 'evade') { release(mind); mind.tactic = 'evade'; mind.timer = 0; }
+    // Out of sight a moment: after him, at a run.
+    if (!mind.sees && mind.seen > FEEL.ai.pursue && t.holding && !['pursue', 'throw', 'blindUp', 'fire', 'evade'].includes(mind.tactic)) {
+      release(mind);
+      mind.tactic = 'pursue';
+      mind.cover = null;
+      mind.peek = null;
+      mind.timer = 0;
+    }
     if (!mind.tactic) {
       mind.previousCover = mind.cover;
-      mind.cover = chooseCover(mind);
-      mind.tactic = mind.cover ? 'move' : 'open';
+      mind.cover = mind.role === 'rusher' && t.holding ? null : chooseCover(mind);
+      mind.tactic = mind.cover ? 'move' : t.holding ? 'advance' : 'cower';
       mind.cycles = 0;
       mind.maxCycles = Math.round(pick(FEEL.ai.cycles, random));
-      mind.progress.at.copy(at);
-      mind.progress.time = 0;
       mind.timer = 0;
-      if (!t.holding) mind.tactic = mind.cover ? 'move' : 'cower';
+      mind.advanceTo = null;
     }
     switch (mind.tactic) {
       case 'move': {
@@ -359,14 +472,7 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         const cover = mind.cover;
         // Running for it; he slows to a walk for the last steps.
         const there = steer(mind, cover.position, flat(at).distanceTo(cover.position) > 1.4 ? PACE.run : PACE.walk, 0.22);
-        // Stuck behind something: pick again.
-        mind.progress.time += dt;
-        if (mind.progress.time > 1.2) {
-          if (mind.progress.at.distanceTo(at) < 0.35) { mind.tactic = null; break; }
-          mind.progress.at.copy(at);
-          mind.progress.time = 0;
-        }
-        if (there) { mind.tactic = 'hide'; mind.timer = pick(FEEL.ai.hide, random) * 0.6; }
+        if (there) { mind.tactic = 'hide'; mind.timer = pick(FEEL.ai.hide, random) * 0.5; }
         break;
       }
       case 'hide': {
@@ -375,29 +481,50 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         o.face = headingTo(at, threat);
         mind.timer -= dt;
         if (!covered(mind.cover.position, threat)) { mind.tactic = null; break; }
+        // The hero has moved off: a cover nearer him.
+        if (flat(mind.cover.position).distanceTo(flat(threat)) > FEEL.ai.range[1] + 2) { mind.tactic = null; break; }
         if (mind.timer > 0) break;
         if (!t.holding) break;
         if (mind.cycles >= mind.maxCycles) { mind.tactic = null; break; }
         if (wantsGrenade(mind, threat, distance)) { mind.tactic = 'throw'; mind.timer = 0; mind.thrown = false; break; }
         if (take(mind)) {
-          // Up behind the crate if his rifle clears it, else out past its edge.
+          // Blind over a low crate now and then; otherwise up behind it, or out past its edge.
+          if (!mind.cover.tall && random() < FEEL.ai.blind) { mind.stance = 'blind'; mind.tactic = 'blindUp'; mind.timer = 0; break; }
           const spot = peekFrom(mind, threat);
-          if (!spot) { release(mind); mind.tactic = null; break; }
+          if (!spot) {
+            if (!mind.cover.tall) { mind.stance = 'blind'; mind.tactic = 'blindUp'; mind.timer = 0; break; }
+            release(mind); mind.tactic = null; break;
+          }
           mind.peekAt = spot;
           mind.peek = spot.distanceTo(mind.cover.position) < 0.05 ? null : spot;
           mind.retries = 0;
+          mind.stance = 'stand';
           mind.tactic = 'peek';
           mind.timer = 0;
-        } else mind.timer = 0.25;
+        } else mind.timer = 0.2;
+        break;
+      }
+      case 'blindUp': {
+        // Rifle up over the crate, head down.
+        stanceOrders(mind, o);
+        o.face = headingTo(at, threat);
+        mind.timer += dt;
+        if (t.reaction.blind > 0.85) {
+          if (!lineOfFire(t, temp2.copy(threat).setY(CHEST))) { mind.stance = 'stand'; mind.tactic = 'hide'; mind.timer = 0.1; release(mind); break; }
+          mind.tactic = 'fire';
+          mind.burst = Math.round(pick(FEEL.ai.blindBurst, random));
+          mind.gap = 0.05;
+        }
+        if (mind.timer > 1.2) { release(mind); mind.stance = 'stand'; mind.tactic = 'hide'; mind.timer = 0.2; }
         break;
       }
       case 'peek': {
         // Up (or out), rifle to the shoulder.
-        if (mind.peek && !steer(mind, mind.peek, PACE.walk, 0.15)) { o.face = headingTo(at, threat); break; }
+        if (mind.peek && !steer(mind, mind.peek, PACE.walk, 0.2)) { o.face = headingTo(at, threat); mind.timer += dt; if (mind.timer > 2) { release(mind); mind.tactic = null; } break; }
         o.aim = true;
         o.face = headingTo(at, threat);
         mind.timer += dt;
-        if (t.reaction.aim > 0.85 && (mind.sees || mind.timer > 0.8)) {
+        if (t.reaction.aim > 0.85 && (mind.sees || mind.timer > 0.6)) {
           // The crate is in the way of his rifle: another spot, or another cover.
           if (!lineOfFire(t, temp2.copy(threat).setY(CHEST))) {
             const next = mind.retries++ < 3 ? peekFrom(mind, threat, mind.peekAt) : null;
@@ -409,55 +536,90 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
           }
           mind.tactic = 'fire';
           mind.burst = Math.round(pick(FEEL.blaster.burst, random));
-          mind.gap = 0.05 + random() * 0.1;
+          mind.gap = 0.04 + random() * 0.06;
         }
-        if (mind.timer > 2) { mind.tactic = 'hide'; mind.timer = 0.3; }
+        if (mind.timer > 1.6) { release(mind); mind.tactic = 'hide'; mind.timer = 0.2; }
+        break;
+      }
+      case 'advance': {
+        // A rusher closes in, a flanker swings round; then he stops to fire.
+        release(mind);
+        mind.timer += dt;
+        if (!mind.advanceTo || mind.timer % 1 < dt) mind.advanceTo = approach(mind, threat);
+        const there = steer(mind, mind.advanceTo, PACE.run, 0.45);
+        if (there) o.face = headingTo(at, threat);
+        const inRange = distance < (mind.role === 'flanker' ? FEEL.ai.flankRange[1] : FEEL.ai.advance + 2.5);
+        // Hiding from him: a grenade to flush him out.
+        if (!mind.sees && wantsGrenade(mind, threat, distance)) { mind.tactic = 'throw'; mind.timer = 0; mind.thrown = false; break; }
+        if (mind.sees && (there || (inRange && mind.timer > 1.1) || mind.timer > 3.5) && take(mind)) {
+          mind.stance = random() < FEEL.ai.kneel ? 'kneel' : 'stand';
+          mind.tactic = 'aimOpen';
+          mind.timer = 0;
+        } else if (there && !mind.sees) mind.tactic = 'pursue';
+        break;
+      }
+      case 'aimOpen': {
+        // Kneeling or standing, the rifle comes up.
+        stanceOrders(mind, o);
+        o.face = headingTo(at, threat);
+        mind.timer += dt;
+        if (mind.timer > 1.4 || !mind.sees) { release(mind); mind.tactic = null; mind.stance = 'stand'; break; }
+        const settled = t.reaction.aim > 0.85 && (mind.stance !== 'kneel' || t.reaction.crouch > 0.7);
+        if (!settled) break;
+        // Kneeling, a crate may be in the way: up he gets; standing too, he moves on.
+        if (!lineOfFire(t, temp2.copy(threat).setY(CHEST))) {
+          if (mind.stance === 'kneel') mind.stance = 'stand';
+          else { release(mind); mind.tactic = 'advance'; mind.timer = 0; mind.advanceTo = null; }
+          break;
+        }
+        mind.tactic = 'fire';
+        mind.burst = Math.round(pick(FEEL.blaster.burst, random)) + (mind.stance === 'kneel' ? 1 : 0);
+        mind.gap = 0.04;
         break;
       }
       case 'fire': {
-        o.aim = true;
+        stanceOrders(mind, o);
         o.face = headingTo(at, threat);
         if (mind.peek) steer(mind, mind.peek, PACE.walk, 0.15);
         mind.gap -= dt;
         if (mind.gap <= 0 && mind.burst > 0) {
-          // Blocked (the hero moved behind something): the burst stops there.
-          if (mind.sees && !shoot(mind, hero, heroVelocity, shots)) mind.burst = 1;
+          const blind = mind.stance === 'blind';
+          // Blocked (the hero moved behind something, or a squadmate is in the way): the burst stops there.
+          if ((blind || mind.sees) && !shoot(mind, hero, heroVelocity, shots, { blind })) mind.burst = 1;
+          if (!blind && !mind.sees) mind.burst = 1;
           mind.burst--;
-          mind.gap = pick(FEEL.blaster.gap, random);
+          mind.gap = pick(blind ? FEEL.ai.blindGap : FEEL.blaster.gap, random);
         }
         if (mind.burst <= 0 && mind.gap <= 0) {
           release(mind);
           mind.cycles++;
-          mind.tactic = mind.cover ? 'back' : 'open';
-          mind.timer = pick(FEEL.ai.hide, random);
+          const fromCover = mind.cover && (mind.stance === 'blind' || mind.peekAt);
+          mind.stance = 'stand';
+          if (fromCover) { mind.tactic = 'back'; mind.timer = pick(FEEL.ai.hide, random); }
+          else { mind.tactic = mind.cycles >= mind.maxCycles ? null : 'advance'; mind.timer = 0; mind.advanceTo = null; }
           mind.step = 0;
         }
         break;
       }
       case 'back': {
         // Back behind the crate.
-        if (mind.peek && !steer(mind, mind.cover.position, PACE.walk, 0.12)) { o.face = headingTo(at, threat); break; }
+        if (mind.peek && !steer(mind, mind.cover.position, PACE.walk, 0.2)) { o.face = headingTo(at, threat); break; }
         mind.peek = null;
+        mind.peekAt = null;
         mind.tactic = 'hide';
         break;
       }
-      case 'open': {
-        // In the open: keep a fair range, side-step between bursts.
-        o.face = headingTo(at, threat);
-        o.aim = mind.sees;
-        const toward = flat(threat).sub(flat(at)).normalize(), across = new THREE.Vector3(-toward.z, 0, toward.x);
-        mind.timer -= dt;
-        mind.step += dt;
-        const range = distance > 8 ? 1 : distance < 4.5 ? -1 : 0;
-        const goal = flat(at).addScaledVector(toward, range * 1.5).addScaledVector(across, mind.strafe * (mind.step < 1.1 ? 1.2 : 0));
-        if (mind.step > 2.2) { mind.step = 0; mind.strafe = -mind.strafe; }
-        steer(mind, goal, PACE.walk * 0.85, 0.2);
-        if (mind.timer <= 0 && mind.sees && t.reaction.aim > 0.85 && take(mind)) {
-          mind.tactic = 'fire';
-          mind.burst = Math.round(pick(FEEL.blaster.burst, random));
-          mind.gap = 0.05;
-        }
-        if (mind.timer < -3) mind.tactic = null;
+      case 'pursue': {
+        // After him: to where he was last seen, at a run, stopping short.
+        release(mind);
+        mind.timer += dt;
+        const from = flat(mind.lastKnown), away = flat(at).sub(from);
+        if (away.lengthSq() < 1e-4) away.set(1, 0, 0);
+        const goal = from.addScaledVector(away.normalize(), 2.5);
+        const there = steer(mind, goal, PACE.run, 0.5);
+        o.face = there ? headingTo(at, threat) : null;
+        if (mind.sees) { mind.tactic = null; break; }
+        if (there) { mind.glance += dt; o.face = headingTo(at, threat) + Math.sin(mind.glance * 2) * 0.8; }
         break;
       }
       case 'evade': {
@@ -470,7 +632,7 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
         mind.gap -= dt;
         if (mind.gap <= 0 && mind.sees && t.reaction.aim > 0.7 && take(mind)) {
           shoot(mind, hero, heroVelocity, shots);
-          mind.gap = 0.35 + random() * 0.35;
+          mind.gap = 0.22 + random() * 0.22;
           release(mind);
         }
         if (distance > FEEL.ai.close + 1.6 || mind.timer > 2.5) mind.tactic = null;
@@ -487,10 +649,10 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
             const target = flat(threat).addScaledVector(flat(heroVelocity), 0.7).add(new THREE.Vector3((random() - 0.5) * 1.4, 0, (random() - 0.5) * 1.4));
             if (t.throwGrenade(target)) { mind.thrown = true; grenadeClock = 0; mind.grenadeClock = 0; }
           }
-          if (mind.timer > 2) mind.tactic = mind.cover ? 'hide' : 'open';
+          if (mind.timer > 2) mind.tactic = mind.cover ? 'hide' : null;
         } else if (!t.throwing) {
           mind.thrown = false;
-          mind.tactic = mind.cover ? 'hide' : 'open';
+          mind.tactic = mind.cover ? 'hide' : null;
           mind.timer = pick(FEEL.ai.hide, random) * 0.6;
         }
         break;
@@ -508,7 +670,11 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
 
   function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [] }) {
     const shots = [], cues = [];
+    tick = dt;
+    clock += dt;
     grenadeClock += dt;
+    // Parts in the fight, handed out again now and then as the fight moves.
+    if ((roleClock += dt) > 4 || minds.some(mind => mind.mode === 'combat' && !mind.role)) { roleClock = 0; assignRoles(hero); }
     for (const mind of minds) mind.grenadeClock += dt;
     const heroSpeed = Math.hypot(heroVelocity.x, heroVelocity.z);
     for (const mind of minds) {
@@ -521,6 +687,7 @@ export function createSquadMind({ troopers, lab, alerts = null, posts = [], rand
       o.look = null;
       o.aim = false;
       o.crouch = false;
+      o.blind = false;
       o.aimAt = mind.aimPoint;
       // In the Force's grip, on the floor, running off: he is not his own master.
       if (!t.free) {
