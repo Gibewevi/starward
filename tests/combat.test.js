@@ -336,3 +336,27 @@ test('the impale drives the blade straight ahead, holds it there as long as it i
   assert.equal(combat.action, null, 'pulled out and back to rest');
   assert.ok(!combat.impaling);
 });
+
+test('the style twirl spins the blade upright round the wrist, three turns, while he keeps walking — never mid-strike or on guard', () => {
+  const combat = new CombatController({ random: () => 0.3 });
+  combat.update(1 / 60, {});
+  assert.ok(combat.twirl());
+  let turned = 0, last = null, highest = -Infinity, lowest = Infinity, free = true;
+  while (combat.action?.name === 'twirl') {
+    const out = combat.update(1 / 60, {});
+    if (out.inputScale < 1 || out.turnScale < 1) free = false;
+    // Upright: the blade turns in a plane across his side (round the x axis).
+    const angle = Math.atan2(out.blade.y, out.blade.z);
+    if (last !== null) turned += Math.abs(Math.atan2(Math.sin(angle - last), Math.cos(angle - last)));
+    last = angle;
+    highest = Math.max(highest, out.blade.y); lowest = Math.min(lowest, out.blade.y);
+  }
+  assert.ok(turned > Math.PI * 2 * 2.5, `about three turns (${(turned / Math.PI / 2).toFixed(1)})`);
+  assert.ok(highest > 0.8 && lowest < -0.8, 'up and down: an upright circle');
+  assert.ok(free, 'his legs stay free');
+  combat.attack({ speed: 0 });
+  assert.equal(combat.twirl(), false, 'not during a strike');
+  const guarded = new CombatController();
+  for (let i = 0; i < 30; i++) guarded.update(1 / 60, { guard: true });
+  assert.equal(guarded.twirl(), false, 'not on guard');
+});

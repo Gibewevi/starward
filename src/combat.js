@@ -340,6 +340,17 @@ export const MOVES = {
       FRONT_LOW(1, { grip: 0 }),
     ],
   },
+  // R3: a flourish for style — the blade spun upright round the wrist beside
+  // him, three turns quickening then settling, hand at the shoulder. He keeps walking.
+  twirl: {
+    role: ['flourish'], from: ['R', 'L', 'F'], to: 'F', duration: 0.95, buffer: 0, chain: 0, active: [2, 2], trail: [0.04, 0.9], free: true,
+    twirls: [[0.04, 0.86, 3, MOULINET, SHOULDER]],
+    keys: [
+      key(0, [-0.3, 0.98, 0.16], [-0.4, -0.45, 0.8], { crouch: 0.3, yaw: -0.15 }),
+      key(0.86, [-0.3, 1.0, 0.16], [-0.4, -0.45, 0.8], { crouch: 0.35, yaw: -0.2 }),
+      key(1, [-0.28, 0.92, 0.2], [-0.5, -0.6, 0.6], { crouch: 0.2 }),
+    ],
+  },
   // Not a strike: the twirl that accompanies igniting the blade.
   draw: {
     role: ['flourish'], from: ['R', 'L', 'F'], to: 'F', duration: 0.62, buffer: 0, chain: 0, active: [2, 2], trail: [0.02, 0.78], free: true,
@@ -552,6 +563,13 @@ export class CombatController {
   unpin() { this.pinned = false; }
   /** Holding the blade in a body (the thrust has gone in, the hold goes on). */
   get impaling() { return this.action?.name === 'impale' && this.pinned && this.time / this.action.duration >= this.action.sustain[0] - 0.12; }
+  /** R3: the style twirl — never during a strike, the guard or a hold, nor twice at once. */
+  twirl() {
+    if (this.busy || this.guard > 0.3 || this.force > 0.3) return false;
+    if (this.action?.name === 'twirl' && this.time / this.action.duration < 0.7) return false;
+    this.start('twirl');
+    return true;
+  }
   /** The ignition twirl; it never interrupts a strike or the guard. */
   flourish() {
     if (this.action || this.guard > 0.3) return false;

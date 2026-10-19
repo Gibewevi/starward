@@ -20,6 +20,7 @@ import { ease, hitStopScale, kick } from './tween.js';
 import { FEEL, pick } from './feel.js';
 import { createImpactEffects } from './impact-effects.js';
 import { createLab, onScreen } from './lab.js';
+import { glowTexture } from './kit.js';
 import { createBlasters, closestSegments } from './blasters.js';
 import { createAlerts } from './alerts.js';
 import { createSquadMind } from './trooper-ai.js';
@@ -171,7 +172,7 @@ function init() {
     try { localStorage.setItem('starward.precision', precision.toFixed(3)); } catch { /* no storage */ }
   };
   const lastBase = new THREE.Vector3();
-  let bladeReady = false, hitStop = null, impactShake = 0, padReset = false;
+  let bladeReady = false, hitStop = null, impactShake = 0;
   // Game feel: hit stops ease back to speed, the view is kicked along the
   // swing and rings out, and a felling blow punches the zoom in a touch.
   const cameraKick = { direction: new THREE.Vector3(), amplitude: 0, age: Infinity }, kickOffset = new THREE.Vector3();
@@ -188,6 +189,13 @@ function init() {
     Object.assign(cameraKick, { amplitude, age: 0 });
   }
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
+  /** L3 / T: everything as it was — the squad at its posts, the hero at the start, the room clean. */
+  function restart() {
+    resetTrooper();
+    reset();
+    dash = null;
+    dashCooldown = 0;
+  }
   function resetTrooper() {
     skewered = thrust = null;
     combat.unpin();
@@ -229,6 +237,68 @@ function init() {
     const point = holdPoint();
     held.hold(point, Math.atan2(motion.x - point.x, motion.z - point.z));
   }
+  // ---- The dash (Y / Space) ------------------------------------------------------
+  // A lightning burst along the ground: off at full speed, easing to a stop
+  // after a few metres; the cape streams, a pale streak of light hangs behind
+  // him an instant and fades, the debris on the floor is swept aside.
+  let dash = null, dashCooldown = 0;
+  const streaks = [[0.85, 0.45], [0.32, 1.1]].map(([width, strength]) => {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(0.55, 0.72, 1.15), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    sprite.visible = false;
+    sprite.userData = { width, strength };
+    scene.add(sprite);
+    return sprite;
+  });
+  const streakFrom = new THREE.Vector3(), streakTo = new THREE.Vector3();
+  let streakFade = 0;
+  function startDash(along) {
+    dash = { age: 0, along };
+    dashCooldown = FEEL.dash.cooldown;
+    motion.face(Math.atan2(along.x, along.z));
+    streakFrom.set(motion.x, 0.95, motion.z);
+    streakFade = 1;
+    // A pale Force wave rushes along the way he goes.
+    effects.wave(streakFrom.clone().setY(0.6), along, { kind: 'push', length: FEEL.dash.speed * FEEL.dash.duration * 0.75, power: 0.55 });
+    shove(along, FEEL.camera.kick * 0.6);
+    audio.whoosh();
+    noise(here.set(motion.x, 0, motion.z), 6, { from: here });
+  }
+  function dashStep(dt) {
+    const { duration, speed, carry } = FEEL.dash;
+    dash.age += dt;
+    const k = Math.min(1, dash.age / duration), v = speed * (1 - k ** 3);
+    motion.vx = dash.along.x * v;
+    motion.vz = dash.along.z * v;
+    motion.x += motion.vx * dt;
+    motion.z += motion.vz * dt;
+    motion.speed = v;
+    motion.runBlend = motion.sprint = 1;
+    motion.idleTime = 0;
+    debris.kick(here.set(motion.x, 0, motion.z), dash.along.clone().multiplyScalar(v));
+    if (k >= 1) {
+      // He keeps a little of it into his stride.
+      motion.vx = dash.along.x * speed * carry;
+      motion.vz = dash.along.z * speed * carry;
+      dash = null;
+    }
+  }
+  /** The streak: from where the dash began to where he is, camera-facing, fading once he stops. */
+  function updateStreak(dt) {
+    if (streakFade <= 0) { for (const sprite of streaks) sprite.visible = false; return; }
+    if (dash) streakTo.set(motion.x, 0.95, motion.z);
+    else streakFade = Math.max(0, streakFade - dt / 0.28);
+    camera.updateMatrixWorld();
+    const a = streakFrom.clone().project(camera), b = streakTo.clone().project(camera);
+    const dx = (b.x - a.x) * (camera.right - camera.left) / 2 / camera.zoom, dy = (b.y - a.y) * (camera.top - camera.bottom) / 2 / camera.zoom;
+    for (const sprite of streaks) {
+      sprite.position.lerpVectors(streakFrom, streakTo, 0.5);
+      sprite.material.rotation = Math.atan2(dy, dx);
+      sprite.scale.set(Math.hypot(dx, dy) + 0.5, sprite.userData.width, 1);
+      sprite.material.opacity = streakFade * sprite.userData.strength;
+      sprite.visible = true;
+    }
+  }
+
   // LT and B held, a trooper before him: the blade goes through him. A quick
   // tap of B still strikes; held a moment, it runs the trooper through. He
   // struggles on the blade, dies there, and hangs from it until LT is let go.
@@ -538,9 +608,11 @@ function init() {
   const inputRight = new THREE.Vector2(10, -8).normalize();
   const inputForward = new THREE.Vector2(-8, -10).normalize();
   const joystick = { x: 0, y: 0, running: false, pointer: null };
-  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyU', 'KeyI'];
+  const actionCodes = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyZ', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'KeyJ', 'KeyK', 'KeyT', 'KeyU', 'KeyI', 'KeyE'];
   // B / J strike, RB / K guard (a press parries), LT / U pull, RT / I push.
   let attackPressed = false, padAttack = false, parryPressed = false, padGuard = false, powerPressed = null, padPull = false, padPush = false;
+  // Y / Space dash; R3 / E twirl the blade; L3 / T start the fight again.
+  let dashPressed = false, padDash = false, twirlPressed = false, padTwirl = false, padRestart = false;
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
@@ -549,7 +621,9 @@ function init() {
       if (event.code === 'KeyR') reset();
       if (event.code === 'KeyH') togglePanel('help');
       if (event.code === 'KeyF') fullscreen();
-      if (event.code === 'KeyT') resetTrooper();
+      if (event.code === 'KeyT') restart();
+      if (event.code === 'Space') dashPressed = true;
+      if (event.code === 'KeyE') twirlPressed = true;
       if (event.code === 'KeyJ') attackPressed = true;
       if (event.code === 'KeyK') parryPressed = true;
       if (event.code === 'KeyU') powerPressed = 'forcePull';
@@ -558,7 +632,7 @@ function init() {
     keys.add(event.code);
   });
   window.addEventListener('keyup', event => keys.delete(event.code));
-  function clearInput() { keys.clear(); attackPressed = parryPressed = false; powerPressed = null; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
+  function clearInput() { keys.clear(); attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; joystick.x = joystick.y = 0; joystick.running = false; $('#stick').style.transform = ''; }
   window.addEventListener('blur', clearInput);
   document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); setPause(true); } });
   $('#game').addEventListener('pointerdown', () => { renderer.domElement.focus(); if (audio.enabled) audio.start(); });
@@ -656,15 +730,30 @@ function init() {
         padPull = pull; padPush = push;
         pullHeld ||= pull;
         // Y puts the stormtrooper back on his feet.
-        const resetButton = !!gamepad.buttons[3]?.pressed;
-        if (resetButton && !padReset) resetTrooper();
-        padReset = resetButton;
+        // Y: the dash. L3 (left stick pressed): the fight starts again. R3: the twirl.
+        const dashButton = !!gamepad.buttons[3]?.pressed;
+        if (dashButton && !padDash) dashPressed = true;
+        padDash = dashButton;
+        const restartButton = !!gamepad.buttons[10]?.pressed;
+        if (restartButton && !padRestart) restart();
+        padRestart = restartButton;
+        const twirlButton = !!gamepad.buttons[11]?.pressed;
+        if (twirlButton && !padTwirl) twirlPressed = true;
+        padTwirl = twirlButton;
       }
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       // Thrown by a blast: no control until he is back on his feet.
       const down = knockdown.active;
-      if (down) { attackPressed = parryPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0; }
+      if (down) { attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0; }
+      // The dash: along the stick, or straight ahead with the stick at rest.
+      dashCooldown = Math.max(0, dashCooldown - sim);
+      if (dashPressed && !dash && dashCooldown <= 0 && !skewered && !combat.impaling) {
+        const along = Math.hypot(worldX, worldZ) > 0.2 ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+        startDash(along);
+      }
+      if (twirlPressed) combat.twirl();
+      dashPressed = twirlPressed = false;
       // Powers cut any strike short; a parry too; B strikes and chains.
       keepHold();
       impaleInput(dt, padAttack || keys.has('KeyJ'), down);
@@ -689,7 +778,8 @@ function init() {
       if (down) {
         const at = knockdown.position, moving = knockdown.velocity;
         motion.x = at.x; motion.z = at.z; motion.vx = moving.x; motion.vz = moving.z; motion.speed = 0;
-      } else motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+      } else if (dash) dashStep(sim);
+      else motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
       for (const trooper of troopers) {
         const blocker = trooper.blocker();
         if (!blocker || down) continue;
@@ -814,6 +904,7 @@ function init() {
       zoomPunch.age += dt;
       audio.swing = Math.min(1, swing / 12) * action.weight;
     }
+    updateStreak(dt);
     viewHeight = damp(viewHeight, desiredHeight + motion.runBlend * 0.24, 6, dt);
     // Zoom punch: in fast, out slowly.
     const punched = zoomPunch.age < 0.05 ? ease.outQuad(zoomPunch.age / 0.05) : 1 - ease.inOutSine(Math.min(1, (zoomPunch.age - 0.05) / 0.3));

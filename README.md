@@ -19,7 +19,9 @@ Pour observer le stormtrooper de face, de profil et de dos : **http://127.0.0.1:
 | U | Attraction avec la Force ; maintenue : le soldat reste en lévitation devant le Jedi |
 | U + J maintenues | Face à un soldat : le sabre le transperce ; il reste pendu à la lame tant que U est maintenue |
 | I | Projection avec la Force |
-| T | Relever les stormtroopers intacts, à leur poste |
+| Espace | Déplacement éclair : un bond rapide de quelques mètres dans la direction du stick (ou droit devant) |
+| E | Moulinet du sabre autour du poignet, pour le style |
+| T | Relancer la partie : soldats intacts à leur poste, Jedi au départ, salle nettoyée |
 | Molette | Zoom continu |
 | R | Revenir au centre |
 | Échap | Pause / reprise |
@@ -31,7 +33,9 @@ Pour observer le stormtrooper de face, de profil et de dos : **http://127.0.0.1:
 | Manette : LT | Attraction avec la Force ; maintenu : lévitation devant le Jedi, relâché : il retombe et s’enfuit |
 | Manette : LT + B maintenus | Empaler le soldat devant le Jedi ; relâcher LT : le corps tombe (un appui bref sur B frappe normalement) |
 | Manette : RT | Projection avec la Force |
-| Manette : Y | Relever les stormtroopers |
+| Manette : Y | Déplacement éclair (traînée de lumière pâle, onde de Force, cape qui fouette ; court délai entre deux) |
+| Manette : stick droit enfoncé (R3) | Moulinet du sabre : trois tours verticaux autour du poignet, sans s’arrêter de marcher |
+| Manette : stick gauche enfoncé (L3) | Relancer la partie |
 
 Sur écran tactile, le joystick et le bouton de course apparaissent automatiquement. Les réglages permettent de choisir la taille des pixels, les reflets, le zoom et le son du sabre. Le son est désactivé par défaut.
 

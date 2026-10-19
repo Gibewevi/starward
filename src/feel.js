@@ -48,6 +48,13 @@ export const FEEL = {
     // Held (LT kept down): he hangs in the air before the hero, following him.
     hold: { distance: 1.25, height: 0.5, follow: 9, bob: 0.05 },
   },
+  // Y / Space: a lightning dash along the stick (or straight ahead).
+  dash: {
+    speed: 14, // m/s at the start, easing off: about 2.5 m in all
+    duration: 0.19, // s
+    cooldown: 0.45, // s before the next one
+    carry: 0.3, // share of its speed he keeps when it ends
+  },
   flee: {
     speed: [3.2, 4], time: [1.2, 1.9], stride: 1.3, // m/s, seconds, metres per running cycle
   },
