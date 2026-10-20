@@ -11,7 +11,11 @@ import { FEEL } from './feel.js';
  * moulinets beside the body, a helicopter twirl overhead, wrist rolls. The
  * first strike of a combo is always a quick one, so a press is answered at
  * once; B held through a strike calls the finisher (the player decides when
- * the combo ends). Holding A raises a
+ * the combo ends). Where the next blow goes decides how it starts: an enemy
+ * ahead gets an ordinary link; one to the side, a blow that sweeps towards
+ * him, the blade leading and the body turning after it; one behind, a
+ * reverse thrust under the arm into him before the hero turns round, or a
+ * turning cut with the blade held out leading the turn. Holding A raises a
  * two-handed guard the hero can walk or run in. Igniting the blade plays a
  * quick draw twirl that never stops the legs.
  *
@@ -23,6 +27,7 @@ import { FEEL } from './feel.js';
  */
 const key = (t, hand, blade, options = {}) => ({ t, hand, blade, left: [0.28, 0.93, 0.02], grip: 0, yaw: 0, pitch: 0, crouch: 0.5, ...options });
 const X = [1, 0, 0], Y = [0, 1, 0], Z = [0, 0, 1];
+const UP = new THREE.Vector3(0, 1, 0);
 // Film-style moulinet: the wrist rolls the blade in a near-vertical circle
 // beside the body, the hand held up in front of the right shoulder, so the
 // blade sweeps past the shoulder on every turn. The circle leans slightly
@@ -260,6 +265,51 @@ export const MOVES = {
       FRONT_LOW(1),
     ],
   },
+  // An enemy right behind him: the hand drops to the right hip, the blade
+  // flips under the arm and is driven straight back into him; pulled out,
+  // the hero turns round to face him (the turn: `turn`, as a fraction of the move).
+  backThrust: {
+    role: ['back'], from: ['R', 'L', 'F'], to: 'F', duration: 0.62, buffer: 0.15, chain: 0.66, active: [0.16, 0.44], trail: [0.08, 0.52],
+    drive: [[0.12, 0.34, -1.3]], turn: [0.5, 0.92], back: 'thrust',
+    keys: [
+      key(0, [-0.28, 1.0, 0.12], [-0.4, -0.3, 0.86], { crouch: 0.55 }),
+      // Down his right side, not across the front: out to the right and back, then down behind.
+      key(0.07, [-0.31, 1.0, 0.04], [-0.85, 0.2, -0.5], { left: [0.27, 0.98, 0.2], yaw: -0.2, crouch: 0.62 }),
+      key(0.14, [-0.28, 0.94, 0.0], [-0.3, -0.45, -0.84], { left: [0.28, 0.98, 0.22], yaw: -0.32, crouch: 0.75 }),
+      key(0.22, [-0.27, 0.95, -0.12], [-0.08, -0.04, -1], { left: [0.3, 0.98, 0.26], yaw: -0.45, pitch: 0.18, crouch: 0.95 }),
+      key(0.42, [-0.27, 0.96, -0.17], [-0.06, 0.0, -1], { left: [0.3, 0.98, 0.26], yaw: -0.5, pitch: 0.2, crouch: 1 }),
+      key(0.6, [-0.25, 1.0, 0.05], [-0.62, 0.1, -0.6], { yaw: -0.2, crouch: 0.75 }),
+      key(0.85, [-0.2, 0.95, 0.3], [-0.4, -0.3, 0.85], { crouch: 0.6 }),
+      FRONT_LOW(1),
+    ],
+  },
+  // An enemy behind, a little further, turning right: the blade swings out
+  // flat to the right and leads the turn — it sweeps through him as the body
+  // comes round, and on across to the left.
+  backSweepRight: {
+    role: ['back'], from: ['R', 'F', 'L'], to: 'L', duration: 0.62, buffer: 0.2, chain: 0.72, active: [0.14, 0.62], trail: [0.08, 0.8],
+    drive: [[0.2, 0.6, 1.2]], turn: [0.06, 0.6], back: 'right',
+    keys: [
+      key(0, [-0.3, 1.0, 0.1], [-0.7, 0.3, -0.6], { left: [0.26, 0.98, 0.22], yaw: -0.4, crouch: 0.6 }),
+      key(0.15, [-0.42, 1.0, 0.0], [-0.92, 0.05, -0.38], { left: [0.3, 1.0, 0.2], yaw: -0.5, crouch: 0.85 }),
+      key(0.45, [-0.42, 0.98, 0.1], [-0.95, 0.04, 0.3], { left: [0.35, 1.0, 0.0], yaw: -0.2, crouch: 0.85 }),
+      key(0.7, [0.12, 1.0, 0.4], [0.7, 0.0, 0.7], { left: [0.32, 0.95, -0.12], yaw: 0.35, crouch: 0.75 }),
+      LOW_LEFT(1),
+    ],
+  },
+  // The same turning left: a backhand, the right hand across the body, the
+  // blade out flat to the left leading the turn, on round to the right.
+  backSweepLeft: {
+    role: ['back'], from: ['L', 'F', 'R'], to: 'R', duration: 0.62, buffer: 0.2, chain: 0.72, active: [0.14, 0.62], trail: [0.08, 0.8],
+    drive: [[0.2, 0.6, 1.2]], turn: [0.06, 0.6], back: 'left',
+    keys: [
+      key(0, [0.12, 0.95, 0.25], [0.6, -0.2, 0.7], { left: [0.3, 0.93, -0.1], yaw: 0.3, crouch: 0.6 }),
+      key(0.15, [0.22, 1.0, 0.08], [0.92, 0.08, -0.38], { left: [0.0, 0.95, 0.25], yaw: 0.55, crouch: 0.85 }),
+      key(0.45, [0.24, 0.98, 0.18], [0.95, 0.05, 0.28], { left: [0.0, 0.95, 0.25], yaw: 0.45, crouch: 0.85 }),
+      key(0.7, [-0.15, 1.05, 0.38], [-0.6, 0.2, 0.75], { left: [0.26, 0.98, 0.2], yaw: -0.2, crouch: 0.7 }),
+      COCKED(1),
+    ],
+  },
   // RB: quick parries — high, left, right — snapped out of the guard and back.
   parryHigh: {
     role: ['parry'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 0.28, buffer: 0.35, chain: 0.6, active: [0.1, 0.55], trail: [0.05, 0.6],
@@ -463,6 +513,10 @@ export class CombatController {
     // B held through a strike: the finisher comes next.
     this.heavy = false;
     this.charge = 0;
+    // Where the next blow should go: { angle (rad, + to his left), distance } from the hero, or null.
+    this.aim = null;
+    // The blade turned towards the target ahead of the body (rad about the vertical).
+    this.lead = 0;
     this.recovery = 0;
     this.guard = 0;
     this.cooldown = 0;
@@ -482,21 +536,42 @@ export class CombatController {
    */
   choose({ speed = 0 } = {}) {
     const fresh = this.hits === 0;
+    const aim = this.aim;
+    // Behind him (not a finisher): a blow that starts behind his back.
+    if (aim && Math.abs(aim.angle) > FEEL.choreography.behind && !this.heavy) return this.behind(aim);
     const role = fresh ? (speed > 2.6 ? 'run' : 'opener') : this.heavy ? 'finisher' : 'link';
     const ofRole = Object.keys(MOVES).filter(name => MOVES[name].role.includes(role));
     let candidates = fresh ? ofRole : ofRole.filter(name => MOVES[name].from.includes(this.side));
     if (!candidates.length) candidates = ofRole;
+    // To the side: a blow sweeping towards him (one that ends on his side), if there is one from where the blade is.
+    if (aim && Math.abs(aim.angle) > FEEL.choreography.side && role !== 'finisher') {
+      const toward = candidates.filter(name => MOVES[name].to === (aim.angle > 0 ? 'L' : 'R'));
+      if (toward.length) candidates = toward;
+    }
     const recent = this.history.slice(-FEEL.attacks.memory);
     const unused = candidates.filter(name => !recent.includes(name));
     if (unused.length) candidates = unused;
     return candidates[Math.min(candidates.length - 1, Math.floor(this.random() * candidates.length))];
   }
   /**
+   * The blow for an enemy behind: right behind and close, the reverse thrust;
+   * further, the turning cut — the short way round, or, him straight behind,
+   * the way the blade already is (on the left: round to the left).
+   */
+  behind(aim) {
+    const c = FEEL.choreography;
+    if (aim.distance < c.thrust && Math.abs(Math.abs(aim.angle) - Math.PI) < c.straight) return 'backThrust';
+    const straight = Math.abs(Math.abs(aim.angle) - Math.PI) < c.either;
+    if (straight) return this.side === 'L' ? 'backSweepLeft' : 'backSweepRight';
+    return aim.angle > 0 ? 'backSweepLeft' : 'backSweepRight';
+  }
+  /**
    * B pressed: a strike at once (out of the guard too: a riposte), or the next
    * one queued. False when it cannot be taken yet — the caller keeps the press
    * a moment and tries again.
    */
-  attack({ speed = 0 } = {}) {
+  attack({ speed = 0, aim = this.aim } = {}) {
+    this.aim = aim;
     if (this.cooldown > 0) return false;
     if (this.busy) {
       const t = this.time / this.action.duration;
@@ -614,7 +689,9 @@ export class CombatController {
    * out, even while striking); charging: B kept down — through a strike, it
    * calls the finisher.
    */
-  update(dt, { guard = false, speed = 0, hold = false, charging = false } = {}) {
+  update(dt, { guard = false, speed = 0, hold = false, charging = false, aim = this.aim, lead = 0 } = {}) {
+    this.aim = aim;
+    this.lead = lead;
     const out = this.output;
     this.clock += dt;
     this.force += ((hold ? 1 : 0) - this.force) * (1 - Math.exp(-12 * dt));
@@ -650,6 +727,11 @@ export class CombatController {
         // Chained strikes start from wherever the previous one left the blade.
         if (this.blendFrom) mixPose(this.actionPose, this.fromPose, this.actionPose, ease(clamp01(this.time / 0.09)));
         copyPose(this.lastPose, this.actionPose);
+        // The blade goes to the target ahead of the body: the arms' pose turned towards it, the chest a little.
+        if (this.lead && !current.free && !current.utility) {
+          for (const name of VECTORS) this.actionPose[name].applyAxisAngle(UP, this.lead);
+          this.actionPose.yaw += this.lead * 0.35;
+        }
         out.weight = current.free ? clamp01(this.time / 0.1) * clamp01((1 - time) / 0.2) : Math.min(1, out.weight + dt / 0.07);
         for (const [from, to, push] of current.drive ?? []) if (time >= from && time <= to) out.drive = push * current.push * Math.sin(Math.PI * (time - from) / (to - from)) * 1.25;
         if (current.lift) { const [from, to, height] = current.lift; if (time > from && time < to) out.lift = Math.sin(Math.PI * (time - from) / (to - from)) * height; }

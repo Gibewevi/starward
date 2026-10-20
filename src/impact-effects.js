@@ -80,11 +80,15 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
   scene.add(beads, streaks, trails);
 
   // Red drops: their own small pool, drawn opaque (not added light).
-  const RED = 700;
+  const RED = 1600;
   const redPosition = new Float32Array(RED * 3), redVelocity = new Float32Array(RED * 3);
   const redState = new Uint8Array(RED), redTime = new Float32Array(RED), redLife = new Float32Array(RED), redSize = new Float32Array(RED), redShade = new Float32Array(RED);
   // Stuck on a wall or a crate's side (1), it runs down a little; on a floor or a lid (0), it stays put.
   const redWall = new Uint8Array(RED), redFloor = new Float32Array(RED);
+  // Running down a wall: its speed, how long it may still run, how far since the last speck of its trail.
+  const redRun = new Float32Array(RED), redRunLeft = new Float32Array(RED), redTravel = new Float32Array(RED);
+  // Nothing to do (no drop alive, none new): the pool is not walked through at all.
+  let lyingOnFloor = 0, redAlive = 0, redDirty = false;
   const from = new THREE.Vector3(), to = new THREE.Vector3();
   const redGeometry = new THREE.BufferGeometry();
   const redPoints = new Float32Array(RED * 3), redColors = new Float32Array(RED * 4), redSizes = new Float32Array(RED);
@@ -121,9 +125,11 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
     at.toArray(redPosition, i * 3);
     v.toArray(redVelocity, i * 3);
     redState[i] = 1;
+    redDirty = true;
     redTime[i] = 0;
     redWall[i] = 0;
     redFloor[i] = 0.008;
+    redRun[i] = redRunLeft[i] = redTravel[i] = 0;
     redLife[i] = pick(FEEL.severed.linger, random);
     redSize[i] = pick(FEEL.severed.size, random);
     redShade[i] = 0.8 + random() * 0.35;
@@ -230,7 +236,7 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
    * A limb comes off: red drops thrown along the blade's sweep, mostly
    * downwards, from the cut.
    */
-  function bleed(at, direction, normal, { speed = 4, count = Math.round(pick(FEEL.severed.red, random)) } = {}) {
+  function bleed(at, direction, normal, { speed = 4, amount = 1, count = Math.round(pick(FEEL.severed.red, random) * amount) } = {}) {
     const v = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
@@ -244,8 +250,39 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
       emitRed(start, v);
     }
   }
-  /** A few more drops falling from a cut for a moment (`object`: where it is). */
-  function drip(object, duration = pick(FEEL.severed.drip, random)) { drips.push({ object, age: 0, duration, clock: random() * 0.1 }); }
+  /** A few more drops falling from a cut for a moment (`object`: where it is); `amount` scales how long and how fast. */
+  function drip(object, duration = pick(FEEL.severed.drip, random), amount = 1) { drips.push({ object, age: 0, duration: duration * Math.sqrt(amount), clock: random() * 0.1, rate: 1 / Math.max(0.4, amount) }); }
+  /** A speck of a running drop's trail, stuck where the drop was. */
+  function speck(i, o) {
+    const j = redCursor;
+    if (j === i) return;
+    redCursor = (redCursor + 1) % RED;
+    redPosition[j * 3] = redPosition[o]; redPosition[j * 3 + 1] = redPosition[o + 1]; redPosition[j * 3 + 2] = redPosition[o + 2];
+    redState[j] = 2; redTime[j] = redTime[i]; redLife[j] = redLife[i];
+    redSize[j] = redSize[i] * 0.62; redShade[j] = redShade[i] * 0.92;
+    redWall[j] = 1; redFloor[j] = redFloor[i]; redRun[j] = redRunLeft[j] = redTravel[j] = 0;
+  }
+  /**
+   * A foot coming down at `at`: the red drops lying on the floor under the
+   * sole are trodden in — some of them taken away. Returns how many were there.
+   */
+  function tread(at, radius = FEEL.prints.radius) {
+    if (!lyingOnFloor) return 0;
+    let found = 0, taken = 0, last = -1;
+    const r2 = radius * radius;
+    for (let i = 0; i < RED; i++) {
+      if (redState[i] !== 2 || redWall[i]) continue;
+      const o = i * 3, dx = redPosition[o] - at.x, dz = redPosition[o + 2] - at.z;
+      if (dx * dx + dz * dz > r2 || redPosition[o + 1] > 0.03) continue;
+      found++;
+      last = i;
+      if (random() < FEEL.prints.take) { redState[i] = 0; redSizes[i] = 0; taken++; }
+    }
+    // Always a little taken up when there was some.
+    if (found && !taken && last >= 0) { redState[last] = 0; redSizes[last] = 0; }
+    if (found) redDirty = true;
+    return found;
+  }
   /**
    * An explosion tears into uneven jets. A few hot leaders draw long trails;
    * smaller, cooler splinters follow the same low lobes, with dark space
@@ -401,14 +438,18 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
       entry.age += dt;
       entry.clock -= dt;
       if (entry.clock > 0 || entry.age > entry.duration) continue;
-      entry.clock = 0.08 + 0.2 * (entry.age / entry.duration) + random() * 0.06;
+      entry.clock = (0.08 + 0.2 * (entry.age / entry.duration) + random() * 0.06) * entry.rate;
       entry.object.getWorldPosition(point);
       emitRed(point, new THREE.Vector3((random() - 0.5) * 0.3, -0.2 - random() * 0.4, (random() - 0.5) * 0.3));
     }
     for (let i = drips.length - 1; i >= 0; i--) if (drips[i].age > drips[i].duration) drips.splice(i, 1);
-    // Red drops: no bounce; they stick where they land (a wall: running down a little), darken, then fade.
-    const { gravity, fade, creep, set } = FEEL.severed;
-    for (let i = 0; i < RED; i++) {
+    // Red drops: no bounce; they stick where they land (a wall: running down, leaving a trail), darken, then fade.
+    const { gravity, fade, trail } = FEEL.severed;
+    const redIdle = !redDirty && redAlive === 0;
+    redDirty = false;
+    lyingOnFloor = 0;
+    redAlive = 0;
+    for (let i = 0; i < (redIdle ? 0 : RED); i++) {
       const o = i * 3, c = i * 4;
       if (!redState[i]) { redSizes[i] = 0; continue; }
       if (redState[i] === 1) {
@@ -423,13 +464,31 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
           to.copy(hit.point).addScaledVector(hit.normal, 0.012).toArray(redPosition, o);
           redState[i] = 2; redTime[i] = 0;
           redWall[i] = Math.abs(hit.normal.y) < 0.5 ? 1 : 0;
-          redFloor[i] = 0.008;
+          // On a side, it will run down to the bottom of that face (the floor, or a lid below).
+          redFloor[i] = Math.max(0.008, hit.box.min.y + 0.01);
+          if (redWall[i]) {
+            const big = THREE.MathUtils.clamp((redSize[i] - FEEL.severed.size[0]) / (FEEL.severed.size[1] - FEEL.severed.size[0]), 0, 1);
+            redRun[i] = THREE.MathUtils.lerp(FEEL.severed.runSpeed[0], FEEL.severed.runSpeed[1], 0.3 * random() + 0.7 * big);
+            redRunLeft[i] = pick(FEEL.severed.run, random);
+          }
         } else if (redPosition[o + 1] <= 0.008) { redPosition[o + 1] = 0.008; redState[i] = 2; redTime[i] = 0; }
       } else {
         redTime[i] += dt;
-        // On a wall it runs down a little, slower and slower, until it sets (never below the floor).
-        if (redWall[i] && redTime[i] < set) redPosition[o + 1] = Math.max(redFloor[i], redPosition[o + 1] - creep * (1 - redTime[i] / set) * dt);
+        // On a wall it runs down, slower and slower, leaving specks of a trail and losing its volume to it.
+        if (redRun[i] > 0) {
+          const step = Math.min(redRun[i] * dt, redPosition[o + 1] - redFloor[i]);
+          redPosition[o + 1] -= step;
+          redTravel[i] += step;
+          while (redTravel[i] >= trail) { redTravel[i] -= trail; speck(i, o); redSize[i] *= 0.988; }
+          redRun[i] *= Math.exp(-dt / 1.4);
+          redRunLeft[i] -= dt;
+          if (redRunLeft[i] <= 0 || redRun[i] < 0.012 || redSize[i] < FEEL.severed.size[0] * 0.55) redRun[i] = 0;
+          // Down at the bottom: on the floor it pools (and can be trodden in).
+          if (redPosition[o + 1] <= redFloor[i] + 1e-4) { redRun[i] = 0; if (redFloor[i] <= 0.009) redWall[i] = 0; }
+        }
       }
+      if (redState[i] === 2 && !redWall[i]) lyingOnFloor++;
+      redAlive++;
       const lying = redState[i] === 2;
       if (lying && redTime[i] >= redLife[i] + fade) { redState[i] = 0; redSizes[i] = 0; continue; }
       const dark = lying ? Math.min(1, redTime[i] / 2.5) : 0, shade = redShade[i];
@@ -441,7 +500,7 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
       // Landed, a drop spreads a little (on a wall it stays rounder).
       redSizes[i] = redSize[i] * (lying ? (redWall[i] ? 1.15 : 1.3) : 1);
     }
-    for (const attribute of [redGeometry.attributes.position, redGeometry.attributes.tint, redGeometry.attributes.size]) attribute.needsUpdate = true;
+    if (!redIdle) for (const attribute of [redGeometry.attributes.position, redGeometry.attributes.tint, redGeometry.attributes.size]) attribute.needsUpdate = true;
     for (const entry of glows) {
       entry.age += dt;
       const t = Math.min(1, entry.age / entry.duration);
@@ -554,9 +613,11 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
       beadPositions, beadColors, beadSizes, streakPositions, streakColors, trailPositions, trailColors]) array.fill(0);
     cursor = nextLight = nextFlare = nextRing = nextWave = 0;
     smoulders.length = 0;
-    for (const array of [redPosition, redVelocity, redState, redTime, redLife, redSize, redShade, redWall, redFloor, redPoints, redColors, redSizes]) array.fill(0);
+    for (const array of [redPosition, redVelocity, redState, redTime, redLife, redSize, redShade, redWall, redFloor, redRun, redRunLeft, redTravel, redPoints, redColors, redSizes]) array.fill(0);
+    lyingOnFloor = 0;
     redCursor = 0;
     drips.length = 0;
+    redDirty = true;
     glows.length = 0;
     tweens.clear();
     for (const slot of lights) { slot.light.intensity = 0; slot.tween = null; }
@@ -567,7 +628,7 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
   return {
-    points: beads, beads, streaks, trails, reds, sparks, bleed, drip, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
+    points: beads, beads, streaks, trails, reds, sparks, bleed, drip, tread, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
     /** Red drops in the air, and stuck where they landed (walls and crates among them). */
     get red() { let flying = 0, lying = 0, walls = 0; for (let i = 0; i < RED; i++) { flying += redState[i] === 1; lying += redState[i] === 2; walls += redState[i] === 2 && redWall[i]; } return { flying, lying, walls }; },

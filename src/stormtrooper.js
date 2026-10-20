@@ -86,6 +86,55 @@ const materials = {
   black: new THREE.MeshStandardMaterial({ color: 0x15161a, roughness: 0.8, metalness: 0 }),
   lens: new THREE.MeshStandardMaterial({ color: 0x07080b, roughness: 0.18, metalness: 0.1 }),
 };
+/**
+ * What the trooper is drawn with: one material for every part, the colour,
+ * roughness and metalness of the model's own materials carried by each vertex
+ * ('color', 'finish'), so a whole part — its plates included — is a single
+ * mesh, and looks exactly as before.
+ */
+function skinMaterial() {
+  const material = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0 });
+  material.name = 'Trooper skin';
+  material.onBeforeCompile = shader => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 finish;\nvarying vec2 vFinish;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFinish = finish;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vFinish;')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vFinish.x;')
+      .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vFinish.y;');
+  };
+  material.customProgramCacheKey = () => 'trooper-skin';
+  return material;
+}
+materials.skin = skinMaterial();
+/** A copy of a material that keeps the skin's shader (a part flashing on its own). */
+const cloneMaterial = material => {
+  const copy = material.clone();
+  copy.onBeforeCompile = material.onBeforeCompile;
+  copy.customProgramCacheKey = material.customProgramCacheKey;
+  return copy;
+};
+/** A mesh's geometry ready to be stitched into a skin: in its owner's space, plain triangles, its material's colour and finish on every vertex. */
+function prepare(mesh) {
+  mesh.updateMatrix();
+  const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', source.getAttribute('position'));
+  if (!source.getAttribute('normal')) source.computeVertexNormals();
+  geometry.setAttribute('normal', source.getAttribute('normal'));
+  geometry.applyMatrix4(mesh.matrix);
+  const count = geometry.getAttribute('position').count, material = mesh.material;
+  const color = new Float32Array(count * 3), finish = new Float32Array(count * 2);
+  for (let i = 0; i < count; i++) {
+    color[i * 3] = material.color.r; color[i * 3 + 1] = material.color.g; color[i * 3 + 2] = material.color.b;
+    finish[i * 2] = material.roughness ?? 0.5; finish[i * 2 + 1] = material.metalness ?? 0;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
+  geometry.setAttribute('finish', new THREE.BufferAttribute(finish, 2));
+  if (source !== mesh.geometry) source.dispose();
+  return geometry;
+}
 
 // Joint hierarchy in the rest pose: name, parent, offset (metres).
 // A compact, sturdy build: short thick legs, broad hips and shoulders.
@@ -255,7 +304,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     joints.spine.add(holder);
     joints.holder = holder;
     ({ parts, pieces } = buildTrooperParts(materials));
-    compact([...Object.values(parts), ...Object.values(pieces)]);
+    for (const part of Object.values(parts)) dress(part);
     heldGrenade = add(parts.handL, new THREE.SphereGeometry(0.062, 14, 10), materials.shade, [0, -0.1, 0.035], [0, 0, 0], 'Grenade in hand');
     heldGrenade.visible = false;
     mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
@@ -765,10 +814,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const object = body?.object;
     if (!object) return;
     const meshes = [];
-    object.traverse(child => { if (child.isMesh && child.material?.emissive && !child.parent?.name.startsWith('Cut')) meshes.push(child); });
+    object.traverse(child => { if (child.isMesh && child.visible && child.material?.emissive && !child.parent?.name.startsWith('Cut')) meshes.push(child); });
     for (const mesh of meshes) {
       if (mesh.userData.ownMaterial) continue;
-      mesh.material = mesh.material.clone();
+      mesh.material = cloneMaterial(mesh.material);
       mesh.userData.ownMaterial = true;
     }
     tweens.cancel(flashes.get(object));
@@ -803,6 +852,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   function knockOff(piece, velocity) {
     if (!piece || !piece.parent || piece.userData.loose) return null;
     piece.userData.loose = true;
+    unstitch(piece);
     trooper.root.updateMatrixWorld(true);
     trooper.debris.attach(piece);
     piece.updateMatrixWorld(true);
@@ -2026,36 +2076,58 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     return out.expandByScalar(0.25);
   }
   /**
-   * Fewer meshes to draw: inside each part and each armour piece, the meshes
-   * sharing a material become one (their place in the group baked in). The
-   * parts and pieces themselves stay apart, so they still come off and fly
-   * on their own.
+   * One mesh per part: its own meshes and the armour plates still on it are
+   * stitched into a single skin (the model's meshes stay, hidden, for their
+   * shapes). A plate knocked off gets a skin of its own and the part is
+   * stitched again without it — the same pieces come off as before, only
+   * far fewer meshes are drawn (about 17 a trooper instead of 60).
    */
-  function compact(groups) {
-    for (const group of groups) {
-      const sets = new Map();
-      for (const child of group.children) {
-        if (!child.isMesh || child.isSkinnedMesh || Array.isArray(child.material) || !child.visible || child.children.length) continue;
-        const geometry = child.geometry;
-        const key = `${child.material.uuid}|${geometry.index ? 'i' : 'n'}|${Object.keys(geometry.attributes).sort().join(',')}|${Object.keys(geometry.morphAttributes).length}|${child.castShadow}|${child.receiveShadow}|${child.renderOrder}`;
-        if (!sets.has(key)) sets.set(key, []);
-        sets.get(key).push(child);
-      }
-      for (const meshes of sets.values()) {
-        if (meshes.length < 2) continue;
-        const geometries = meshes.map(mesh => { mesh.updateMatrix(); return mesh.geometry.clone().applyMatrix4(mesh.matrix); });
-        const merged = mergeGeometries(geometries);
-        for (const geometry of geometries) geometry.dispose();
-        if (!merged) continue;
-        const first = meshes[0], mesh = new THREE.Mesh(merged, first.material);
-        mesh.name = meshes.map(other => other.name).filter(Boolean).join(' + ');
-        mesh.castShadow = first.castShadow;
-        mesh.receiveShadow = first.receiveShadow;
-        mesh.renderOrder = first.renderOrder;
-        for (const old of meshes) group.remove(old);
-        group.add(mesh);
+  function dress(part) {
+    const own = [];
+    for (const child of part.children) {
+      if (child.isMesh && child.visible) { own.push(prepare(child)); child.visible = false; }
+      else if (child.userData.armour) {
+        child.userData.prepared = [];
+        for (const mesh of child.children) if (mesh.isMesh && mesh.visible) { child.userData.prepared.push(prepare(mesh)); mesh.visible = false; }
       }
     }
+    part.userData.own = own;
+    stitch(part);
+  }
+  /** (Re)builds a part's skin from its own shapes and the plates still on it; the mesh itself is kept (a flash in progress goes on). */
+  function stitch(part) {
+    const list = [...part.userData.own], temporary = [];
+    for (const piece of part.children) {
+      if (!piece.userData.armour || piece.userData.loose || !piece.userData.prepared) continue;
+      piece.updateMatrix();
+      for (const geometry of piece.userData.prepared) { const placed = geometry.clone().applyMatrix4(piece.matrix); list.push(placed); temporary.push(placed); }
+    }
+    const merged = list.length ? mergeGeometries(list) : null;
+    for (const geometry of temporary) geometry.dispose();
+    let skin = part.userData.skin;
+    if (!merged) { if (skin) skin.visible = false; return; }
+    if (!skin) {
+      skin = new THREE.Mesh(merged, materials.skin);
+      skin.name = `${part.name} skin`;
+      skin.castShadow = skin.receiveShadow = true;
+      part.add(skin);
+      part.userData.skin = skin;
+    } else {
+      skin.geometry.dispose();
+      skin.geometry = merged;
+    }
+  }
+  /** A plate off its part: a skin of its own, and the part without it. */
+  function unstitch(piece) {
+    const part = piece.parent;
+    if (piece.userData.prepared && !piece.userData.skin) {
+      const skin = new THREE.Mesh(mergeGeometries(piece.userData.prepared), materials.skin);
+      skin.name = `${piece.name} skin`;
+      skin.castShadow = skin.receiveShadow = true;
+      piece.add(skin);
+      piece.userData.skin = skin;
+    }
+    if (part?.userData.own) stitch(part);
   }
   /** Lying still: the physics stops, and the visible pieces are merged, one mesh per material. */
   function fallAsleep() {
@@ -2248,10 +2320,12 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     } else if (joint && cut(joint, hit)) {
       event.type = 'cut';
       event.joint = joint;
-      // A limb off: fewer sparks, red drops thrown with the blade, a few more falling from both sides of the cut.
+      // A limb off: fewer sparks, red drops thrown with the blade — as many as the part is big — and more
+      // falling from both sides of the cut.
       spray *= FEEL.severed.sparks;
-      effects?.bleed?.(hit.point, sparkDirection, hit.normal, { speed: 2 + Math.min(speed, 8) * 0.5 });
-      for (const { cap } of caps[joint]) effects?.drip?.(cap);
+      const amount = FEEL.severed.parts[joint.replace(/[LR]$/, '')] ?? 1;
+      effects?.bleed?.(hit.point, sparkDirection, hit.normal, { speed: 2 + Math.min(speed, 8) * 0.5, amount });
+      for (const { cap } of caps[joint]) effects?.drip?.(cap, undefined, amount);
       flashPart(bodies[CUTS[joint].child], 1);
       effects?.burst(hit.point, { normal: hit.normal, power: 0.5 + speed / 10 });
       chip(bodies[CUTS[joint].parent], hit.point, hit.velocity, FEEL.armor.cut);

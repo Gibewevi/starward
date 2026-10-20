@@ -35,6 +35,7 @@ import { createHeroRagdoll } from './hero-ragdoll.js';
 import { createAudio } from './audio.js';
 import { createShake } from './shake.js';
 import { createTelegraph } from './telegraph.js';
+import { createFootprints } from './footprints.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -164,6 +165,39 @@ function init() {
     onBeep: (grenade, progress) => audio.beep(progress, grenade.position),
     onBounce: (grenade, speed) => audio.clink(grenade.position, Math.min(1, speed / 6)),
   });
+  // Red footprints: whoever treads in red drops prints his soles on the next steps.
+  const prints = createFootprints(scene);
+  let soles = new WeakMap();
+  const footAt = new THREE.Vector3(), toeAt = new THREE.Vector3();
+  /** A foot coming down: drops under it are trodden in (some taken up); a red sole prints, fainter each step. */
+  function footfall(walker, at, along, side, size) {
+    const sole = soles.get(walker) ?? { L: 0, R: 0, last: 'R' };
+    sole.last = side;
+    const found = effects.tread(at);
+    if (found) sole[side] = Math.min(1, sole[side] + found * FEEL.prints.soak);
+    if (sole[side] > FEEL.prints.faint) prints.stamp(at, along, side, sole[side], size);
+    sole[side] *= FEEL.prints.dry;
+    soles.set(walker, sole);
+  }
+  /** One foot after the other: the next foot to come down. */
+  const nextFoot = walker => ((soles.get(walker)?.last ?? 'R') === 'R' ? 'L' : 'R');
+  /** The hero's foot coming down: where its sole is, and heel to toe. */
+  function heroFootfall() {
+    const bones = character.rig.bones, side = nextFoot(character);
+    bones[side === 'L' ? 'LeftFoot' : 'RightFoot'].getWorldPosition(footAt);
+    bones[side === 'L' ? 'LeftToeBase' : 'RightToeBase'].getWorldPosition(toeAt);
+    const along = toeAt.clone().sub(footAt).setY(0);
+    if (along.lengthSq() < 1e-6) along.set(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+    footfall(character, footAt.clone().lerp(toeAt, 0.4).setY(0), along.normalize(), side, FEEL.prints.hero);
+  }
+  /** A trooper's foot coming down: its sole from heel to toe. */
+  function trooperFootfall(trooper) {
+    const side = nextFoot(trooper);
+    const heel = trooper.particle(`HE${side}`).position, toe = trooper.particle(`T${side}`).position;
+    const along = toe.clone().sub(heel).setY(0);
+    if (along.lengthSq() < 1e-6) along.set(Math.sin(trooper.heading), 0, Math.cos(trooper.heading));
+    footfall(trooper, heel.clone().lerp(toe, 0.5).setY(0), along.normalize(), side, FEEL.prints.trooper);
+  }
   // Warnings: a glint at a muzzle about to fire; chevrons at the screen's edges for threats out of view.
   const telegraph = createTelegraph(scene, { overlay: $('#threats') });
   const knockdown = createHeroRagdoll(character, { lab });
@@ -263,7 +297,8 @@ function init() {
     streakAge = streakBroken = Infinity;
     trauma.clear();
     telegraph.clear();
-    dash = lunge = null;
+    dash = lunge = turn = intent = null;
+    lead = 0;
     dashCooldown = dodge = dashAfter = 0;
   }
   function resetTrooper() {
@@ -275,6 +310,8 @@ function init() {
     reinforcements.reset();
     for (const trooper of troopers) trooper.reset();
     effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear(); scars.clear();
+    prints.clear();
+    soles = new WeakMap();
     debris.clear(); debris.scatter();
   }
   // Hit stops: at most one per enemy and per attack sequence.
@@ -371,30 +408,80 @@ function init() {
   // lands, turning with him if he moves. Out of a dash it reaches further.
   let lunge = null;
   const lungeTo = new THREE.Vector3();
-  function lockOn(name, worldX, worldZ) {
-    const assist = FEEL.assist, rushing = strikeFromDash;
-    strikeFromDash = false;
-    lunge = null;
+  /**
+   * The trooper a strike now would go for: the nearest to the stick's way
+   * (ahead of him with the stick at rest — or, nobody there, one close behind
+   * him). With where he is from the hero: angle (rad, + to his left), distance.
+   */
+  function findMark(worldX, worldZ, rushing) {
+    const assist = FEEL.assist;
     const stick = Math.hypot(worldX, worldZ) > 0.2;
     const along = stick ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
     const range = rushing ? assist.dashRange : assist.range, cone = stick ? assist.cone : assist.coneIdle;
     here.set(motion.x, 0, motion.z);
-    let best = null, bestScore = Infinity;
+    let best = null, bestScore = Infinity, behind = null, behindDistance = FEEL.choreography.near;
     for (const trooper of troopers) {
       if (trooper.dead || trooper.impaled) continue;
       const offset = whereIs(trooper).sub(here), distance = offset.length();
       if (distance > range) continue;
       const angle = distance < 0.4 ? 0 : along.angleTo(offset);
-      if (angle > cone) continue;
+      if (angle > cone) {
+        if (!stick && !trooper.fallen && distance < behindDistance) { behindDistance = distance; behind = trooper; }
+        continue;
+      }
       const score = angle * 1.6 + distance * 0.35 + (trooper.fallen ? 0.7 : 0) - (trooper === held ? 1 : 0);
       if (score < bestScore) { bestScore = score; best = trooper; }
     }
-    if (!best) { if (stick) motion.face(Math.atan2(worldX, worldZ)); return; }
-    const offset = whereIs(best).sub(here), distance = offset.length();
-    motion.face(Math.atan2(offset.x, offset.z));
-    const gap = THREE.MathUtils.clamp(distance - assist.reach, 0, rushing ? assist.dashStep : assist.step);
+    best ??= behind;
+    return best ? markOf(best) : null;
+  }
+  /** Where a trooper is from the hero: distance, and angle from his facing (rad, + to his left). */
+  function markOf(trooper) {
+    const offset = whereIs(trooper).sub(here.set(motion.x, 0, motion.z));
+    return { trooper, distance: offset.length(), angle: angleDelta(motion.heading, Math.atan2(offset.x, offset.z)) };
+  }
+  // The trooper meant when B was pressed: a queued blow goes for him even if
+  // the stick has moved on by the time it starts (a hit stop delays it).
+  let intent = null;
+  // The strike's turn to its target: the body turns during the blow (when the
+  // move says, or until the blade lands), the blade leading; `lead` turns the
+  // arms' pose ahead of the body, fed to the next combat update.
+  let turn = null, lead = 0;
+  function lockOn(name, worldX, worldZ, mark) {
+    const assist = FEEL.assist, rushing = strikeFromDash;
+    strikeFromDash = false;
+    lunge = null;
+    turn = null;
+    lead = 0;
+    if (!mark) { if (Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ)); return; }
+    const move = MOVES[name], action = combat.action;
+    const gap = THREE.MathUtils.clamp(mark.distance - assist.reach, 0, rushing ? assist.dashStep : assist.step);
+    lunge = { trooper: mark.trooper, age: 0, duration: assist.lunge * (gap > 1.6 ? 1.35 : 1), gap, done: 0, track: action ? action.active[0] * action.duration : 0.15 };
+    // Nearly ahead: he squares up to him at once. Further round: the body turns during the blow.
+    if (Math.abs(mark.angle) < 0.5 && !move.turn) { motion.face(motion.heading + mark.angle); return; }
+    const window = move.turn ?? [0, Math.min(0.7, move.active[0] + FEEL.choreography.turnUntil)];
+    turn = { trooper: mark.trooper, name, from: motion.heading, window, back: move.back ?? null };
+    lunge.track = 0;
+  }
+  /** Each frame of a turning strike: the heading eased round to the target (tracked if he moves), the blade's lead. */
+  function turnStep() {
+    lead = 0;
+    if (!turn) return;
     const action = combat.action;
-    lunge = { trooper: best, age: 0, duration: assist.lunge * (gap > 1.6 ? 1.35 : 1), gap, done: 0, track: action ? action.active[0] * action.duration : 0.15 };
+    if (!action || action.name !== turn.name || turn.trooper.dead && !turn.trooper.fallen) { turn = null; return; }
+    const at = whereIs(turn.trooper), want = Math.atan2(at.x - motion.x, at.z - motion.z);
+    let delta = angleDelta(turn.from, want);
+    // A turning cut goes round its own way, even the long way.
+    if (turn.back === 'right' && delta > 0) delta -= Math.PI * 2;
+    if (turn.back === 'left' && delta < 0) delta += Math.PI * 2;
+    const [from, to] = turn.window, k = THREE.MathUtils.clamp((combat.time / action.duration - from) / (to - from), 0, 1);
+    const eased = turn.back ? ease.inOutCubic(k) : ease.outQuad(k);
+    motion.heading = turn.from + delta * eased;
+    const c = FEEL.choreography, off = angleDelta(motion.heading, want);
+    // Side blows: the blade turns towards him ahead of the body. The thrust behind: aimed at him, behind the back.
+    if (!turn.back) lead = THREE.MathUtils.clamp(off * c.lead, -c.maxLead, c.maxLead);
+    else if (turn.back === 'thrust' && k === 0) lead = THREE.MathUtils.clamp(angleDelta(Math.sign(off || 1) * Math.PI, off), -0.6, 0.6);
+    if (k >= 1) turn = null;
   }
   /** Each frame of a locked strike: the glide in, the turn with the target until the blade lands. */
   function lungeStep(dt) {
@@ -959,10 +1046,17 @@ function init() {
       if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
       if (parryPressed) combat.parry();
       if (attackPressed) pending.attack = inputClock;
+      // Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
+      if (intent && (intent.dead || intent.impaled)) intent = null;
+      const mark = intent ? markOf(intent) : findMark(worldX, worldZ, Boolean(dash) || dashAfter > 0 || strikeFromDash);
+      const aim = mark && { angle: mark.angle, distance: mark.distance };
       if (waiting(pending.attack)) {
         // During the dash or just after it, the strike lunges from it.
         const rushing = Boolean(dash) || dashAfter > 0;
-        if (combat.attack({ speed: rushing ? Math.max(motion.speed, 5) : motion.speed })) {
+        // Pressed towards someone else than the one the current blow goes for: he is the next one.
+        const pressed = findMark(worldX, worldZ, rushing);
+        if (combat.attack({ speed: rushing ? Math.max(motion.speed, 5) : motion.speed, aim: pressed && { angle: pressed.angle, distance: pressed.distance } })) {
+          intent = pressed?.trooper ?? null;
           pending.attack = -Infinity;
           strikeFromDash = rushing;
           endDash();
@@ -972,13 +1066,14 @@ function init() {
       attackPressed = parryPressed = false;
       powerPressed = null;
       // B kept down through a strike calls the finisher (not while running a trooper through).
-      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held), charging: attackHeld && !thrust && !skewered });
+      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held), charging: attackHeld && !thrust && !skewered, aim, lead });
       // A strike finds its mark (lockOn); other moves re-aim towards the stick;
       // a power with the stick at rest turns towards the trooper the hero is facing most.
       const started = combat.takeStart();
       if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
       const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
-      if (strike) { lockOn(started, worldX, worldZ); audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
+      if (strike) { lockOn(started, worldX, worldZ, intent ? markOf(intent) : mark); intent = null; audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
+      else if (started) { turn = null; lead = 0; }
       else if (started && !/^(parry|impale)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       else if (started === 'forcePull' || started === 'forcePush') {
         const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
@@ -993,6 +1088,7 @@ function init() {
       else {
         motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
         lungeStep(sim);
+        turnStep();
       }
       for (const trooper of troopers) {
         const blocker = trooper.blocker();
@@ -1025,7 +1121,7 @@ function init() {
       // His steps on the deck.
       if (!down && !dash && motion.speed > 0.35) {
         heroStep += motion.speed * sim / (motion.runBlend > 0.5 ? 1.25 : 0.7);
-        if (heroStep >= 1) { heroStep %= 1; audio.step(character.root.position, { pace: Math.min(1, motion.speed / SPRINT_PACE) }); }
+        if (heroStep >= 1) { heroStep %= 1; audio.step(character.root.position, { pace: Math.min(1, motion.speed / SPRINT_PACE) }); heroFootfall(); }
       } else heroStep = 0.6;
       // Running feet and the blade's hum carry.
       stepClock -= sim; humClock -= sim;
@@ -1126,13 +1222,17 @@ function init() {
         offset.subVectors(bolt.position, chest);
         if (offset.length() < 1.6 && offset.dot(bolt.velocity) > 0) { bolt.whizzed = true; audio.flyby(bolt.position, bolt.velocity); }
       }
-      // The troopers' steps as they run, the armour clacking.
+      // The troopers' steps: heard as they run (the armour clacking), printed in red when their soles are.
       for (const trooper of troopers) {
         if (trooper.fallen || trooper.dead) continue;
         const pace = trooper.velocity.length();
-        if (pace < 1.1 || trooper.root.position.distanceTo(character.root.position) > 13) { trooperSteps.set(trooper, 0.5); continue; }
-        let phase = (trooperSteps.get(trooper) ?? 0.5) + pace * sim / 1.3;
-        if (phase >= 1) { phase %= 1; audio.step(trooper.root.position, { pace: Math.min(1, pace / 3.7), armour: true }); }
+        if (pace < 0.35) { trooperSteps.set(trooper, 0.5); continue; }
+        let phase = (trooperSteps.get(trooper) ?? 0.5) + pace * sim / THREE.MathUtils.lerp(0.62, 1.3, THREE.MathUtils.clamp((pace - 1.35) / 2.35, 0, 1));
+        if (phase >= 1) {
+          phase %= 1;
+          if (pace > 1.1 && trooper.root.position.distanceTo(character.root.position) < 13) audio.step(trooper.root.position, { pace: Math.min(1, pace / 3.7), armour: true });
+          trooperFootfall(trooper);
+        }
         trooperSteps.set(trooper, phase);
       }
       // Kills: every man down for good counts once.
@@ -1142,6 +1242,7 @@ function init() {
       debris.update(sim);
       alerts.update(dt, trooper => (trooper.dead || trooper.impaled ? null : trooper.particle('HT').position), screenRight);
       effects.update(sim);
+      prints.update(sim);
       playerPosition.copy(character.root.position);
       lighting.follow(playerPosition);
       // In a fight, the view leans a little towards the squad, so the shooters stay in frame.
@@ -1241,7 +1342,7 @@ function init() {
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
     squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
-    renderer, composer, reflection,
+    renderer, composer, reflection, prints,
     camera,
     /** For checks: the lit blade this frame. */
     blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),

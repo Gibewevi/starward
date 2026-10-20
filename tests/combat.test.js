@@ -9,11 +9,11 @@ import { createSaber, IGNITE_TIME } from '../src/saber.js';
 function seeded(seed) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 }
-function run(combat, seconds, { press = () => false, guard = false, speed = 0, hold = false, charging = () => false } = {}) {
+function run(combat, seconds, { press = () => false, guard = false, speed = 0, hold = false, charging = () => false, aim = undefined } = {}) {
   const started = [];
   for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
-    if (press(frame)) combat.attack({ speed });
-    combat.update(1 / 60, { guard, speed, hold, charging: charging(frame) });
+    if (press(frame)) combat.attack({ speed, aim });
+    combat.update(1 / 60, { guard, speed, hold, charging: charging(frame), aim });
     const name = combat.takeStart();
     if (name) started.push(name);
   }
@@ -380,4 +380,54 @@ test('the style twirl spins the blade upright round the wrist, three turns, whil
   const guarded = new CombatController();
   for (let i = 0; i < 30; i++) guarded.update(1 / 60, { guard: true });
   assert.equal(guarded.twirl(), false, 'not on guard');
+});
+
+test('the next blow is chosen for where the enemy is: ahead, aside (sweeping towards him), behind (from behind his back)', () => {
+  // Behind and close: the reverse thrust, which starts at once and turns him round only after it has gone in.
+  const thrust = new CombatController({ random: seeded(5) });
+  thrust.attack({ aim: { angle: Math.PI - 0.2, distance: 1.3 } });
+  assert.equal(thrust.action.name, 'backThrust');
+  const move = MOVES.backThrust;
+  assert.ok(move.active[0] * move.duration * 0.86 <= 0.15, 'lands at once');
+  assert.ok(move.turn[0] >= move.active[0], 'he turns only once the blade has gone in');
+  // The blade points behind him as it goes in.
+  const pose = { hand: new THREE.Vector3(), blade: new THREE.Vector3(), left: new THREE.Vector3() };
+  sampleMove(move, 0.3, pose);
+  assert.ok(pose.blade.z < -0.9, 'straight back');
+  // Behind and further: a turning cut, the short way round; straight behind, the way the blade already is.
+  const right = new CombatController({ random: seeded(6) });
+  right.attack({ aim: { angle: -2.6, distance: 2.8 } });
+  assert.equal(right.action.name, 'backSweepRight');
+  const left = new CombatController({ random: seeded(7) });
+  left.attack({ aim: { angle: 2.6, distance: 2.8 } });
+  assert.equal(left.action.name, 'backSweepLeft');
+  const chained = new CombatController({ random: seeded(8) });
+  run(chained, 0.1, { press: frame => frame === 0 });
+  chained.side = 'L';
+  chained.aim = { angle: Math.PI, distance: 3 };
+  assert.equal(chained.behind(chained.aim), 'backSweepLeft', 'blade on the left: round to the left');
+  // Mid-combo, the next press towards an enemy behind: the link becomes a blow behind the back.
+  const combo = new CombatController({ random: seeded(9) });
+  combo.attack({ aim: { angle: 0.1, distance: 1.5 } });
+  const first = combo.action.name;
+  const names = [first];
+  for (let frame = 0; frame < 60; frame++) {
+    if (frame === 12) combo.attack({ aim: { angle: -2.9, distance: 1.4 } });
+    combo.update(1 / 60, { aim: frame >= 12 ? { angle: -2.9, distance: 1.4 } : { angle: 0.1, distance: 1.5 } });
+    const started = combo.takeStart();
+    if (started && started !== names.at(-1)) names.push(started);
+  }
+  assert.ok(MOVES[names[1]]?.role.includes('back'), `a blow behind next (${names})`);
+  // Aside: the link sweeps towards his side.
+  for (let seed = 1; seed <= 12; seed++) {
+    const side = new CombatController({ random: seeded(seed) });
+    side.attack({ aim: { angle: 0, distance: 1.2 } });
+    side.update(1 / 60);
+    const toLeft = side.action.to;
+    run(side, side.action.duration * side.action.chain - 0.02);
+    side.attack({ aim: { angle: 1.4, distance: 1.5 } });
+    run(side, 0.2, { aim: { angle: 1.4, distance: 1.5 } });
+    const next = side.history.at(-1);
+    if (MOVES[next].from.includes(toLeft) && Object.keys(MOVES).some(name => MOVES[name].role.includes('link') && MOVES[name].from.includes(toLeft) && MOVES[name].to === 'L')) assert.equal(MOVES[next].to, 'L', `${next} sweeps to his left`);
+  }
 });

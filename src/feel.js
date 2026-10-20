@@ -21,6 +21,27 @@ export const FEEL = {
     lunge: 0.14, // s: the closing glide
     dashRange: 5, dashStep: 3.2, // after (or during) a dash: further
   },
+  // Red footprints: a foot coming down in red drops takes some of them up and
+  // prints its sole on the next steps, fainter each time.
+  prints: {
+    radius: 0.26, // m round the sole where drops are trodden in (the sole and the splash of the step)
+    take: 0.3, // share of the drops under the sole it takes away
+    soak: 0.2, // how red the sole gets per drop trodden in (1: fully)
+    dry: 0.66, // what is left after each print
+    faint: 0.12, // under this, no more prints
+    linger: [24, 32], fade: 4, // s before a print fades, s to fade
+    hero: [0.3, 0.13], trooper: [0.33, 0.145], // m: sole length, width (a little generous, to read at the pixel size)
+  },
+  // How a blow goes to the next enemy (angles from where the hero faces, rad).
+  choreography: {
+    side: 0.85, // beyond this, a blow sweeping towards him, the blade leading
+    behind: 1.95, // beyond this, a blow starting behind the hero's back
+    thrust: 1.9, // m: this close (and nearly straight behind), the reverse thrust
+    straight: 0.6, either: 0.35, // rad off straight behind: still a thrust; either way round for the turning cut
+    lead: 0.6, maxLead: 1.2, // the blade turned towards the target this much of the way before the body
+    turnUntil: 0.12, // the body's turn ends this long (fraction of the move) after the blade starts to cut
+    near: 2.4, // m: with the stick at rest, an enemy this close behind him is struck too
+  },
   // Presses kept this long while they cannot be taken yet (mid-strike, cooldowns).
   input: { buffer: 0.22 },
   sparks: {
@@ -39,8 +60,15 @@ export const FEEL = {
     speed: 0.9, // share of the blade's speed they are thrown with
     lift: [0.6, 2.4], // m/s: thrown up a little as well
     gravity: 15, // m/s² (sparks: 9.8): they come back down fast
-    creep: 0.05, // m/s: on a wall a drop runs down a little before it sets
-    set: 1.2, // s it takes to set on a wall
+    // On a wall or a crate's side a drop runs down for a few seconds, slowing,
+    // leaving a red trail behind it (and losing its volume to it); it may
+    // reach the floor and pool there.
+    run: [1.8, 3.6], // s it runs at most
+    runSpeed: [0.12, 0.32], // m/s at the start (bigger drops faster)
+    trail: 0.02, // m between two specks of its trail
+    // How much a severed part sprays, by the joint cut (the drops' count and the drip from the cut):
+    // the head and the body a lot, a hand or a foot a little.
+    parts: { neck: 2.1, waist: 2.5, shoulder: 1.35, hip: 1.45, elbow: 0.85, knee: 0.9, wrist: 0.45, ankle: 0.5 },
     drip: [0.6, 1], // s: a few drops still fall from the cut after
     linger: [24, 32], // s stuck where they landed before they fade
     fade: 4, // s to fade out

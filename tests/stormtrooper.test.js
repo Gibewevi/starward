@@ -331,6 +331,35 @@ test('a corpse still reacts to the blade', () => {
   assert.ok(state.fastest() < 0.15 && state.finite());
 });
 
+test('one mesh per part, its plates included: the same look, the same plates coming off', () => {
+  const state = fixture(41);
+  const { trooper, scene } = state;
+  const drawn = () => { const list = []; scene.traverseVisible(object => { if (object.isMesh) list.push(object); }); return list; };
+  const meshes = drawn();
+  assert.ok(meshes.length <= 18, `a part, a mesh (${meshes.length} drawn)`);
+  assert.ok(meshes.every(mesh => mesh.material.name === 'Trooper skin' && mesh.geometry.getAttribute('color') && mesh.geometry.getAttribute('finish')), 'colour and finish carried by the vertices');
+  // The model's own colours are all there: armour white, suit black, grey, lens.
+  const colours = new Set();
+  for (const mesh of meshes) { const c = mesh.geometry.getAttribute('color').array; for (let i = 0; i < c.length; i += 3) colours.add(`${c[i].toFixed(3)},${c[i + 1].toFixed(3)},${c[i + 2].toFixed(3)}`); }
+  assert.ok(colours.size >= 4, `all the model's colours (${colours.size})`);
+  // Plates knocked off: each flies with a skin of its own, its part stitched again without it.
+  state.run(0.4);
+  const counts = new Map(Object.entries(trooper.parts).map(([name, part]) => [name, part.userData.skin.geometry.getAttribute('position').count]));
+  const side = new THREE.Vector3(1, 0, 0).applyQuaternion(trooper.root.quaternion), forward = new THREE.Vector3(0, 0, 1).applyQuaternion(trooper.root.quaternion);
+  for (let i = 0; i < 6; i++) {
+    const point = state.particle('W').lerp(state.particle('N'), 0.3 + i * 0.1).addScaledVector(side, (i % 3 - 1) * 0.15);
+    state.sweep(point, forward, side, 1.8, 4, { before: 0.3, length: 0.45 });
+    state.run(0.4);
+  }
+  const loose = Object.values(trooper.pieces).filter(piece => piece.userData.loose);
+  assert.ok(loose.length >= 1, 'plates came off');
+  for (const piece of loose) assert.ok(piece.userData.skin?.visible && piece.parent === trooper.debris, `${piece.name} drawn on its own, flying`);
+  const thinner = Object.entries(trooper.parts).filter(([name, part]) => part.userData.skin.geometry.getAttribute('position').count < counts.get(name));
+  assert.ok(thinner.length >= 1, `the parts drawn without their lost plates (${thinner.map(([name]) => name)})`);
+  assert.ok(drawn().length <= 18 + loose.length, 'still a mesh a part, a mesh a loose plate');
+  assert.ok(state.finite());
+});
+
 test('a body lying still falls asleep: out of the physics, its pieces merged into a few meshes; a blade or a push wakes it', () => {
   const state = fixture(29);
   state.run(0.5);
