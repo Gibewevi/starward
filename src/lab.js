@@ -259,11 +259,11 @@ function dressBarrel(kit, M, min, max) {
  */
 export function warningPanel(parent, centre, length, width, phase = 0, { along = new THREE.Vector3(1, 0, 0), y = 0 } = {}) {
   const angle = Math.atan2(along.z, along.x) * -1;
-  const material = new THREE.MeshBasicMaterial({ map: hatchTexture(), color: RED.clone(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const material = new THREE.MeshBasicMaterial({ name: 'warning panel', map: hatchTexture(), color: RED.clone(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(length, width), material);
   panel.rotation.set(-Math.PI / 2, 0, angle);
   panel.position.copy(centre).setY(y + 0.005);
-  const glowMaterial = new THREE.MeshBasicMaterial({ map: glowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const glowMaterial = new THREE.MeshBasicMaterial({ name: 'warning glow', map: glowTexture(), color: RED.clone(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   const glow = new THREE.Mesh(new THREE.PlaneGeometry(length + 0.8, width + 0.9), glowMaterial);
   glow.rotation.copy(panel.rotation);
   glow.position.copy(centre).setY(y + 0.013);

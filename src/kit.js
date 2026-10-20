@@ -117,7 +117,7 @@ export function createFloorLights(parent, { color = WHITE, length = 0.55, width 
       for (let i = 0; i < count; i++) spots.push({ at: a.clone().addScaledVector(along, start + i * every).setY(y), angle: Math.atan2(along.x, along.z) });
     },
     build() {
-      const housing = new THREE.InstancedMesh(new THREE.BoxGeometry(width + 0.06, 0.012, length + 0.06), new THREE.MeshStandardMaterial({ color: 0x0b0d10, roughness: 0.5, metalness: 0.7 }), spots.length);
+      const housing = new THREE.InstancedMesh(new THREE.BoxGeometry(width + 0.06, 0.012, length + 0.06), new THREE.MeshStandardMaterial({ color: 0x0b0d10, roughness: 0.75, metalness: 0.7 }), spots.length);
       const core = new THREE.InstancedMesh(new THREE.BoxGeometry(width, 0.014, length), new THREE.MeshBasicMaterial({ color, toneMapped: false }), spots.length);
       const pool = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.9, length + 0.9).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: glowTexture(), color: color.clone().multiplyScalar(glow), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), spots.length);
       spots.forEach(({ at, angle }, index) => {

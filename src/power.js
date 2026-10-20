@@ -16,12 +16,16 @@ import { FEEL } from './feel.js';
  *
  * `fixtures`: points on the light fittings (where sparks fly when the power
  * dies), nearest first from any point with fixturesFrom(point).
+ *
+ * A root may be { group, keep }: `keep` names materials that stay faintly on
+ * when the power is cut (battery-backed diodes on the cases), and how much.
  */
 export function createPower({ scene, roots = [], lighting = null }) {
   const emitters = [], lamps = [], fixtures = [];
   const seen = new Set();
   const point = new THREE.Vector3(), matrix = new THREE.Matrix4();
-  for (const root of roots) {
+  for (const entry of roots) {
+    const root = entry.isObject3D ? entry : entry.group, keep = entry.isObject3D ? {} : entry.keep ?? {};
     root.updateMatrixWorld(true);
     root.traverse(object => {
       if (object.isPointLight || object.isSpotLight) { lamps.push({ light: object, base: object.intensity, last: object.intensity }); return; }
@@ -32,7 +36,7 @@ export function createPower({ scene, roots = [], lighting = null }) {
       if (!shines || !material.color) return;
       if (!seen.has(material)) {
         seen.add(material);
-        emitters.push({ material, base: material.color.clone(), last: material.color.clone() });
+        emitters.push({ material, base: material.color.clone(), last: material.color.clone(), floor: keep[material.name] ?? 0 });
       }
       // Where the fittings are: each instance of an instanced light, a few points of a merged one.
       if (material.blending === THREE.AdditiveBlending) return;
@@ -66,10 +70,10 @@ export function createPower({ scene, roots = [], lighting = null }) {
   function apply() {
     const night = FEEL.blackout.night, k = level;
     for (const entry of emitters) {
-      const { material, base, last } = entry;
+      const { material, base, last } = entry, on = entry.floor + (1 - entry.floor) * k;
       // Still since we last set it: from its base. Animated (it changed): dimmed on top of its animation.
-      if (material.color.equals(last)) material.color.copy(base).multiplyScalar(k);
-      else material.color.multiplyScalar(k);
+      if (material.color.equals(last)) material.color.copy(base).multiplyScalar(on);
+      else material.color.multiplyScalar(on);
       last.copy(material.color);
     }
     for (const entry of lamps) {

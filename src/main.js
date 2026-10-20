@@ -209,8 +209,8 @@ function init() {
   // In the back corner, the transformer the room's lights hang on (an obstacle like a crate).
   const transformer = createTransformer(scene, { lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
   // The room's power: every light of it follows one level; the rifle lamps for the dark.
-  const power = createPower({ scene, roots: [lab.group, arena.group], lighting });
-  const flashlights = createFlashlights(scene);
+  const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
+  const flashlights = createFlashlights(scene, { lab });
   const nav = createNav(lab, ARENA);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
@@ -1401,7 +1401,9 @@ function init() {
       if (state.progress > 0) { trauma.atLeast(0.12 + 0.3 * state.progress); rumble(0.12 + 0.45 * state.progress, 0.3 + 0.5 * state.progress, 0.12); }
       powerStep(sim, state.progress);
       power.apply();
-      for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night })) audio.click(trooper.root.position);
+      // What stirs the dust in the beams: the hero going through, and his blade's tip.
+      const stirs = [{ at: here.set(motion.x, 1, motion.z).clone(), speed: motion.speed }, { at: bladeTip.clone(), speed: Math.min(12, swing) }];
+      for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
       lastActionShake = action.shake;

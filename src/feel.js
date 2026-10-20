@@ -31,9 +31,15 @@ export const FEEL = {
   },
   // The room in the dark once the power is cut.
   blackout: {
-    night: { hemisphere: 0.32, sky: 0x2a3a5c, ground: 0x08080c, rim: 0.3, environment: 0.07, background: 0x04060a },
+    night: { hemisphere: 0.46, sky: 0x2b3a58, ground: 0x09090d, rim: 0.36, environment: 0.12, background: 0x05070b },
+    // Battery-backed: the cases' diodes and light strips, and the red panels on the floor, stay faintly on.
+    keep: { 'white lights': 0.32, 'red diodes': 0.75, 'amber diodes': 0.6, 'warning panel': 0.45, 'warning glow': 0.35 },
     lamps: 5, // the troopers' rifle lamps that really light (the nearest); the others show their beam only
-    shadows: 2, // of them, this many cast shadows
+    shadows: 5, // of them, this many cast shadows (none lights through a crate)
+    // The lamps: a warm white, wide and soft, a little glow round the lens lighting the man and what is near.
+    lamp: { color: 0xffd6a0, intensity: 15, distance: 12, angle: 0.62, penumbra: 0.95, decay: 1.45, spill: 1.6, spillDistance: 3.2 },
+    beam: { length: 4.4, radius: 1.35, level: 0.42 }, // m, m (at its end), brightness
+    dust: { motes: 70, swirl: [0.25, 0.9], drift: 0.05, size: [1, 2.2], stir: 2.5 }, // per beam; rad/s; share of the beam per s; px; a passing blade stirs them this much
     onAfter: [0.7, 1.9], // s after the blackout before each trooper switches his lamp on
     sight: 4.5, saberSight: 9, // m: how far a trooper sees the hero in the dark — and when his blade is lit
   },

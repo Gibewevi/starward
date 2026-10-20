@@ -295,7 +295,8 @@ export function createArena(scene, { lab = null, floorMaterial = null } = {}) {
 
   // ---- Grates, wherever the floor is clear: a few glow amber from below ----------
   const grateMaterial = new THREE.MeshBasicMaterial({ map: grateTexture(), color: EMBER.clone(), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  const darkGrate = new THREE.MeshStandardMaterial({ map: grateTexture(), color: 0x2a2f37, roughness: 0.5, metalness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  // As rough as the deck around it: glossier, a lamp shining from beyond lit it up as one flat bright sheet.
+  const darkGrate = new THREE.MeshStandardMaterial({ map: grateTexture(), color: 0x3a4049, roughness: 0.75, metalness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   const grateGlow = new THREE.MeshBasicMaterial({ map: glowTexture(), color: EMBER.clone().multiplyScalar(0.16), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   const clearOf = (x, z, hx, hz) => !(lab?.obstacles ?? []).concat(obstacles).some(box => x + hx > box.min.x - 0.3 && x - hx < box.max.x + 0.3 && z + hz > box.min.z - 0.3 && z - hz < box.max.z + 0.3);
   const grates = [];

@@ -34,7 +34,7 @@ test('the power cut: every light of the room dims to the level (a blinking one o
   assert.ok(power.lamps.every(entry => entry.light.intensity === 0), 'every lamp out');
   let hemisphere = null;
   scene.traverse(object => { if (object.isHemisphereLight) hemisphere = object; });
-  assert.ok(Math.abs(hemisphere.intensity - FEEL.blackout.night.hemisphere) < 1e-6 && scene.environmentIntensity < 0.1, 'a cold trace of light left');
+  assert.ok(Math.abs(hemisphere.intensity - FEEL.blackout.night.hemisphere) < 1e-6 && Math.abs(scene.environmentIntensity - FEEL.blackout.night.environment) < 1e-6, 'a cold trace of light left');
   power.level = 1;
   for (let i = 0; i < 3; i++) { arena.update(1 + i / 60); lab.update(1 + i / 60); power.apply(); }
   // Back as they would be: the same room never cut, at the same moment (the blinking ones mid-blink).
@@ -45,6 +45,17 @@ test('the power cut: every light of the room dims to the level (a blinking one o
   assert.ok(bright.length === power.emitters.length);
   const near = power.fixturesFrom(new THREE.Vector3(7, 0, -10));
   assert.ok(near[0].distanceTo(new THREE.Vector3(7, 0, -10)) <= near.at(-1).distanceTo(new THREE.Vector3(7, 0, -10)), 'nearest first');
+});
+
+test('battery-backed: the cases’ diodes and the red floor panels stay faintly on in the dark', () => {
+  const { scene, lab, arena } = room();
+  const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group] });
+  power.level = 0;
+  for (let i = 0; i < 3; i++) { arena.update(i / 60); lab.update(i / 60); power.apply(); }
+  const kept = power.emitters.filter(entry => entry.floor > 0);
+  assert.ok(kept.length >= 3, `some kept (${kept.map(entry => entry.material.name)})`);
+  for (const entry of kept) assert.ok(entry.material.color.r + entry.material.color.g + entry.material.color.b > 1e-4, `${entry.material.name} faintly on`);
+  assert.ok(power.emitters.filter(entry => !entry.floor).every(entry => entry.material.color.r + entry.material.color.g + entry.material.color.b < 1e-6), 'the rest out');
 });
 
 test('the transformer: in the way like a crate; the blade in, it surges, blows, and spits in the dark', () => {
@@ -93,6 +104,8 @@ test('in the dark the troopers switch on their rifle lamps one by one; the neare
   assert.ok(Math.max(...times) - Math.min(...times) > 0.3, 'one after another');
   assert.ok(Math.min(...times) >= FEEL.blackout.onAfter[0] - 0.05, 'after a moment');
   assert.equal(lamps.on, troopers.length, 'all beams showing');
+  assert.ok(lamps.motes > 50, `dust in the beams (${lamps.motes})`);
+  assert.ok([...lamps.beams.values()].every(beam => beam.cone.layers.mask === 2 && beam.glint.layers.mask === 2) && lamps.dust.layers.mask === 2, 'beams and dust out of the floor’s reflection (layer 1)');
   const lit = lamps.pool.filter(light => light.intensity > 0);
   assert.equal(lit.length, FEEL.blackout.lamps, 'a fixed number of real lights, never more');
   assert.equal(lamps.pool.filter(light => light.castShadow).length, FEEL.blackout.shadows);
