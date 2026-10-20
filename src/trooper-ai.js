@@ -59,7 +59,7 @@ const COMMITTED = new Set(['throw', 'fire', 'blindUp', 'evade', 'spread']);
 
 export function createSquadMind({ troopers, lab, nav = null, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
-  let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity;
+  let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity, dark = 0;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
   // The squad leader's plan (coordinate()).
   const plan = {
@@ -154,9 +154,11 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     if (t.free) {
       const eye = t.eye;
       const to = flat(chest).sub(flat(eye)), distance = to.length();
-      if (distance < senses.sight) {
-        const facing = new THREE.Vector3(Math.sin(t.heading), 0, Math.cos(t.heading));
-        const angle = facing.angleTo(to);
+      const facing = new THREE.Vector3(Math.sin(t.heading), 0, Math.cos(t.heading));
+      const angle = facing.angleTo(to);
+      // In the dark he sees only so far — further the hero's lit blade, and down his own lamp's beam.
+      const b = FEEL.blackout, range = dark < 0.5 ? senses.sight : angle < 0.4 ? Math.max(8.5, saber > 0.5 ? b.saberSight : 0) : saber > 0.5 ? b.saberSight : b.sight;
+      if (distance < range) {
         // Once he has seen the hero, he keeps track of him all around.
         const tracking = mind.mode === 'combat' && mind.seen < 1.5;
         // Right next to him, he feels someone there even behind his back.
@@ -164,7 +166,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
         if (field > 0 && (lab.clear(eye, chest) || lab.clear(eye, head))) {
           sees = true;
           // Closer, moving faster, blade lit: noticed sooner.
-          rate = field * (1 - distance / senses.sight) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3);
+          rate = field * (1 - distance / range) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3);
         }
       }
     }
@@ -1025,8 +1027,36 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     }
   }
 
-  function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [] }) {
+  /**
+   * The lights go out: each man flinches and loses the hero for a moment;
+   * those not yet fighting are on their guard. One says so on the radio.
+   */
+  function blackout(cues = []) {
+    let speaker = null;
+    for (const mind of minds) {
+      const t = mind.trooper;
+      if (t.dead || t.impaled || !t.free) continue;
+      t.reaction.vhead -= 2.2;
+      t.reaction.vbuckle += 0.5;
+      alerts?.show(t, '?');
+      if (mind.mode === 'combat') {
+        release(mind);
+        mind.startle = 0.5 + random() * 0.7;
+        mind.seen = Math.max(mind.seen, 2);
+        mind.tactic = null;
+        speaker ??= t;
+      } else if (mind.mode === 'calm') {
+        mind.mode = 'suspicious';
+        mind.awareness = Math.max(mind.awareness, 0.6);
+        mind.timer = 0;
+      }
+    }
+    if (speaker) cues.push({ type: 'radio', radio: 'lost', trooper: speaker });
+    return cues;
+  }
+  function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [], darkness = 0 }) {
     const shots = [], cues = [];
+    dark = darkness;
     tick = dt;
     clock += dt;
     grenadeClock += dt;
@@ -1075,5 +1105,5 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   }
   /** The squad's mood: 'calme', 'suspicion' or 'alerte'. */
   const mood = () => (minds.some(mind => mind.mode === 'combat') ? 'alerte' : minds.some(mind => mind.mode === 'suspicious' || mind.mode === 'searching') ? 'suspicion' : 'calme');
-  return { update, reset, add, remove, minds, mood, plan };
+  return { update, reset, add, remove, minds, mood, plan, blackout };
 }

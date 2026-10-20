@@ -21,6 +21,22 @@ export const FEEL = {
     lunge: 0.14, // s: the closing glide
     dashRange: 5, dashStep: 3.2, // after (or during) a dash: further
   },
+  // The transformer in the corner: the blade run into it, the surge, the burst.
+  sabotage: {
+    reach: 1.5, // m from where he stands to run the blade in: the prompt shows, B does it
+    stand: 1.05, // m before the arc window he stands to do it
+    surge: 1.45, // s from the blade going in to the burst
+    spit: [1, 3.5], calm: 20, // s between spits of sparks once dead (less often after `calm` s)
+    cascade: 0.75, // s for the blackout to run through the room's fittings (their sparks)
+  },
+  // The room in the dark once the power is cut.
+  blackout: {
+    night: { hemisphere: 0.32, sky: 0x2a3a5c, ground: 0x08080c, rim: 0.3, environment: 0.07, background: 0x04060a },
+    lamps: 5, // the troopers' rifle lamps that really light (the nearest); the others show their beam only
+    shadows: 2, // of them, this many cast shadows
+    onAfter: [0.7, 1.9], // s after the blackout before each trooper switches his lamp on
+    sight: 4.5, saberSight: 9, // m: how far a trooper sees the hero in the dark — and when his blade is lit
+  },
   // Red footprints: a foot coming down in red drops takes some of them up and
   // prints its sole on the next steps, fainter each time.
   prints: {

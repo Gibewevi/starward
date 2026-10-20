@@ -36,6 +36,9 @@ import { createAudio } from './audio.js';
 import { createShake } from './shake.js';
 import { createTelegraph } from './telegraph.js';
 import { createFootprints } from './footprints.js';
+import { createPower } from './power.js';
+import { createTransformer } from './transformer.js';
+import { createFlashlights } from './flashlights.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -203,6 +206,11 @@ function init() {
   const knockdown = createHeroRagdoll(character, { lab });
   const blasters = createBlasters(scene, { effects, lab, marks });
   // The squad finds its way round the crates and walls on a navigation grid.
+  // In the back corner, the transformer the room's lights hang on (an obstacle like a crate).
+  const transformer = createTransformer(scene, { lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
+  // The room's power: every light of it follows one level; the rifle lamps for the dark.
+  const power = createPower({ scene, roots: [lab.group, arena.group], lighting });
+  const flashlights = createFlashlights(scene);
   const nav = createNav(lab, ARENA);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
@@ -293,6 +301,14 @@ function init() {
   function restart() {
     resetTrooper();
     reset();
+    // The power back on, the transformer as new.
+    plunge = null;
+    night = 0;
+    blackout = null;
+    cascade = [];
+    power.level = 1;
+    transformer.reset();
+    flashlights.clear();
     streak = eliminated = 0;
     streakAge = streakBroken = Infinity;
     trauma.clear();
@@ -498,6 +514,114 @@ function init() {
     lunge.done = reach;
     if (step > 0) { motion.x += offset.x * step; motion.z += offset.z * step; }
     if (k >= 1 && lunge.age >= lunge.track) lunge = null;
+  }
+
+  // ---- The sabotage ----------------------------------------------------------------
+  // B by the transformer: he squares up to its arc window and drives the blade
+  // in with both hands; it surges (sparks pouring out, arcs leaping to the
+  // blade, the room's lights stuttering, the view and the pad shaking harder),
+  // then blows — a white flash, a beat of slow motion, the hero thrown back —
+  // and the room's power dies: every light out at once, a wave of sparks
+  // running through the fittings, the mains hum sinking into silence. Then the
+  // dark: the troopers' rifle lamps clicking on one by one, the blade's glow
+  // the only light round the hero.
+  let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
+  const flashEl = $('#flash'), promptEl = $('#prompt');
+  function startPlunge() {
+    const s = transformer.socket, a = transformer.approach;
+    plunge = { age: 0, entered: false, from: new THREE.Vector3(motion.x, 0, motion.z), to: a.clone() };
+    motion.face(Math.atan2(s.x - a.x, s.z - a.z));
+    motion.vx = motion.vz = 0;
+    dash = lunge = turn = null;
+    combat.impale();
+  }
+  function plungeStep(dt) {
+    if (!plunge) return;
+    plunge.age += dt;
+    // A quick step to just before the window, squared up to it.
+    const k = ease.outCubic(Math.min(1, plunge.age / 0.14));
+    motion.x = THREE.MathUtils.lerp(plunge.from.x, plunge.to.x, k);
+    motion.z = THREE.MathUtils.lerp(plunge.from.z, plunge.to.z, k);
+    const s = transformer.socket;
+    motion.heading = Math.atan2(s.x - motion.x, s.z - motion.z);
+    const action = combat.action;
+    if (!plunge.entered && action?.name === 'impale' && combat.time / action.duration >= 0.17) {
+      plunge.entered = true;
+      transformer.begin();
+      // The blade goes in: a jolt, a gush of blue and molten sparks, a crack of electricity.
+      const out = transformer.facing;
+      effects.sparks(s.clone().addScaledVector(out, 0.06), out.clone().setY(0.4).normalize(), new THREE.Vector3(out.z, 0, -out.x), { count: 60, speed: 5.5, saber: 0.6 });
+      effects.flash(s, 1.8, { color: new THREE.Color(0.55, 0.75, 1) });
+      effects.burst(s, { normal: out, power: 1.3, tint: 'blue' });
+      stopFor(0.12, 0.2);
+      punch(FEEL.camera.punch * 1.4);
+      shove(out.clone().negate(), FEEL.camera.kick);
+      trauma.add(0.25);
+      rumble(0.5, 0.75, 0.25);
+      audio.zap(s, 1);
+      audio.impact(1.1, s);
+      noise(s, 9, { alarm: true, from: s });
+    }
+    // Pinned while it surges.
+    if (plunge.entered && transformer.state !== 'surging') plunge = null;
+  }
+  /** It blew: the flash, the slow beat, the hero thrown back, and the power cut a hair later. */
+  function overload() {
+    const s = transformer.socket, out = transformer.facing;
+    combat.unpin();
+    plunge = null;
+    motion.vx = out.x * 4.5; motion.vz = out.z * 4.5;
+    flashAge = 0;
+    stopFor(0.09, 0.34);
+    trauma.add(0.55);
+    punch(FEEL.camera.punch * 2.6);
+    shove(out, FEEL.camera.kickFelling * 1.3);
+    rumble(1, 0.9, 0.45);
+    effects.blast(s.clone().addScaledVector(out, 0.1), { sparks: 150, embers: 40, speed: 8 });
+    effects.sparks(s, out.clone().setY(0.6).normalize(), new THREE.Vector3(out.z, 0, -out.x), { count: 90, speed: 7, saber: 0.7 });
+    effects.flash(s, 3.5, { color: new THREE.Color(0.7, 0.85, 1) });
+    debris.fragments(s.clone().setY(0.4), 10);
+    marks.blast(s.clone().setY(0), 0.5);
+    effects.smoulder(transformer.group, 25);
+    audio.bang(s);
+    noise(s, 16, { alarm: true, from: s });
+    blackout = { age: 0 };
+  }
+  /** The power dies: lights out (with a last stutter), sparks racing through the fittings, the hum sinking. */
+  function cutPower() {
+    const s = transformer.socket, c = FEEL.sabotage.cascade;
+    const fittings = power.fixturesFrom(s);
+    const far = fittings.length ? fittings.at(-1).distanceTo(s) : 1;
+    // A wave through the room: the nearest fittings first, a few spread out (not every one).
+    cascade = fittings.filter((_, index) => index % Math.max(1, Math.round(fittings.length / 40)) === 0)
+      .map((at, index) => ({ at, when: at.distanceTo(s) / far * c + Math.random() * 0.08, pop: index % 3 === 0 }));
+    audio.powerDown();
+    trauma.add(0.2);
+    rumble(0.25, 0.2, 0.9);
+    const cues = squad.blackout();
+    for (const cue of cues) if (cue.radio) audio.radio(cue.trooper.root.position, cue.radio, cue.trooper);
+    flashlights.darkness(troopers);
+  }
+  /** Each frame: the power's level (stuttering through the surge, the last flicker, then out) and the sparks of the wave. */
+  function powerStep(dt, surge) {
+    if (blackout) {
+      const age = (blackout.age += dt);
+      if (!blackout.cut && age >= 0.05) { blackout.cut = true; cutPower(); night = 1; }
+      // One last stutter as it dies, then nothing.
+      const stutter = [[0, 0.15], [0.05, 0], [0.11, 0.45], [0.15, 0], [0.24, 0.2], [0.27, 0]];
+      let level = 0;
+      for (const [at, value] of stutter) if (age >= at) level = value;
+      power.level = age < 0.05 ? 1 : level;
+      for (const entry of cascade) {
+        if (entry.done || age - 0.05 < entry.when) continue;
+        entry.done = true;
+        effects.sparks(entry.at, new THREE.Vector3((Math.random() - 0.5) * 0.6, -1, (Math.random() - 0.5) * 0.6).normalize(), new THREE.Vector3(1, 0, 0), { count: 5 + Math.round(Math.random() * 8), speed: 1.8 });
+        if (entry.pop) { audio.pop(entry.at); effects.flash(entry.at, 0.5); }
+      }
+    } else if (surge > 0) {
+      // The surge drags the room's lights down in stutters, worse as it builds.
+      power.level = Math.random() < 0.08 + 0.45 * surge ? 0.2 + Math.random() * 0.4 : 1 - 0.25 * surge;
+    } else if (!night) power.level = 1;
   }
 
   // ---- The perfect parry ---------------------------------------------------------
@@ -871,6 +995,8 @@ function init() {
   const pending = { attack: -Infinity, dash: -Infinity, power: -Infinity, powerName: null };
   let inputClock = 0;
   const waiting = at => inputClock - at <= FEEL.input.buffer;
+  let lastDevice = 'pad';
+  window.addEventListener('keydown', () => { lastDevice = 'keyboard'; });
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
@@ -961,7 +1087,7 @@ function init() {
   const viewRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0), viewUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
   const lean = new THREE.Vector3(), leanTarget = new THREE.Vector3();
   // Footsteps (the hero's and the troopers'), and bolts already heard whizzing past.
-  let heroStep = 0.6, lastActionShake = 0, scrape = 0;
+  let heroStep = 0.6, lastActionShake = 0, scrape = 0, surgeLevel = 0;
   const trooperSteps = new WeakMap();
   function frame(now, manual = false) {
     // Never backwards: a stepped check (advance) may run ahead of the display clock.
@@ -994,6 +1120,7 @@ function init() {
         padGuard = guardButton;
         guard ||= guardButton || !!gamepad.buttons[0]?.pressed;
         if (audio.enabled && gamepad.buttons.some(button => button?.pressed)) audio.start();
+        if (gamepad.buttons.some(button => button?.pressed) || Math.hypot(gamepad.axes[0] || 0, gamepad.axes[1] || 0) > 0.3) lastDevice = 'pad';
         const attackButton = !!gamepad.buttons[1]?.pressed;
         if (attackButton && !padAttack) attackPressed = true;
         padAttack = attackButton;
@@ -1045,6 +1172,7 @@ function init() {
       if (powerPressed) { pending.power = inputClock; pending.powerName = powerPressed; }
       if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
       if (parryPressed) combat.parry();
+      if (attackPressed && !down && !plunge && motion.saber > 0.5 && !combat.busy && transformer.reachable(character.root.position)) { attackPressed = false; startPlunge(); }
       if (attackPressed) pending.attack = inputClock;
       // Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
       if (intent && (intent.dead || intent.impaled)) intent = null;
@@ -1116,6 +1244,8 @@ function init() {
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
       const saberEvent = saber.update(motion.saber, time, action.flare);
+      // In the dark the blade lights more of the room round him.
+      saber.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * night; light.distance = [3.2, 2.6][index] + 2.2 * night; });
       if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); audio.ignite(); }
       else if (saberEvent === 'retract') audio.retract();
       // His steps on the deck.
@@ -1131,7 +1261,7 @@ function init() {
       trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
       // The squad: senses, decisions, orders; then the shots leave the muzzles.
-      const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises });
+      const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises, darkness: night });
       noises.length = 0;
       // Reinforcements: the alarm, the door, the men coming out one by one.
       const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
@@ -1262,6 +1392,16 @@ function init() {
       stage.update({ time, playerPosition });
       lab.update(time);
       arena.update(time);
+      // The transformer: its surge, its burst; the room's power after it; the rifle lamps.
+      plungeStep(sim);
+      const state = transformer.update(sim, { blade: plunge ? { base: bladeBase, tip: bladeTip } : null });
+      if (state.burst) overload();
+      if (state.spit) { audio.zap(transformer.socket, 0.5); trauma.add(0.04); }
+      surgeLevel = state.progress;
+      if (state.progress > 0) { trauma.atLeast(0.12 + 0.3 * state.progress); rumble(0.12 + 0.45 * state.progress, 0.3 + 0.5 * state.progress, 0.12); }
+      powerStep(sim, state.progress);
+      power.apply();
+      for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night })) audio.click(trooper.root.position);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
       lastActionShake = action.shake;
@@ -1297,7 +1437,19 @@ function init() {
     telegraph.update(paused ? 0 : dt, aiming);
     telegraph.edges(camera, paused ? [] : threats, window.innerWidth, window.innerHeight);
     const burning = skewered?.entered ? (skewered.trooper.dead ? 0.3 : 0.75) : 0;
-    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning), hold: paused || !held ? 0 : 1, fight: paused ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt });
+    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning, plunge?.entered ? 0.9 : 0), hold: paused || !held ? 0 : 1, fight: paused ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt, surge: paused ? 0 : surgeLevel, power: power.level, dark: night });
+    document.body.classList.toggle('night', night > 0.5);
+    // The burst's flash over everything, gone in a quarter of a second.
+    flashAge += dt;
+    flashEl.style.opacity = flashAge < 0.3 ? String((1 - flashAge / 0.3) ** 1.6 * 0.9) : '0';
+    // The prompt by the transformer: B (or J) to run the blade in.
+    const canPlunge = !paused && !plunge && transformer.reachable(character.root.position) && !knockdown.active;
+    promptEl.classList.toggle('on', canPlunge);
+    if (canPlunge) {
+      const p = transformer.socket.clone().setY(1.55).project(camera);
+      promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight).toFixed(0)}px)`;
+      promptEl.dataset.device = lastDevice;
+    }
     composer.render(dt);
     fps = damp(fps, 1 / Math.max(rawDt, 0.001), 1, dt);
     hudTimer += dt;
@@ -1342,7 +1494,8 @@ function init() {
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
     squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
-    renderer, composer, reflection, prints,
+    renderer, composer, reflection, prints, transformer, power, flashlights,
+    get night() { return night; },
     camera,
     /** For checks: the lit blade this frame. */
     blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),

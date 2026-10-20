@@ -25,3 +25,18 @@ body.tech-info .tech{display:inline}
 .streak em.on{opacity:1;transition:opacity .05s}
 .streak.broken b{color:#ff6a5c;text-shadow:0 0 10px #ff3b2f66}
 @keyframes streak-pop{0%{transform:scale(1.45)}100%{transform:scale(1)}}
+
+/* The burst of the transformer: a white-blue flash over everything. */
+#flash{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;background:radial-gradient(circle at 50% 45%,#ffffff 0%,#dfeaff 35%,#9fbfff 100%);mix-blend-mode:screen}
+/* The prompt by the transformer: the button to press. */
+#prompt{position:fixed;left:0;top:0;z-index:3;pointer-events:none;display:flex;align-items:center;gap:8px;margin:-14px 0 0 -14px;opacity:0;transition:opacity .15s;font-family:Inter,Arial,sans-serif}
+#prompt.on{opacity:1}
+#prompt b{display:none;width:24px;height:24px;border-radius:50%;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff;background:#c9362c;box-shadow:0 0 0 2px #ffffff22,0 0 14px #ff3b2f88;animation:prompt-pulse 1.1s ease-in-out infinite}
+#prompt[data-device=pad] b.pad,#prompt[data-device=keyboard] b.key{display:flex}
+#prompt b.key{border-radius:4px;background:#1b2330;border:1px solid #9ad9ff66;box-shadow:0 0 12px #9ad9ff44}
+#prompt span{font-size:8px;letter-spacing:2.4px;color:#e8eef6;text-shadow:0 0 6px #000}
+@keyframes prompt-pulse{50%{transform:scale(1.12)}}
+
+/* The dark: the screen's edges sink into black. */
+#vignette{position:fixed;inset:0;pointer-events:none;z-index:2;opacity:0;transition:opacity 1.2s ease-in;background:radial-gradient(ellipse 75% 70% at 50% 48%,transparent 45%,#000000b0 85%,#000000e6 100%)}
+body.night #vignette{opacity:1}

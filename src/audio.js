@@ -34,6 +34,7 @@ export function createAudio({ context = null } = {}) {
   let ctx = null, ready = false;
   let master, muffle, dry, send, white, crackle, pink;
   let hum, humFilter, humGain, swingGain, swingFilter, burnGain, burnFilter, holdGain, holdOsc, tensionGain, roomGain;
+  let surgeGain, surgeOsc, surgeFilter, surgeCrackle;
   let volume = 0.8;
   const listener = { x: 0, z: 0, rx: 1, rz: 0 };
   const voices = { shots: [], steps: [] };
@@ -217,6 +218,15 @@ export function createAudio({ context = null } = {}) {
       osc.frequency.value = frequency; g.gain.value = level;
       osc.connect(g); g.connect(roomGain); osc.start();
     }
+    // A transformer overloading: a whine climbing through a narrowing band, crackle over it.
+    surgeGain = ctx.createGain(); surgeGain.gain.value = 0;
+    surgeFilter = ctx.createBiquadFilter(); surgeFilter.type = 'bandpass'; surgeFilter.frequency.value = 300; surgeFilter.Q.value = 6;
+    surgeOsc = [0, 7].map(detune => { const osc = ctx.createOscillator(); osc.type = 'sawtooth'; osc.frequency.value = 100; osc.detune.value = detune * 10; osc.connect(surgeFilter); osc.start(); return osc; });
+    surgeFilter.connect(surgeGain);
+    surgeCrackle = loop(crackle, { type: 'highpass', frequency: 1800, q: 0.5, reverb: 0 });
+    surgeCrackle.gain.disconnect(dry); surgeCrackle.gain.connect(surgeGain); surgeCrackle.gain.gain.value = 1.4;
+    surgeGain.connect(dry);
+    const surgeWet = ctx.createGain(); surgeWet.gain.value = 0.35; surgeGain.connect(surgeWet); surgeWet.connect(send);
     // Tension: a low pulsing bed, while the squad fights.
     tensionGain = ctx.createGain(); tensionGain.gain.value = 0;
     const tensionFilter = ctx.createBiquadFilter(); tensionFilter.type = 'lowpass'; tensionFilter.frequency.value = 150; tensionFilter.Q.value = 2;
@@ -261,7 +271,7 @@ export function createAudio({ context = null } = {}) {
      * (0 → 1: the blade inside something), hold (0 → 1: a man held up by the
      * Force), fight (0 → 1: the squad's alarm).
      */
-    update(saber, speed, turn, { burn = 0, hold = 0, fight = 0, dt = 1 / 60 } = {}) {
+    update(saber, speed, turn, { burn = 0, hold = 0, fight = 0, dt = 1 / 60, surge = 0, power = 1, dark = 0 } = {}) {
       if (!ready) return;
       const now = ctx.currentTime, on = this.enabled ? 1 : 0, swing = clamp(this.swing, 0, 1);
       humGain.gain.setTargetAtTime(on * saber * (0.035 + swing * 0.05), now, 0.03);
@@ -273,9 +283,14 @@ export function createAudio({ context = null } = {}) {
       burnFilter.frequency.setTargetAtTime(2200 + burn * 1600, now, 0.05);
       holdGain.gain.setTargetAtTime(on * hold * 0.035, now, hold > 0 ? 0.08 : 0.2);
       holdOsc.frequency.setTargetAtTime(44 + hold * 6, now, 0.2);
-      roomGain.gain.setTargetAtTime(on * 1, now, 0.5);
+      // The room's hum dies with its power (a trace of wind left in the vents).
+      roomGain.gain.setTargetAtTime(on * (0.25 + 0.75 * power), now, power < 0.5 ? 0.12 : 0.5);
+      surgeGain.gain.setTargetAtTime(on * surge ** 1.5 * 0.09, now, surge > 0 ? 0.03 : 0.06);
+      for (const osc of surgeOsc) osc.frequency.setTargetAtTime(90 + surge * surge * 820, now, 0.05);
+      surgeFilter.frequency.setTargetAtTime(220 + surge * 2600, now, 0.05);
       tension += (fight - tension) * (1 - Math.exp(-dt / (fight > tension ? 1.5 : 5)));
-      tensionGain.gain.setTargetAtTime(on * tension * 0.018, now, 0.3);
+      // In the dark the bed is there even before the fight, and thicker.
+      tensionGain.gain.setTargetAtTime(on * Math.max(tension, dark * 0.75) * (0.018 + dark * 0.012), now, 0.3);
       clock += dt;
     },
 
@@ -497,6 +512,53 @@ export function createAudio({ context = null } = {}) {
         ears.connect(master);
         tone(ears, { from: 3800, to: 3700, duration: 1.4 + closeness * 1.6, gain: 0.025, attack: 0.08 });
       }
+    },
+
+    // ---- The transformer and the blackout ------------------------------------------------
+    /** Electricity biting: a tearing crackle, a few bright chirps, a dull thump. */
+    zap(at = null, strength = 1) {
+      if (!this.enabled || !ready) return;
+      const v = voice(at, { gain: 1.6 * strength, reverb: 0.35 });
+      hiss(v.input, { buffer: crackle, type: 'highpass', frequency: 1500, duration: 0.25 + 0.2 * strength, gain: 0.7 });
+      for (let i = 0; i < 3; i++) tone(v.input, { type: 'square', from: 2400 + Math.random() * 2000, to: 600 + Math.random() * 400, duration: 0.05 + Math.random() * 0.06, gain: 0.025, delay: Math.random() * 0.12 });
+      tone(v.input, { from: 140, to: 50, duration: 0.18, gain: 0.25 * strength });
+    },
+    /** The transformer blowing: a crack of discharge, a heavy bang, a metal ring, a hiss of things burning. */
+    bang(at = null) {
+      if (!this.enabled || !ready) return;
+      const v = voice(at, { gain: 2.2, reverb: 0.7, spread: 14 });
+      hiss(v.input, { type: 'highpass', frequency: 900, duration: 0.1, gain: 0.8, attack: 0.001 });
+      hiss(v.input, { buffer: crackle, type: 'bandpass', frequency: 2600, q: 0.5, duration: 0.9, gain: 0.9 });
+      tone(v.input, { from: 75, to: 24, duration: 1.1, gain: 0.8, attack: 0.002 });
+      tone(v.input, { type: 'square', from: 3200, to: 300, duration: 0.25, gain: 0.05 });
+      ring(v.input, { base: 340, partials: [1, 2.7, 5.1], duration: 1.4, gain: 0.05, delay: 0.02 });
+      hiss(v.input, { buffer: pink, type: 'lowpass', frequency: 700, to: 150, duration: 1.8, gain: 0.5, attack: 0.01 });
+    },
+    /** The room's power dying: the mains hum sinking and stopping, relays clunking off one after another. */
+    powerDown() {
+      if (!this.enabled || !ready) return;
+      const v = voice(null, { gain: 1.4, reverb: 0.6 });
+      const body = ctx.createBiquadFilter();
+      body.type = 'lowpass'; body.frequency.value = 500; body.Q.value = 3;
+      body.connect(v.input);
+      tone(body, { type: 'sawtooth', from: 120, to: 28, duration: 2.2, gain: 0.35, attack: 0.01 });
+      tone(body, { type: 'sawtooth', from: 60, to: 18, duration: 2.6, gain: 0.3, attack: 0.01 });
+      for (let i = 0; i < 4; i++) tone(v.input, { type: 'square', from: 110 - i * 12, to: 55, duration: 0.09, gain: 0.07, delay: 0.15 + i * 0.22 + Math.random() * 0.1 });
+      hiss(v.input, { buffer: pink, type: 'lowpass', frequency: 220, duration: 2.5, gain: 0.25, attack: 0.05 });
+    },
+    /** A light fitting dying: a little pop and a tinkle. */
+    pop(at = null) {
+      if (!this.enabled || !ready) return;
+      const v = voice(at, { gain: 1.4, reverb: 0.4 });
+      hiss(v.input, { buffer: crackle, type: 'highpass', frequency: 2500, duration: 0.09, gain: 0.5 });
+      ring(v.input, { base: 2800 + Math.random() * 800, partials: [1, 1.9], duration: 0.12, gain: 0.02, delay: 0.02 });
+    },
+    /** A rifle lamp switched on: a hard little click. */
+    click(at = null) {
+      if (!this.enabled || !ready) return;
+      const v = voice(at, { gain: 2, reverb: 0.3 });
+      tone(v.input, { type: 'square', from: 2600, to: 2400, duration: 0.012, gain: 0.05 });
+      hiss(v.input, { type: 'bandpass', frequency: 4200, q: 3, duration: 0.02, gain: 0.12, delay: 0.004 });
     },
 
     // ---- The room and the squad ---------------------------------------------------------

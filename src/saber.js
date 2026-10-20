@@ -78,5 +78,5 @@ export function createSaber({ socket, scene }) {
     base.set(0, 0, 0).applyMatrix4(blade.matrixWorld);
     tipPoint.set(0, length, 0).applyMatrix4(blade.matrixWorld);
   }
-  return { group: saber, blade, length, update, segment, get extension() { return extension; } };
+  return { group: saber, blade, length, update, segment, lights: [bladeLight, tipLight], get extension() { return extension; } };
 }
