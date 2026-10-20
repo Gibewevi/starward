@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { BeamPass } from './beam-pass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { createCharacter } from './character.js';
 import { createCoat } from './coat.js';
@@ -39,6 +40,7 @@ import { createFootprints } from './footprints.js';
 import { createPower } from './power.js';
 import { createTransformer } from './transformer.js';
 import { createFlashlights } from './flashlights.js';
+import { lightStains } from './stain-light.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -211,6 +213,8 @@ function init() {
   // The room's power: every light of it follows one level; the rifle lamps for the dark.
   const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
   const flashlights = createFlashlights(scene, { lab, bounds: arena.bounds });
+  // What may light the red stains in the dark: the rifle lamps, their spills, the blade.
+  const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights];
   const nav = createNav(lab, ARENA);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
@@ -954,8 +958,10 @@ function init() {
 
   // Lighting bloom is calculated inside the reduced-resolution framebuffer.
   // The final canvas is then enlarged with nearest-neighbour, never blurred.
-  const composer = new EffectComposer(renderer);
+  // The scene's depth comes with its colour: the beams in the dark stop on what stands there.
+  const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(1, 1) }));
   composer.addPass(new RenderPass(scene, camera));
+  composer.addPass(new BeamPass(camera, () => flashlights.volumes));
   const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), 0.45, 0.15, 1.15);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
@@ -1404,6 +1410,7 @@ function init() {
       // What stirs the dust in the beams: the hero going through, and his blade's tip.
       const stirs = [{ at: here.set(motion.x, 1, motion.z).clone(), speed: motion.speed }, { at: bladeTip.clone(), speed: Math.min(12, swing) }];
       for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
+      lightStains(power.level, stainLights);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
       lastActionShake = action.shake;

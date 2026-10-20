@@ -11,15 +11,17 @@ import { glowTexture } from './kit.js';
  *
  * The light is a warm white, wide and soft-edged, with a little glow round
  * the lens that lights the man himself and what stands near him. Every rifle
- * shows its beam — a soft cone of light in the dusty air, fading along its
- * length, stopping where a crate or a wall stands in the way.
+ * shows its beam in the dusty air: `volumes` lists them each frame, nearest
+ * the hero first, for the beam pass (beam-pass.js) that works their light
+ * out pixel by pixel — up to the floor or whatever stands in the way, cut by
+ * the shadows of the real lights.
  *
  * The dust hangs in the room's air, drifting and twirling slowly where it is;
  * a beam only reveals it. A lamp sweeping the room lights new motes as it
  * goes and leaves the others in the dark — it never carries its own. The
  * hero or his blade going through pushes the dust aside and whirls it.
- * Beams, glints and motes are on layer 1: the wet floor does not mirror
- * them, only the light they cast.
+ * Glints and motes are on layer 1, and the beams are added after the
+ * scene: the wet floor does not mirror them, only the light they cast.
  *
  * The light itself comes from a small fixed pool of spot lights (each with
  * its spill) handed each frame to the rifles nearest the hero, all casting
@@ -54,41 +56,7 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     scene.add(light, light.target, spill);
     return { light, spill };
   });
-  // The beam: a cone from the lens, its light fading along it and soft at its edges.
-  const geometry = new THREE.ConeGeometry(B.radius, B.length, 20, 1, true);
-  geometry.translate(0, -B.length / 2, 0);
-  geometry.rotateX(-Math.PI / 2);
-  const material = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    uniforms: { tint: { value: warmth.clone().multiplyScalar(0.8) }, level: { value: 0 }, reach: { value: 1 } },
-    vertexShader: /* glsl */`
-      varying float vAlong; varying float vEdge;
-      void main() {
-        vAlong = clamp(position.z / ${B.length.toFixed(2)}, 0.0, 1.0);
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vec3 n = normalize(mat3(modelMatrix) * normal);
-        vEdge = abs(dot(n, normalize(cameraPosition - world.xyz)));
-        gl_Position = projectionMatrix * viewMatrix * world;
-      }`,
-    fragmentShader: /* glsl */`
-      uniform vec3 tint; uniform float level; uniform float reach;
-      varying float vAlong; varying float vEdge;
-      void main() {
-        // Faded along the whole beam length (it may be cut short by a crate: reach), soft at its sides.
-        float along = vAlong * reach;
-        float fade = pow(1.0 - along, 2.0) * smoothstep(0.0, 0.06, along);
-        float soft = pow(vEdge, 2.4);
-        gl_FragColor = vec4(tint * fade * soft * level, 1.0);
-      }`,
-  });
   const glintMap = glowTexture();
-  // Drawn from the start, shrunk to nothing: the beam's shader is built at load, not at the first lamp switched on in the dark.
-  const warm = new THREE.Mesh(geometry, material);
-  warm.matrixAutoUpdate = false;
-  warm.matrix.makeScale(1e-4, 1e-4, 1e-4);
-  warm.frustumCulled = false;
-  warm.layers.set(LAYER);
-  scene.add(warm);
 
   // Dust: motes hanging in the room's air (a little past its edges, where the beams reach over the railing).
   const room = { minX: bounds.minX - 1.5, maxX: bounds.maxX + 1.5, minY: 0.05, maxY: 2.4, minZ: bounds.minZ - 1.5, maxZ: bounds.maxZ + 1.5 };
@@ -150,8 +118,8 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
   const moving = new Set();
   let shown = 0, frame = 0;
 
-  const beams = new Map();
-  const lens = new THREE.Vector3(), end = new THREE.Vector3(), forward = new THREE.Vector3(), rotation = new THREE.Quaternion(), scale = new THREE.Vector3();
+  const beams = new Map(), volumes = [];
+  const lens = new THREE.Vector3(), end = new THREE.Vector3(), forward = new THREE.Vector3(), rotation = new THREE.Quaternion();
   const local = new THREE.Vector3(), point = new THREE.Vector3();
   let clock = 0;
 
@@ -159,18 +127,13 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
   function beamOf(trooper) {
     let beam = beams.get(trooper);
     if (beam) return beam;
-    const cone = new THREE.Mesh(geometry, material.clone());
-    cone.name = 'Rifle lamp beam';
-    cone.matrixAutoUpdate = false;
-    cone.frustumCulled = false;
-    cone.renderOrder = 3;
     // The lens: a hot little core in a wider soft glow.
     const glint = new THREE.Sprite(new THREE.SpriteMaterial({ map: glintMap, color: warmth.clone().multiplyScalar(1.8), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
     const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glintMap, color: warmth.clone().multiplyScalar(0.45), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
     glint.scale.setScalar(0.2);
     halo.scale.setScalar(0.85);
-    for (const object of [cone, glint, halo]) { object.visible = false; object.layers.set(LAYER); scene.add(object); }
-    beam = { cone, glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1) };
+    for (const object of [glint, halo]) { object.visible = false; object.layers.set(LAYER); scene.add(object); }
+    beam = { glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1) };
     beams.set(trooper, beam);
     return beam;
   }
@@ -183,13 +146,14 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
   }
   /** The power back (a restart): all off. */
   function clear() {
-    for (const [, beam] of beams) for (const object of [beam.cone, beam.glint, beam.halo]) { object.removeFromParent(); object.material.dispose(); }
+    for (const [, beam] of beams) for (const object of [beam.glint, beam.halo]) { object.removeFromParent(); object.material.dispose(); }
     beams.clear();
+    volumes.length = 0;
     for (const { light, spill } of pool) light.intensity = spill.intensity = 0;
     shown = 0;
     dustGeometry.setDrawRange(0, 0);
   }
-  const hide = beam => { beam.cone.visible = beam.glint.visible = beam.halo.visible = false; };
+  const hide = beam => { beam.glint.visible = beam.halo.visible = false; };
   function update(dt, { troopers, hero, night = 0, stirs = [] }) {
     clock += dt;
     const clicks = [];
@@ -220,11 +184,6 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
       let reach = hit ? Math.max(0.08, hit.t) : 1;
       if (forward.y < -1e-3) reach = Math.min(reach, Math.max(0.08, lens.y / (-forward.y * B.length)));
       beam.reach = reach;
-      beam.cone.matrix.compose(lens, rotation, scale.setScalar(reach));
-      beam.cone.matrixWorldNeedsUpdate = true;
-      beam.cone.material.uniforms.level.value = beam.on * B.level;
-      beam.cone.material.uniforms.reach.value = reach;
-      beam.cone.visible = true;
       beam.glint.position.copy(lens);
       beam.halo.position.copy(lens);
       beam.glint.material.opacity = beam.halo.material.opacity = beam.on;
@@ -244,6 +203,12 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
       light.intensity = lamp.intensity * entry.on;
       spill.position.copy(entry.at).addScaledVector(entry.forward, 0.35);
       spill.intensity = lamp.spill * entry.on;
+    });
+    // For the beam pass. A real light's beam goes its whole length (its shadows cut it); the others stop on what is in the way.
+    volumes.length = 0;
+    lit.forEach((entry, index) => {
+      const light = pool[index]?.light ?? null, shadowed = !!(light?.castShadow && light.shadow.map);
+      volumes.push({ lens: entry.at, forward: entry.forward, on: entry.on, light, length: B.length * (shadowed ? 1 : entry.beam.reach) });
     });
     updateDust(dt, lit.map(entry => entry.beam), stirs);
     return clicks;
@@ -327,7 +292,9 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     update, darkness, clear,
     pool: pool.map(({ light }) => light), spills: pool.map(({ spill }) => spill), dust,
     /** How many lamps are on (beams showing). */
-    get on() { let n = 0; for (const [, beam] of beams) n += beam.cone.visible ? 1 : 0; return n; },
+    get on() { let n = 0; for (const [, beam] of beams) n += beam.glint.visible ? 1 : 0; return n; },
+    /** This frame's beams, nearest the hero first: { lens, forward, length, on, light (a real light, or null) }. */
+    volumes,
     /** Motes glowing now (in a beam), and where each one hangs. */
     get motes() { let n = 0; for (let i = 0; i < shown; i++) n += dustGlow[i] > 0.02 ? 1 : 0; return n; },
     get air() { return motes.map(mote => where(mote, new THREE.Vector3())); },

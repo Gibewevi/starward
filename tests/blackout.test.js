@@ -6,6 +6,8 @@ import { createArena } from '../src/arena.js';
 import { createPower } from '../src/power.js';
 import { createTransformer } from '../src/transformer.js';
 import { createFlashlights } from '../src/flashlights.js';
+import { stainUniforms, lightStains } from '../src/stain-light.js';
+import { BeamPass } from '../src/beam-pass.js';
 import { createImpactEffects } from '../src/impact-effects.js';
 import { createStormtrooper } from '../src/stormtrooper.js';
 import { createSquadMind } from '../src/trooper-ai.js';
@@ -105,7 +107,12 @@ test('in the dark the troopers switch on their rifle lamps one by one; the neare
   assert.ok(Math.min(...times) >= FEEL.blackout.onAfter[0] - 0.05, 'after a moment');
   assert.equal(lamps.on, troopers.length, 'all beams showing');
   assert.ok(lamps.motes > 8, `dust in the beams (${lamps.motes})`);
-  assert.ok([...lamps.beams.values()].every(beam => beam.cone.layers.mask === 2 && beam.glint.layers.mask === 2) && lamps.dust.layers.mask === 2, 'beams and dust out of the floor’s reflection (layer 1)');
+  assert.ok([...lamps.beams.values()].every(beam => beam.glint.layers.mask === 2 && beam.halo.layers.mask === 2) && lamps.dust.layers.mask === 2, 'glints and dust out of the floor’s reflection (layer 1)');
+  // Every beam for the beam pass, nearest first, the real lights with theirs.
+  assert.equal(lamps.volumes.length, troopers.length);
+  assert.ok(lamps.volumes.every((volume, i) => i === 0 || volume.lens.distanceTo(hero) >= lamps.volumes[i - 1].lens.distanceTo(hero) - 1e-9), 'nearest first');
+  assert.ok(lamps.volumes.slice(0, FEEL.blackout.lamps).every(volume => volume.light && volume.light.intensity > 0) && lamps.volumes.slice(FEEL.blackout.lamps).every(volume => !volume.light), 'the real lights on the nearest');
+  assert.ok(lamps.volumes.every(volume => volume.length > 0 && volume.length <= FEEL.blackout.beam.length + 1e-9 && volume.on > 0), 'lengths and levels');
   const lit = lamps.pool.filter(light => light.intensity > 0);
   assert.equal(lit.length, FEEL.blackout.lamps, 'a fixed number of real lights, never more');
   assert.equal(lamps.pool.filter(light => light.castShadow).length, FEEL.blackout.shadows);
@@ -150,6 +157,52 @@ test('the dust hangs in the air: a lamp turning lights other motes, it does not 
   for (let i = 0; i < 20; i++) lamps.update(1 / 60, { troopers: [trooper], hero, night: 1, stirs: [{ at: through, speed: 5 }] });
   const gained = near.map((i, k) => lamps.air[i].distanceTo(through) - there[k].distanceTo(through));
   assert.ok(near.length && gained.reduce((sum, d) => sum + d, 0) / near.length > 0.05, `pushed aside (${near.length} motes)`);
+});
+
+test('the red stains in the dark: red-black, but where a lamp or the blade lights them', () => {
+  const scene = new THREE.Scene();
+  const lamp = new THREE.SpotLight(0xffd6a0, 15, 12, 0.62, 0.95, 1.45), blade = new THREE.PointLight(0x2671ff, 8, 5.4, 2), off = new THREE.PointLight(0xffffff, 0, 4);
+  lamp.position.set(1, 1.1, 2);
+  lamp.target.position.set(1, 0, 6);
+  blade.position.set(-1, 0.6, 0);
+  scene.add(lamp, lamp.target, blade, off);
+  scene.updateMatrixWorld(true);
+  lightStains(1, [off, lamp, blade]);
+  assert.equal(stainUniforms.stainRoom.value, 1, 'the lit room: as they are');
+  lightStains(0, [off, lamp, blade]);
+  const { stainA, stainB, stainC, stainDecay } = stainUniforms;
+  // The light switched off is left out; the lamp and the blade are taken as they are.
+  assert.ok(stainA.value[0].equals(new THREE.Vector4(1, 1.1, 2, 12)), 'the lamp, where it is and how far it reaches');
+  const aim = new THREE.Vector3(0, -1.1, 4).normalize();
+  assert.ok(Math.abs(stainB.value[0].dot(new THREE.Vector4(aim.x, aim.y, aim.z, 0)) - 1) < 1e-6 && Math.abs(stainB.value[0].w - Math.cos(0.62)) < 1e-6, 'where it points, its edge');
+  assert.ok(Math.abs(stainC.value[0].x - 15) < 1e-6 && Math.abs(stainDecay.value[0] - 1.45) < 1e-6, 'its strength');
+  assert.equal(stainB.value[1].w, -2, 'the blade lights all round');
+  assert.ok(stainC.value[1].z > stainC.value[1].x * 3, 'in blue');
+  assert.ok(stainC.value.slice(2).every(slot => slot.x === 0 && slot.y === 0 && slot.z === 0), 'nothing else');
+  assert.ok(stainUniforms.stainFloor.value <= 0.15, 'in the dark: a red-black');
+});
+
+test('the beam pass: every beam into the shader, the real lights with their shadow maps', () => {
+  const camera = new THREE.OrthographicCamera(-7, 7, 4, -4, 0.1, 100);
+  const shadowed = new THREE.SpotLight(0xffffff, 15);
+  shadowed.castShadow = true;
+  shadowed.shadow.map = { texture: new THREE.Texture() };
+  shadowed.shadow.matrix.makeTranslation(1, 2, 3);
+  const beams = [
+    { lens: new THREE.Vector3(1, 1.1, 0), forward: new THREE.Vector3(0, 0, 1), length: 4.4, on: 1, light: shadowed },
+    { lens: new THREE.Vector3(-2, 1, 3), forward: new THREE.Vector3(1, 0, 0), length: 1.2, on: 0.5, light: null },
+  ];
+  const pass = new BeamPass(camera, () => beams);
+  assert.equal(pass.pack(beams), 2);
+  const u = pass.material.uniforms;
+  assert.equal(u.count.value, 2);
+  assert.ok(u.beamA.value[0].equals(new THREE.Vector4(1, 1.1, 0, 4.4)) && u.beamB.value[1].equals(new THREE.Vector4(1, 0, 0, 0.5)), 'where each starts, where it points, how far and how bright');
+  assert.equal(u.beamShadow.value[0], 0, 'the real light: its shadows read');
+  assert.equal(u.shadowMap.value[0], shadowed.shadow.map.texture);
+  assert.ok(u.shadowMatrix.value[0].equals(shadowed.shadow.matrix));
+  assert.equal(u.beamShadow.value[1], -1, 'the others: none');
+  assert.equal(pass.pack([]), 0, 'by day: nothing to add');
+  pass.dispose();
 });
 
 test('in the dark a trooper sees the hero only close by — further if his blade is lit, or in the beam of his lamp', () => {

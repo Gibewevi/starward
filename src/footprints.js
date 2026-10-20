@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FEEL, pick } from './feel.js';
+import { stainUniforms, STAIN_LIGHT } from './stain-light.js';
 
 /**
  * Red footprints. A foot that came down in red drops prints its sole on the
@@ -7,7 +8,8 @@ import { FEEL, pick } from './feel.js';
  * the troopers' can be followed across the deck. Every print is one instance
  * of a single mesh (one draw call for all of them): a boot sole painted in a
  * small texture (tread, a gap, the heel), mirrored for the left foot, laid on
- * the floor along the foot, dark red, fading after half a minute.
+ * the floor along the foot, dark red, fading after half a minute. In the
+ * dark they go red-black, but for where a lamp or the blade lights them.
  *
  * stamp(at, along, side, strength, [length, width]) — `along`: heel to toe on
  * the floor; side 'L' or 'R'; strength 0 → 1. Then update(dt).
@@ -55,19 +57,22 @@ export function createFootprints(scene, { max = 360, random = Math.random } = {}
   const material = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
-    uniforms: { map: { value: soleTexture() }, tint: { value: new THREE.Color(0.5, 0.024, 0.017) } },
+    uniforms: { map: { value: soleTexture() }, tint: { value: new THREE.Color(0.5, 0.024, 0.017) }, ...stainUniforms },
     vertexShader: /* glsl */`
-      attribute float fade; varying float vFade; varying vec2 vUv;
+      ${STAIN_LIGHT}
+      attribute float fade; varying float vFade; varying vec2 vUv; varying vec3 vLight;
       void main() {
         vFade = fade; vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+        vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+        vLight = stainLight(world.xyz);
+        gl_Position = projectionMatrix * viewMatrix * world;
       }`,
     fragmentShader: /* glsl */`
-      uniform sampler2D map; uniform vec3 tint; varying float vFade; varying vec2 vUv;
+      uniform sampler2D map; uniform vec3 tint; varying float vFade; varying vec2 vUv; varying vec3 vLight;
       void main() {
         float a = texture2D(map, vUv).a * vFade;
         if (a < 0.02) discard;
-        gl_FragColor = vec4(tint, a);
+        gl_FragColor = vec4(tint * vLight, a);
       }`,
   });
   const mesh = new THREE.InstancedMesh(geometry, material, max);

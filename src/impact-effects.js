@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createTweens, ease } from './tween.js';
 import { FEEL, pick } from './feel.js';
+import { stainUniforms, STAIN_LIGHT } from './stain-light.js';
 
 /**
  * Lightsaber impact effects, stylised and without gore. A physical particle
@@ -95,13 +96,17 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
   redGeometry.setAttribute('position', new THREE.BufferAttribute(redPoints, 3).setUsage(THREE.DynamicDrawUsage));
   redGeometry.setAttribute('tint', new THREE.BufferAttribute(redColors, 4).setUsage(THREE.DynamicDrawUsage));
   redGeometry.setAttribute('size', new THREE.BufferAttribute(redSizes, 1).setUsage(THREE.DynamicDrawUsage));
+  // In the dark they go red-black, but for where a lamp or the blade lights them (stain-light.js).
   const reds = new THREE.Points(redGeometry, new THREE.ShaderMaterial({
     transparent: true, depthWrite: false,
+    uniforms: stainUniforms,
     vertexShader: /* glsl */`
+      ${STAIN_LIGHT}
       attribute vec4 tint; attribute float size; varying vec4 vTint;
       void main() {
-        vTint = tint;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vTint = vec4(tint.rgb * stainLight(world.xyz), tint.a);
+        gl_Position = projectionMatrix * viewMatrix * world;
         gl_PointSize = size;
       }`,
     fragmentShader: /* glsl */`
