@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildTrooperParts } from './trooper-model.js';
 import { Ragdoll } from './ragdoll.js';
 import { aimBone, solveTwoBone } from './ik.js';
@@ -197,6 +198,11 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   let joints, parts, pieces, holder, ragdoll, particleIndex, particleSpec, bodies, caps, marks, base, feet;
   // Time, a pending collapse, the crawl, death throes, and muscle twitches.
   let clock = 0, collapse = null, crawl = null, spasm = null, twitches = [];
+  // Lying dead and still for a moment, the body sleeps: no more physics, and
+  // its pieces (some 160 meshes) are merged into a few — a handful of draw
+  // calls instead of hundreds. Anything that touches it wakes it first.
+  const sleep = { still: 0, asleep: false, group: null, hidden: [], bounds: new THREE.Box3(), dead: 0, watch: 0, drift: Infinity, anchor: new THREE.Vector3() };
+  const bodyBox = new THREE.Box3(), sweepBox = new THREE.Box3();
   // Crawl muscles: per particle, where it should be over the current frame.
   let muscles = [], muscleState = new Map(), driveClock = 0, driveSpan = 1 / 60;
   // Knocked down unhurt and getting back up; dragged by the Force; fetching
@@ -249,6 +255,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     joints.spine.add(holder);
     joints.holder = holder;
     ({ parts, pieces } = buildTrooperParts(materials));
+    compact([...Object.values(parts), ...Object.values(pieces)]);
     heldGrenade = add(parts.handL, new THREE.SphereGeometry(0.062, 14, 10), materials.shade, [0, -0.1, 0.035], [0, 0, 0], 'Grenade in hand');
     heldGrenade.visible = false;
     mounts = { head: 'neck', torso: 'spine', pelvis: 'pelvis', blaster: 'holder' };
@@ -322,6 +329,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
     collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = impaled = null;
+    sleep.still = sleep.dead = sleep.watch = 0;
+    sleep.drift = Infinity;
+    sleep.asleep = false;
+    sleep.hidden = [];
     blows = 0;
     woundedAt = -Infinity;
     woundingBlow = null;
@@ -1936,6 +1947,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     dt = Math.min(dt, 0.05);
     clock += dt;
     tweens.update(dt);
+    if (sleep.asleep) return;
     if (!trooper.fallen && dt > 0) {
       if (impaled) impaleStep(dt, time);
       else if (towing?.kind === 'stand') towStanding(dt);
@@ -1986,6 +1998,114 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (slick && clock > slick.until) settle();
     twitches = twitches.filter(entry => entry.t < entry.duration);
     syncObjects();
+    // Dead, on the floor, and nothing moving for a second — or, long dead, only
+    // trembling where it lies (wedged against a crate): asleep.
+    if (trooper.dead && trooper.fallen && dt > 0 && !impaled && !towing && !lifting && !spasm && !twitches.length) {
+      sleep.dead += dt;
+      if ((sleep.watch += dt) >= 0.5) {
+        const centre = measure(bodyBox).getCenter(temp);
+        sleep.drift = centre.distanceTo(sleep.anchor);
+        sleep.anchor.copy(centre);
+        sleep.watch = 0;
+      }
+      const top = fastest(), quiet = (top < 0.05 && !slick) || (sleep.dead > 4 && top < 0.8 && sleep.drift < 0.02);
+      sleep.still = quiet ? sleep.still + dt : 0;
+      if (sleep.still > 1) fallAsleep();
+    } else sleep.still = sleep.dead = 0;
+  }
+  /** The fastest moving particle of his whole body, severed pieces and rifle included (m/s). */
+  function fastest() {
+    let top = 0;
+    for (let index = 0; index < ragdoll.particles.length; index++) if (!ragdoll.particles[index].kinematic) top = Math.max(top, ragdoll.velocity(index, temp).lengthSq());
+    return Math.sqrt(top);
+  }
+  /** Where all of him lies (severed pieces included). */
+  function measure(out) {
+    out.makeEmpty();
+    for (const particle of ragdoll.particles) out.expandByPoint(particle.position);
+    return out.expandByScalar(0.25);
+  }
+  /**
+   * Fewer meshes to draw: inside each part and each armour piece, the meshes
+   * sharing a material become one (their place in the group baked in). The
+   * parts and pieces themselves stay apart, so they still come off and fly
+   * on their own.
+   */
+  function compact(groups) {
+    for (const group of groups) {
+      const sets = new Map();
+      for (const child of group.children) {
+        if (!child.isMesh || child.isSkinnedMesh || Array.isArray(child.material) || !child.visible || child.children.length) continue;
+        const geometry = child.geometry;
+        const key = `${child.material.uuid}|${geometry.index ? 'i' : 'n'}|${Object.keys(geometry.attributes).sort().join(',')}|${Object.keys(geometry.morphAttributes).length}|${child.castShadow}|${child.receiveShadow}|${child.renderOrder}`;
+        if (!sets.has(key)) sets.set(key, []);
+        sets.get(key).push(child);
+      }
+      for (const meshes of sets.values()) {
+        if (meshes.length < 2) continue;
+        const geometries = meshes.map(mesh => { mesh.updateMatrix(); return mesh.geometry.clone().applyMatrix4(mesh.matrix); });
+        const merged = mergeGeometries(geometries);
+        for (const geometry of geometries) geometry.dispose();
+        if (!merged) continue;
+        const first = meshes[0], mesh = new THREE.Mesh(merged, first.material);
+        mesh.name = meshes.map(other => other.name).filter(Boolean).join(' + ');
+        mesh.castShadow = first.castShadow;
+        mesh.receiveShadow = first.receiveShadow;
+        mesh.renderOrder = first.renderOrder;
+        for (const old of meshes) group.remove(old);
+        group.add(mesh);
+      }
+    }
+  }
+  /** Lying still: the physics stops, and the visible pieces are merged, one mesh per material. */
+  function fallAsleep() {
+    sleep.asleep = true;
+    sleep.still = 0;
+    measure(sleep.bounds);
+    syncObjects();
+    trooper.debris.updateMatrixWorld(true);
+    const groups = new Map();
+    trooper.debris.traverseVisible(object => {
+      if (!object.isMesh || object.isSkinnedMesh || Array.isArray(object.material) || object.material.transparent) return;
+      const geometry = object.geometry, key = `${object.material.uuid}|${geometry.index ? 'i' : 'n'}|${Object.keys(geometry.attributes).sort().join(',')}|${object.castShadow}|${object.receiveShadow}`;
+      if (!groups.has(key)) groups.set(key, { material: object.material, castShadow: object.castShadow, receiveShadow: object.receiveShadow, geometries: [], objects: [] });
+      const entry = groups.get(key);
+      entry.geometries.push(geometry.clone().applyMatrix4(object.matrixWorld));
+      entry.objects.push(object);
+    });
+    const group = new THREE.Group();
+    group.name = 'Sleeping body';
+    for (const entry of groups.values()) {
+      const merged = entry.geometries.length > 1 ? mergeGeometries(entry.geometries) : entry.geometries[0];
+      for (const geometry of entry.geometries) if (geometry !== merged) geometry.dispose();
+      // Pieces that will not merge stay as they are.
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, entry.material);
+      mesh.castShadow = entry.castShadow;
+      mesh.receiveShadow = entry.receiveShadow;
+      mesh.matrixAutoUpdate = false;
+      group.add(mesh);
+      for (const object of entry.objects) { object.visible = false; sleep.hidden.push(object); }
+    }
+    trooper.debris.parent?.add(group);
+    sleep.group = group;
+  }
+  /** Touched: the pieces come back as they were, the physics starts again. */
+  function wake() {
+    if (!sleep.asleep) return;
+    sleep.asleep = false;
+    sleep.still = sleep.dead = 0;
+    sleep.drift = Infinity;
+    unmerge();
+  }
+  function unmerge() {
+    for (const object of sleep.hidden) object.visible = true;
+    sleep.hidden = [];
+    if (sleep.group) {
+      sleep.group.traverse(object => object.geometry?.dispose());
+      sleep.group.removeFromParent();
+      sleep.group = null;
+    }
   }
 
   // Closest points between segments p1q1 and p2q2 (Ericson).
@@ -2022,6 +2142,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const fromDirection = new THREE.Vector3().subVectors(previousTip, previousBase), toDirection = new THREE.Vector3().subVectors(bladeTip, bladeBase);
     const fromLength = fromDirection.length(), toLength = toDirection.length();
     if (fromLength < 0.1 || toLength < 0.1) return trooper.events;
+    // Nowhere near him: nothing to test.
+    sweepBox.makeEmpty().expandByPoint(previousBase).expandByPoint(previousTip).expandByPoint(bladeBase).expandByPoint(bladeTip);
+    if (!sweepBox.intersectsBox(sleep.asleep ? sleep.bounds : measure(bodyBox))) return trooper.events;
     fromDirection.normalize(); toDirection.normalize();
     const turn = new THREE.Quaternion().setFromUnitVectors(fromDirection, toDirection), partial = new THREE.Quaternion();
     const blade = (k, out = {}) => {
@@ -2057,6 +2180,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // (the whole swing that wounded him counts as that one blow)
     const sameBlow = blow !== null ? blow === woundingBlow : clock - woundedAt < 0.25;
     sparing = !trooper.dead && !trooper.fallen && (blows < FEEL.hit.toughness || sameBlow);
+    if (hits.length) wake();
     for (const hit of hits) resolve(hit, time);
     if (pending) stagger(pending);
     // The same swing keeps touching him: it is still that one blow.
@@ -2156,6 +2280,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   }
 
   function dispose() {
+    unmerge();
     for (const group of [trooper.root, trooper.debris]) {
       if (!group) continue;
       group.traverse(object => {
@@ -2197,6 +2322,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   /** A blaster bolt travelling from a to b: the part of him it hits first (or null). */
   function boltHit(a, b, radius = 0.025) {
     let best = null;
+    sweepBox.makeEmpty().expandByPoint(a).expandByPoint(b);
+    if (!sweepBox.intersectsBox(sleep.asleep ? sleep.bounds : measure(bodyBox))) return null;
     for (const body of ragdoll.bodies) {
       if (!body.capsule || body.name === 'blaster') continue;
       const p0 = ragdoll.particles[body.indices[body.capsuleSlots[0]]].position;
@@ -2262,6 +2389,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   trooper.indexOf = name => particleIndex[name];
   /** Slows his flying body (it hit something). */
   trooper.slow = factor => {
+    wake();
     for (const index of joinedIndices()) {
       const particle = ragdoll.particles[index];
       if (!particle.kinematic) particle.previous.lerp(particle.position, 1 - factor);
@@ -2270,7 +2398,12 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   /** Where the threat is (the hero), so that he gets up facing it. */
   trooper.focus = null;
   build();
-  Object.assign(trooper, { update, strike, reset, dispose, blocker, cut, die, fall, forcePush, forcePull, hold, drop, fire, boltHit, shot, throwGrenade, impale, skewer, slideOff });
+  const waking = action => (...args) => { wake(); return action(...args); };
+  Object.assign(trooper, {
+    update, strike, reset, dispose, blocker, fire, boltHit, throwGrenade, wake,
+    cut: waking(cut), die: waking(die), fall: waking(fall), forcePush: waking(forcePush), forcePull: waking(forcePull), hold: waking(hold), drop: waking(drop),
+    shot: waking(shot), impale: waking(impale), skewer: waking(skewer), slideOff: waking(slideOff),
+  });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
     /** In the middle of throwing a grenade. */
@@ -2293,6 +2426,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     recovery: { get: () => recover },
     towing: { get: () => towing },
     spasm: { get: () => spasm },
+    /** Dead, still, merged and out of the physics until something touches him. */
+    asleep: { get: () => sleep.asleep },
+    /** Where all of him lies (severed pieces included). */
+    bounds: { get: () => (sleep.asleep ? sleep.bounds : measure(new THREE.Box3())) },
     /** News for the game since the last call: landings, armour lost, pulled, up, rearmed. */
     news: { get: () => feed.splice(0) },
     /** Armour still on him. */
@@ -2338,6 +2475,8 @@ export function collideSquad(troopers) {
           break;
         }
       } else if (troopers.indexOf(a) < troopers.indexOf(b)) {
+        // Two sleeping bodies do not move; two far apart cannot touch.
+        if ((a.asleep && b.asleep) || !a.bounds.intersectsBox(b.bounds)) continue;
         for (const p of a.ragdoll.particles) {
           if (p.kinematic) continue;
           for (const q of b.ragdoll.particles) {
@@ -2346,7 +2485,19 @@ export function collideSquad(troopers) {
             const dx = q.position.x - p.position.x, dy = q.position.y - p.position.y, dz = q.position.z - p.position.z;
             const squared = dx * dx + dy * dy + dz * dz;
             if (squared >= reach * reach || squared < 1e-10) continue;
-            const distance = Math.sqrt(squared), push = (reach - distance) * 0.5 / distance;
+            const distance = Math.sqrt(squared);
+            // Against a sleeping body: one only resting on it is pushed off it alone; one landing on it wakes it.
+            if (a.asleep || b.asleep) {
+              const moving = a.asleep ? q : p, speed = Math.hypot(moving.position.x - moving.previous.x, moving.position.y - moving.previous.y, moving.position.z - moving.previous.z) * 120;
+              if (speed < 0.5 && reach - distance < 0.03) {
+                const push = (reach - distance) / distance * (a.asleep ? 1 : -1);
+                moving.position.x += dx * push; moving.position.y += dy * push; moving.position.z += dz * push;
+                moving.previous.x += dx * push; moving.previous.y += dy * push; moving.previous.z += dz * push;
+                continue;
+              }
+              a.wake(); b.wake();
+            }
+            const push = (reach - distance) * 0.5 / distance;
             // Apart without adding speed: bodies piled up stay calm.
             for (const [particle, sign] of [[p, -1], [q, 1]]) {
               particle.position.x += dx * push * sign; particle.position.y += dy * push * sign; particle.position.z += dz * push * sign;

@@ -79,6 +79,13 @@ Sur écran tactile, le joystick et le bouton de course apparaissent automatiquem
 
 Le modèle du personnage a été créé pour ce prototype. Le corps est un maillage continu dont les sommets se déforment avec un squelette de 22 os compatible Mixamo, y compris aux articulations. Un étalonnage propre au personnage lit l’éclairage froid du laboratoire comme une lumière neutre chaude, pour garder les bruns de la référence ; seule la lueur du sabre reste bleue. Les mouvements proviennent des captures Mixamo distribuées avec les exemples three.js (`Xbot.glb`) ; seules les rotations utiles sont conservées dans `src/mocap-clips.js`. Les textures et les polices sont locales. Aucun compte ni accès Internet n’est nécessaire pour jouer une fois les fichiers présents.
 
+## Performances
+
+- Un cadavre immobile depuis une seconde « s’endort » : sa physique s’arrête et ses quelque 120 pièces sont fusionnées en une quinzaine de maillages (un par matériau). Tout ce qui le touche le réveille d’abord — coup de sabre, tir renvoyé, Force, explosion, autre corps qui tombe dessus — et ses pièces reviennent telles quelles. Un corps coincé qui tremble sur place s’endort aussi au bout de quelques secondes.
+- À la création, les éléments d’un même membre ou d’une même plaque d’armure qui partagent un matériau sont fusionnés (159 → 117 maillages par soldat) ; plaques et membres restent séparés et se détachent toujours.
+- Le sabre et les tirs ne testent un soldat que si leur trajectoire passe près de lui ; deux corps endormis ne se testent plus l’un contre l’autre.
+- Mesures (rendu de test, 1/60 s) : 5 soldats vivants 11 → 6,5 ms par image (1 030 → 660 appels de dessin) ; 9 cadavres 12,9 → 5,9 ms (1 450 → 325 appels).
+
 ## Développement
 
 Node.js 20.19+ ou 22.12+.

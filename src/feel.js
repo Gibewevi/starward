@@ -29,16 +29,20 @@ export const FEEL = {
     slash: [18, 60],
   },
   // A limb (an arm, a leg, the head) coming off: fewer sparks, and red drops
-  // — fewer and a little bigger than the sparks, heavy, falling fast — that
-  // stay on the floor a long while.
+  // — fewer and a little bigger than the sparks — thrown out with the blade,
+  // falling back fast, that stick where they land (floor, crates, walls) a
+  // long while.
   severed: {
     sparks: 0.75, // share of a cut's usual sparks
     red: [9, 15], // drops in the spray
     size: [2.5, 3.4], // px (sparks are 1.7–2.3)
-    speed: 0.55, // share of the blade's speed they are thrown with
-    gravity: 24, // m/s² (sparks: 9.8): they drop fast
+    speed: 0.9, // share of the blade's speed they are thrown with
+    lift: [0.6, 2.4], // m/s: thrown up a little as well
+    gravity: 15, // m/s² (sparks: 9.8): they come back down fast
+    creep: 0.05, // m/s: on a wall a drop runs down a little before it sets
+    set: 1.2, // s it takes to set on a wall
     drip: [0.6, 1], // s: a few drops still fall from the cut after
-    linger: [24, 32], // s on the floor before they fade
+    linger: [24, 32], // s stuck where they landed before they fade
     fade: 4, // s to fade out
   },
   hitStop: {

@@ -331,6 +331,44 @@ test('a corpse still reacts to the blade', () => {
   assert.ok(state.fastest() < 0.15 && state.finite());
 });
 
+test('a body lying still falls asleep: out of the physics, its pieces merged into a few meshes; a blade or a push wakes it', () => {
+  const state = fixture(29);
+  state.run(0.5);
+  const { trooper, scene } = state;
+  // Cut down: a hand off, then dead.
+  state.cut('wristR', 'HR');
+  trooper.die('slash', new THREE.Vector3(2, 0, 0.5));
+  state.run(0.3);
+  const drawn = () => { let count = 0; scene.traverseVisible(object => { if (object.isMesh && object.name !== 'Cut ring') count++; }); return count; };
+  const awake = drawn();
+  assert.ok(!trooper.asleep, 'still falling');
+  state.run(9);
+  assert.ok(trooper.asleep, 'asleep once still');
+  const asleep = drawn();
+  assert.ok(asleep < awake / 4, `far fewer meshes to draw (${awake} → ${asleep})`);
+  // The merged body is where the pieces were.
+  const merged = scene.getObjectByName('Sleeping body');
+  const bounds = new THREE.Box3().setFromObject(merged), body = trooper.bounds;
+  assert.ok(body.containsBox(bounds) || body.intersectsBox(bounds), 'in the same place');
+  const before = state.particle('W');
+  state.run(2);
+  assert.ok(state.particle('W').equals(before), 'nothing moves while asleep');
+  // The blade wakes it, and it reacts.
+  const torso = state.particle('W').lerp(state.particle('N'), 0.5);
+  state.sweep(torso.clone().setY(torso.y + 0.3), new THREE.Vector3(0, -1, 0), new THREE.Vector3(1, 0, 0.3), 5, 4);
+  assert.ok(!trooper.asleep && drawn() > asleep * 3, 'awake, every piece back');
+  state.run(6);
+  assert.ok(trooper.asleep, 'asleep again');
+  // So does a push (a blast, the Force).
+  trooper.forcePush(new THREE.Vector3(3, 2, 0));
+  assert.ok(!trooper.asleep);
+  state.run(0.2);
+  assert.ok(state.particle('W').distanceTo(before) > 0.05, 'thrown');
+  assert.ok(state.finite());
+  trooper.dispose();
+  assert.equal(scene.getObjectByName('Sleeping body'), undefined, 'nothing left behind');
+});
+
 test('standing, he answers each hit where it lands', () => {
   const head = fixture(31);
   head.run(0.5);

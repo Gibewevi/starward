@@ -133,7 +133,7 @@ function init() {
   const SPRINT_PACE = 4.5;
   // A squad of stormtroopers among the crates, unaware of the hero at first:
   // sentries and patrols. Screen-up on the floor is away from the camera.
-  const effects = createImpactEffects(scene);
+  const effects = createImpactEffects(scene, { lab });
   const screenUp = new THREE.Vector3(-8, 0, -10).normalize(), screenRight = new THREE.Vector3(10, 0, -8).normalize();
   const towards = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
   // Screen directions as headings: down (towards the camera) 0.68, up -2.47, left -0.9, right 2.24.
@@ -1240,7 +1240,8 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph,
+    squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
+    renderer, composer, reflection,
     camera,
     /** For checks: the lit blade this frame. */
     blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),

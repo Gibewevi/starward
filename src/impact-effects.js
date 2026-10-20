@@ -13,14 +13,16 @@ import { FEEL, pick } from './feel.js';
  * fades, and a ring of light racing out along the cut plane — both tweened.
  * A Force wave is a few pale rings rushing out of the hand (a push) or
  * converging on it (a pull), eased.
- * A limb coming off throws red drops too (bleed(), drip()): heavier than
- * the sparks, falling fast without a bounce, opaque rather than glowing, and
- * lying on the floor for half a minute before they fade.
+ * A limb coming off throws red drops too (bleed(), drip()): thrown out with
+ * the blade, falling back faster than the sparks, opaque rather than glowing.
+ * They do not bounce: they stick where they land — the floor, a crate, a wall
+ * (`lab`), where they run down a little before setting — and stay there half
+ * a minute before they fade.
  * sparks()/flash()/burst()/wave()/smoulder()/glow()/bleed()/drip(), then update(dt).
  */
 const SPARK = 0, DROP = 1, EMBER = 2;
 
-export function createImpactEffects(scene, { random = Math.random } = {}) {
+export function createImpactEffects(scene, { random = Math.random, lab = null } = {}) {
   const MAX = 1800;
   const position = new Float32Array(MAX * 3), velocity = new Float32Array(MAX * 3);
   const heat = new Float32Array(MAX), cooling = new Float32Array(MAX), size = new Float32Array(MAX);
@@ -81,6 +83,9 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const RED = 700;
   const redPosition = new Float32Array(RED * 3), redVelocity = new Float32Array(RED * 3);
   const redState = new Uint8Array(RED), redTime = new Float32Array(RED), redLife = new Float32Array(RED), redSize = new Float32Array(RED), redShade = new Float32Array(RED);
+  // Stuck on a wall or a crate's side (1), it runs down a little; on a floor or a lid (0), it stays put.
+  const redWall = new Uint8Array(RED), redFloor = new Float32Array(RED);
+  const from = new THREE.Vector3(), to = new THREE.Vector3();
   const redGeometry = new THREE.BufferGeometry();
   const redPoints = new Float32Array(RED * 3), redColors = new Float32Array(RED * 4), redSizes = new Float32Array(RED);
   redGeometry.setAttribute('position', new THREE.BufferAttribute(redPoints, 3).setUsage(THREE.DynamicDrawUsage));
@@ -117,6 +122,8 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     v.toArray(redVelocity, i * 3);
     redState[i] = 1;
     redTime[i] = 0;
+    redWall[i] = 0;
+    redFloor[i] = 0.008;
     redLife[i] = pick(FEEL.severed.linger, random);
     redSize[i] = pick(FEEL.severed.size, random);
     redShade[i] = 0.8 + random() * 0.35;
@@ -232,7 +239,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       v.copy(direction).multiplyScalar(throw_ * (0.3 + random() * 0.8))
         .addScaledVector(side, (random() - 0.5) * throw_ * 0.8)
         .addScaledVector(normal, (random() - 0.5) * throw_ * 0.4);
-      v.y = Math.min(v.y, 0.6) + random() * 0.9 - 0.4;
+      v.y = Math.min(v.y, 1) + pick(FEEL.severed.lift, random);
       start.copy(at).addScaledVector(v, random() * 0.02);
       emitRed(start, v);
     }
@@ -399,8 +406,8 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       emitRed(point, new THREE.Vector3((random() - 0.5) * 0.3, -0.2 - random() * 0.4, (random() - 0.5) * 0.3));
     }
     for (let i = drips.length - 1; i >= 0; i--) if (drips[i].age > drips[i].duration) drips.splice(i, 1);
-    // Red drops: heavy, no bounce; on the floor they stay, darkening, then fade.
-    const { gravity, fade } = FEEL.severed;
+    // Red drops: no bounce; they stick where they land (a wall: running down a little), darken, then fade.
+    const { gravity, fade, creep, set } = FEEL.severed;
     for (let i = 0; i < RED; i++) {
       const o = i * 3, c = i * 4;
       if (!redState[i]) { redSizes[i] = 0; continue; }
@@ -408,9 +415,21 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
         const drag = Math.exp(-0.35 * dt);
         redVelocity[o] *= drag; redVelocity[o + 2] *= drag;
         redVelocity[o + 1] -= gravity * dt;
+        from.fromArray(redPosition, o);
         redPosition[o] += redVelocity[o] * dt; redPosition[o + 1] += redVelocity[o + 1] * dt; redPosition[o + 2] += redVelocity[o + 2] * dt;
-        if (redPosition[o + 1] <= 0.008) { redPosition[o + 1] = 0.008; redState[i] = 2; redTime[i] = 0; }
-      } else redTime[i] += dt;
+        // A crate, a barrel, a wall in the way: it sticks there, just off the surface.
+        const hit = lab && dt > 0 ? lab.segmentHit(from, to.fromArray(redPosition, o)) : null;
+        if (hit) {
+          to.copy(hit.point).addScaledVector(hit.normal, 0.012).toArray(redPosition, o);
+          redState[i] = 2; redTime[i] = 0;
+          redWall[i] = Math.abs(hit.normal.y) < 0.5 ? 1 : 0;
+          redFloor[i] = 0.008;
+        } else if (redPosition[o + 1] <= 0.008) { redPosition[o + 1] = 0.008; redState[i] = 2; redTime[i] = 0; }
+      } else {
+        redTime[i] += dt;
+        // On a wall it runs down a little, slower and slower, until it sets (never below the floor).
+        if (redWall[i] && redTime[i] < set) redPosition[o + 1] = Math.max(redFloor[i], redPosition[o + 1] - creep * (1 - redTime[i] / set) * dt);
+      }
       const lying = redState[i] === 2;
       if (lying && redTime[i] >= redLife[i] + fade) { redState[i] = 0; redSizes[i] = 0; continue; }
       const dark = lying ? Math.min(1, redTime[i] / 2.5) : 0, shade = redShade[i];
@@ -419,8 +438,8 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       redColors[c + 1] = (0.03 - 0.012 * dark) * shade;
       redColors[c + 2] = (0.022 - 0.008 * dark) * shade;
       redColors[c + 3] = lying ? Math.min(1, Math.max(0, (redLife[i] + fade - redTime[i]) / fade)) : 1;
-      // Landed, a drop spreads a little.
-      redSizes[i] = redSize[i] * (lying ? 1.3 : 1);
+      // Landed, a drop spreads a little (on a wall it stays rounder).
+      redSizes[i] = redSize[i] * (lying ? (redWall[i] ? 1.15 : 1.3) : 1);
     }
     for (const attribute of [redGeometry.attributes.position, redGeometry.attributes.tint, redGeometry.attributes.size]) attribute.needsUpdate = true;
     for (const entry of glows) {
@@ -535,7 +554,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       beadPositions, beadColors, beadSizes, streakPositions, streakColors, trailPositions, trailColors]) array.fill(0);
     cursor = nextLight = nextFlare = nextRing = nextWave = 0;
     smoulders.length = 0;
-    for (const array of [redPosition, redVelocity, redState, redTime, redLife, redSize, redShade, redPoints, redColors, redSizes]) array.fill(0);
+    for (const array of [redPosition, redVelocity, redState, redTime, redLife, redSize, redShade, redWall, redFloor, redPoints, redColors, redSizes]) array.fill(0);
     redCursor = 0;
     drips.length = 0;
     glows.length = 0;
@@ -550,8 +569,8 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   return {
     points: beads, beads, streaks, trails, reds, sparks, bleed, drip, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
-    /** Red drops in the air, and lying on the floor. */
-    get red() { let flying = 0, lying = 0; for (let i = 0; i < RED; i++) { flying += redState[i] === 1; lying += redState[i] === 2; } return { flying, lying }; },
+    /** Red drops in the air, and stuck where they landed (walls and crates among them). */
+    get red() { let flying = 0, lying = 0, walls = 0; for (let i = 0; i < RED; i++) { flying += redState[i] === 1; lying += redState[i] === 2; walls += redState[i] === 2 && redWall[i]; } return { flying, lying, walls }; },
     /** Flares and rings currently shown. */
     get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },
     get waves() { return waveSlots.filter(slot => slot.mesh.visible).length; },
