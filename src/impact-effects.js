@@ -117,7 +117,7 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
     scene.add(mesh);
     return { mesh, tween: null };
   });
-  const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25), red = new THREE.Color(0.85, 0.01, 0.01);
+  const whiteHot = new THREE.Color(2.6, 2.5, 2.9), orange = new THREE.Color(2.4, 0.9, 0.25), red = new THREE.Color(0.85, 0.01, 0.01), bladeBlue = new THREE.Color(0.5, 0.9, 2.6);
   const lightWhite = new THREE.Color(1, 0.93, 0.85), lightOrange = new THREE.Color(1, 0.54, 0.23);
   const facing = new THREE.Vector3(0, 0, 1);
   const smoulders = [], glows = [];
@@ -236,8 +236,8 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
    */
   function burst(at, { normal = null, power = 1, tint = null } = {}) {
     power = Math.min(1.5, Math.max(0.2, power));
-    // A blaster's flare cools to red, the blade's to orange.
-    const cool = tint === 'red' ? red : orange;
+    // A blaster's flare cools to red, the blade's to orange; a perfect parry's to blade-blue.
+    const cool = tint === 'red' ? red : tint === 'blue' ? bladeBlue : orange;
     const flare = flareSlots[nextFlare];
     nextFlare = (nextFlare + 1) % flareSlots.length;
     tweens.cancel(flare.tween);

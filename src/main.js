@@ -13,8 +13,8 @@ import { createNav } from './nav.js';
 import { createReinforcements } from './reinforcements.js';
 import { createLighting } from './lighting.js';
 import { createSaber } from './saber.js';
-import { MotionController, damp } from './motion.js';
-import { CombatController } from './combat.js';
+import { MotionController, damp, angleDelta } from './motion.js';
+import { CombatController, MOVES } from './combat.js';
 import { createBladeTrail } from './blade-trail.js';
 import { createStormtrooper, collideSquad } from './stormtrooper.js';
 import { ease, hitStopScale, kick } from './tween.js';
@@ -32,6 +32,9 @@ import { createSaberScars } from './saber-scars.js';
 import { createDebris } from './debris.js';
 import { createGrenades } from './grenades.js';
 import { createHeroRagdoll } from './hero-ragdoll.js';
+import { createAudio } from './audio.js';
+import { createShake } from './shake.js';
+import { createTelegraph } from './telegraph.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -126,6 +129,8 @@ function init() {
   const trail = createBladeTrail(scene);
   const bladeBase = new THREE.Vector3(), bladeTip = new THREE.Vector3(), lastTip = new THREE.Vector3();
   const shake = new THREE.Vector3();
+  let roll = 0;
+  const SPRINT_PACE = 4.5;
   // A squad of stormtroopers among the crates, unaware of the hero at first:
   // sentries and patrols. Screen-up on the floor is away from the camera.
   const effects = createImpactEffects(scene);
@@ -154,7 +159,13 @@ function init() {
   loadExplosionAssets(explosions).catch(error => console.error('Chargement de l’explosion interrompu :', error));
   const debris = createDebris(scene, { lab });
   debris.scatter();
-  const grenades = createGrenades(scene, { lab, reach: FEEL.grenade.reach, onBeep: (grenade, progress) => audio.beep(progress, grenade.position.distanceTo(character.root.position)) });
+  const grenades = createGrenades(scene, {
+    lab, reach: FEEL.grenade.reach,
+    onBeep: (grenade, progress) => audio.beep(progress, grenade.position),
+    onBounce: (grenade, speed) => audio.clink(grenade.position, Math.min(1, speed / 6)),
+  });
+  // Warnings: a glint at a muzzle about to fire; chevrons at the screen's edges for threats out of view.
+  const telegraph = createTelegraph(scene, { overlay: $('#threats') });
   const knockdown = createHeroRagdoll(character, { lab });
   const blasters = createBlasters(scene, { effects, lab, marks });
   // The squad finds its way round the crates and walls on a navigation grid.
@@ -196,7 +207,38 @@ function init() {
     try { localStorage.setItem('starward.precision', precision.toFixed(3)); } catch { /* no storage */ }
   };
   const lastBase = new THREE.Vector3();
-  let bladeReady = false, hitStop = null, impactShake = 0;
+  let bladeReady = false, hitStop = null;
+  // Camera shake from trauma: blows add it, it drains, the view shakes with its square.
+  const trauma = createShake();
+  // The controller trembles with the blows (if it can, and if the player wants it).
+  let rumbleOn = true, rumbleUntil = 0, rumbleLevel = 0;
+  function rumble(strong, weak, duration) {
+    if (!rumbleOn) return;
+    const actuator = navigator.getGamepads?.()?.find(pad => pad?.connected)?.vibrationActuator;
+    if (!actuator?.playEffect) return;
+    // A weaker one never cuts a stronger one short.
+    const now = performance.now();
+    if (now < rumbleUntil && Math.max(strong, weak) < rumbleLevel) return;
+    rumbleUntil = now + duration * 1000;
+    rumbleLevel = Math.max(strong, weak);
+    actuator.playEffect('dual-rumble', { startDelay: 0, duration: duration * 1000, strongMagnitude: Math.min(1, strong), weakMagnitude: Math.min(1, weak) }).catch(() => {});
+  }
+  // The streak: blows, returns and kills in a row without being hit.
+  let streak = 0, streakAge = Infinity, streakNote = '', streakNoteAge = Infinity, streakBroken = Infinity, eliminated = 0;
+  const counted = new WeakSet();
+  function score(points, note = '') {
+    streak += points;
+    streakAge = 0;
+    if (note) { streakNote = note; streakNoteAge = 0; }
+    const element = $('#streak');
+    element.classList.remove('pop');
+    void element.offsetWidth;
+    element.classList.add('pop');
+  }
+  function breakStreak() {
+    if (streak >= 3) streakBroken = 0;
+    streak = 0;
+  }
   // Game feel: hit stops ease back to speed, the view is kicked along the
   // swing and rings out, and a felling blow punches the zoom in a touch.
   const cameraKick = { direction: new THREE.Vector3(), amplitude: 0, age: Infinity }, kickOffset = new THREE.Vector3();
@@ -217,8 +259,12 @@ function init() {
   function restart() {
     resetTrooper();
     reset();
-    dash = null;
-    dashCooldown = 0;
+    streak = eliminated = 0;
+    streakAge = streakBroken = Infinity;
+    trauma.clear();
+    telegraph.clear();
+    dash = lunge = null;
+    dashCooldown = dodge = dashAfter = 0;
   }
   function resetTrooper() {
     skewered = thrust = held = null;
@@ -269,7 +315,9 @@ function init() {
   // A lightning burst along the ground: off at full speed, easing to a stop
   // after a few metres; the cape streams, a pale streak of light hangs behind
   // him an instant and fades, the debris on the floor is swept aside.
-  let dash = null, dashCooldown = 0;
+  // Bolts pass through him while he dashes (and a beat after); B during it,
+  // or just after, turns it into a lunging strike.
+  let dash = null, dashCooldown = 0, dodge = 0, dashAfter = 0, strikeFromDash = false;
   const streaks = [[0.85, 0.45], [0.32, 1.1]].map(([width, strength]) => {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: new THREE.Color(0.55, 0.72, 1.15), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
     sprite.visible = false;
@@ -282,13 +330,15 @@ function init() {
   function startDash(along) {
     dash = { age: 0, along };
     dashCooldown = FEEL.dash.cooldown;
+    dodge = FEEL.dash.duration + FEEL.dash.dodge;
     motion.face(Math.atan2(along.x, along.z));
     streakFrom.set(motion.x, 0.95, motion.z);
     streakFade = 1;
     // A pale Force wave rushes along the way he goes.
     effects.wave(streakFrom.clone().setY(0.6), along, { kind: 'push', length: FEEL.dash.speed * FEEL.dash.duration * 0.75, power: 0.55 });
     shove(along, FEEL.camera.kick * 0.6);
-    audio.whoosh();
+    audio.dash();
+    rumble(0.1, 0.35, 0.08);
     noise(here.set(motion.x, 0, motion.z), 6, { from: here });
   }
   function dashStep(dt) {
@@ -303,12 +353,74 @@ function init() {
     motion.runBlend = motion.sprint = 1;
     motion.idleTime = 0;
     debris.kick(here.set(motion.x, 0, motion.z), dash.along.clone().multiplyScalar(v));
-    if (k >= 1) {
-      // He keeps a little of it into his stride.
-      motion.vx = dash.along.x * speed * carry;
-      motion.vz = dash.along.z * speed * carry;
-      dash = null;
+    if (k >= 1) endDash();
+  }
+  /** The dash ends (run out, or cut short by a strike): he keeps a little of it into his stride. */
+  function endDash() {
+    if (!dash) return;
+    const { speed, carry } = FEEL.dash;
+    motion.vx = dash.along.x * speed * carry;
+    motion.vz = dash.along.z * speed * carry;
+    dash = null;
+    dashAfter = FEEL.dash.strike;
+  }
+
+  // ---- Finding the mark ----------------------------------------------------------
+  // A strike turns to the trooper nearest the stick's way (ahead of him with
+  // the stick at rest) and glides in to striking distance before the blade
+  // lands, turning with him if he moves. Out of a dash it reaches further.
+  let lunge = null;
+  const lungeTo = new THREE.Vector3();
+  function lockOn(name, worldX, worldZ) {
+    const assist = FEEL.assist, rushing = strikeFromDash;
+    strikeFromDash = false;
+    lunge = null;
+    const stick = Math.hypot(worldX, worldZ) > 0.2;
+    const along = stick ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+    const range = rushing ? assist.dashRange : assist.range, cone = stick ? assist.cone : assist.coneIdle;
+    here.set(motion.x, 0, motion.z);
+    let best = null, bestScore = Infinity;
+    for (const trooper of troopers) {
+      if (trooper.dead || trooper.impaled) continue;
+      const offset = whereIs(trooper).sub(here), distance = offset.length();
+      if (distance > range) continue;
+      const angle = distance < 0.4 ? 0 : along.angleTo(offset);
+      if (angle > cone) continue;
+      const score = angle * 1.6 + distance * 0.35 + (trooper.fallen ? 0.7 : 0) - (trooper === held ? 1 : 0);
+      if (score < bestScore) { bestScore = score; best = trooper; }
     }
+    if (!best) { if (stick) motion.face(Math.atan2(worldX, worldZ)); return; }
+    const offset = whereIs(best).sub(here), distance = offset.length();
+    motion.face(Math.atan2(offset.x, offset.z));
+    const gap = THREE.MathUtils.clamp(distance - assist.reach, 0, rushing ? assist.dashStep : assist.step);
+    const action = combat.action;
+    lunge = { trooper: best, age: 0, duration: assist.lunge * (gap > 1.6 ? 1.35 : 1), gap, done: 0, track: action ? action.active[0] * action.duration : 0.15 };
+  }
+  /** Each frame of a locked strike: the glide in, the turn with the target until the blade lands. */
+  function lungeStep(dt) {
+    if (!lunge) return;
+    if (!combat.busy || lunge.trooper.dead) { lunge = null; return; }
+    lunge.age += dt;
+    const offset = lungeTo.copy(whereIs(lunge.trooper)).sub(here.set(motion.x, 0, motion.z)).setY(0), distance = offset.length();
+    if (distance < 1e-3) { lunge = null; return; }
+    offset.divideScalar(distance);
+    if (lunge.age < lunge.track) motion.heading += angleDelta(motion.heading, Math.atan2(offset.x, offset.z)) * (1 - Math.exp(-24 * dt));
+    const k = Math.min(1, lunge.age / lunge.duration), reach = ease.outCubic(k) * lunge.gap;
+    // Never into him: he stops at striking distance even if the man came forward.
+    const step = Math.min(reach - lunge.done, Math.max(0, distance - FEEL.assist.reach * 0.85));
+    lunge.done = reach;
+    if (step > 0) { motion.x += offset.x * step; motion.z += offset.z * step; }
+    if (k >= 1 && lunge.age >= lunge.track) lunge = null;
+  }
+
+  // ---- The perfect parry ---------------------------------------------------------
+  // The guard pressed just before a bolt meets the blade sends it straight back
+  // into its shooter, whatever the range — and the rest of his burst after it.
+  // Pressed again and again, the button opens no window.
+  let parryAt = -Infinity, parryTry = -Infinity, perfectUntil = -Infinity, perfects = 0;
+  function parryPress() {
+    if (time - parryTry > FEEL.deflect.mash || time <= perfectUntil + 0.2) parryAt = time;
+    parryTry = time;
   }
   /** The streak: from where the dash began to where he is, camera-facing, fading once he stops. */
   function updateStreak(dt) {
@@ -392,8 +504,10 @@ function init() {
       stopFor(hold, recover);
       punch(FEEL.camera.punch * 1.6);
       shove(bladeAxis, FEEL.camera.kick);
-      impactShake = Math.max(impactShake, 0.22);
-      audio.impact(1);
+      trauma.add(0.32);
+      rumble(0.6, 0.45, 0.22);
+      audio.impact(1.2, wound);
+      score(2, 'EMPALÉ');
       noise(wound, 9, { alarm: true, from: character.root.position, source: trooper });
       gushClock = 0.06;
       return;
@@ -485,22 +599,38 @@ function init() {
     const shooter = bolt.owner?.dead === false ? bolt.owner : null;
     const [near, far] = FEEL.deflect.close;
     const closeness = shooter ? THREE.MathUtils.clamp((far - shooter.root.position.distanceTo(here.set(motion.x, 0, motion.z))) / (far - near), 0, 1) : 0;
-    const { aim } = returnDirection({ at, incoming, precision, closeness, enemies });
-    blasters.deflect(bolt, at, aim, FEEL.blaster.speed * FEEL.deflect.speedUp);
+    const perfect = time - parryAt <= FEEL.deflect.perfect || time <= perfectUntil;
+    if (perfect) { perfectUntil = time + FEEL.deflect.chain; parryAt = -Infinity; perfects++; }
+    const { aim } = returnDirection({ at, incoming, precision, closeness, enemies, perfect });
+    blasters.deflect(bolt, at, aim, FEEL.blaster.speed * (perfect ? FEEL.deflect.perfectSpeed : FEEL.deflect.speedUp));
+    bolt.perfect = perfect;
     // Guarding, he turns a little into a shot from the side (one from behind is taken behind his back).
     const toward = Math.atan2(a.x - motion.x, a.z - motion.z), turn = Math.atan2(Math.sin(toward - motion.heading), Math.cos(toward - motion.heading));
     if (Math.abs(turn) > 0.45 && Math.abs(turn) < 1.95) motion.face(motion.heading + turn * 0.3);
     train(FEEL.deflect.precision.gain);
     const across = new THREE.Vector3().crossVectors(incoming, UP).normalize();
     // A small spray, blade-blue and molten-yellow mixed.
-    effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([7, 13])), speed: 3, saber: 0.5 });
-    effects.flash(at, 0.8);
-    effects.burst(at, { normal: incoming, power: 0.45, tint: 'red' });
+    if (perfect) {
+      // The perfect one rings out: a bright spray, a blade-blue flare, a beat of slow motion.
+      effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.3)).normalize(), across, { count: Math.round(pick([18, 26])), speed: 4.2, saber: 0.8 });
+      effects.flash(at, 1.5, { color: new THREE.Color(0.55, 0.75, 1) });
+      effects.burst(at, { normal: incoming, power: 1.1, tint: 'blue' });
+      const [hold, recover] = FEEL.deflect.perfectStop;
+      stopFor(hold, recover);
+      punch(FEEL.camera.punch * 0.9);
+      shove(aim, 0.05);
+    } else {
+      effects.sparks(at, aim.clone().add(incoming.clone().multiplyScalar(-0.5)).normalize(), across, { count: Math.round(pick([7, 13])), speed: 3, saber: 0.5 });
+      effects.flash(at, 0.8);
+      effects.burst(at, { normal: incoming, power: 0.45, tint: 'red' });
+      stopFor(0.012, 0.035);
+      shove(aim, 0.025);
+    }
     combat.output.flare = 1;
-    stopFor(0.012, 0.035);
-    shove(aim, 0.025);
-    impactShake = Math.max(impactShake, 0.06);
-    audio.deflect();
+    trauma.add(perfect ? 0.2 : 0.07);
+    rumble(perfect ? 0.25 : 0, perfect ? 0.75 : 0.35, perfect ? 0.13 : 0.05);
+    audio.deflect(perfect, at);
+    score(perfect ? 2 : 1, perfect ? 'PARADE PARFAITE' : '');
     noise(at, 9, { alarm: true, from: chest });
     deflections++;
   }
@@ -511,7 +641,10 @@ function init() {
     effects.flash(point, 0.6, { color: new THREE.Color(1, 0.06, 0.04) });
     effects.burst(point, { power: 0.3, tint: 'red' });
     shove(incoming, 0.018);
-    audio.sizzle();
+    trauma.add(0.14);
+    rumble(0.45, 0.2, 0.1);
+    audio.burn(point);
+    breakStreak();
     burns++;
   }
   let deflections = 0, burns = 0, kills = 0;
@@ -531,6 +664,8 @@ function init() {
           && (closestSegments(a, end, bladeBase, bladeTip).distance < FEEL.deflect.blade || pass < FEEL.deflect.body);
         if ((front && pass < FEEL.deflect.reach) || (bolt.parried === 'side' && pass < FEEL.deflect.near) || backed) { deflectBolt(bolt, a, end); return 'deflected'; }
       }
+      // Dashing, he is gone before it arrives: it flies on through where he was.
+      if (dodge > 0) return null;
       heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
       const body = closestSegments(a, end, heroFeet, heroHead);
       if (body.distance < 0.26) { burnHero(bolt, body.c1); return 'spent'; }
@@ -547,7 +682,8 @@ function init() {
     if (event.lethal) kills++;
     if (event.lethal || event.felled) { const [hold, recover] = FEEL.hitStop.felling; stopFor(hold * 0.8, recover); punch(FEEL.camera.punch); }
     shove(bolt.velocity, event.lethal ? FEEL.camera.kick : 0.02);
-    audio.impact(event.lethal ? 1 : 0.6);
+    trauma.add(event.lethal ? 0.16 : 0.05);
+    audio.impact(event.lethal ? 1 : 0.6, struck.root.position);
     noise(struck.root.position, 9, { alarm: true, from: chest.clone(), source: struck });
     return 'spent';
   }
@@ -582,14 +718,17 @@ function init() {
       else { motion.vx += direction.x * 6 * falloff; motion.vz += direction.z * 6 * falloff; }
     }
     const near = Math.max(0, 1 - reach / 14);
-    impactShake = Math.max(impactShake, blast.shake * (0.35 + 0.65 * near));
+    // The whole view rocks: hard at his feet, still felt across the room.
+    trauma.add(0.42 + 0.58 * near);
+    rumble(0.35 + 0.65 * near, 0.25 + 0.6 * near, 0.3 + 0.45 * near);
     shove(new THREE.Vector3(0, -1, 0), blast.kick * (0.4 + 0.6 * near));
     punch(blast.punch * near);
     stopFor(0.012, 0.05);
-    audio.boom(reach);
+    audio.boom(at, Math.max(0, 1 - reach / 7));
     noise(at, 15, { alarm: true, from: character.root.position });
   }
   function knockHero(direction, falloff) {
+    breakStreak();
     const velocity = direction.clone().setY(0).normalize().multiplyScalar(pick(FEEL.blast.speed) * falloff).setY(pick(FEEL.blast.lift) * falloff);
     velocity.x += motion.vx * 0.5;
     velocity.z += motion.vz * 0.5;
@@ -641,6 +780,10 @@ function init() {
   let attackPressed = false, padAttack = false, parryPressed = false, padGuard = false, powerPressed = null, padPull = false, padPush = false;
   // Y / Space dash; R3 / E twirl the blade; L3 / T start the fight again.
   let dashPressed = false, padDash = false, twirlPressed = false, padTwirl = false, padRestart = false;
+  // A press that cannot be taken yet (mid-strike, a cooldown) waits a moment instead of being lost.
+  const pending = { attack: -Infinity, dash: -Infinity, power: -Infinity, powerName: null };
+  let inputClock = 0;
+  const waiting = at => inputClock - at <= FEEL.input.buffer;
   window.addEventListener('keydown', event => {
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
@@ -714,16 +857,31 @@ function init() {
 
   const audio = createAudio();
   audio.enabled = $('#audio-enabled').checked;
+  audio.volume = Number($('#audio-volume').value);
   $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; if (audio.enabled) audio.start(); });
+  $('#audio-volume').addEventListener('input', event => { audio.volume = Number(event.target.value); });
+  rumbleOn = $('#rumble').checked;
+  $('#rumble').addEventListener('change', event => { rumbleOn = event.target.checked; });
+  document.body.classList.toggle('tech-info', $('#tech-info').checked);
+  $('#tech-info').addEventListener('change', event => document.body.classList.toggle('tech-info', event.target.checked));
   window.addEventListener('keydown', () => { if (audio.enabled) audio.start(); });
   let lastFrame = performance.now(), fps = 60, hudTimer = 0, frameCount = 0;
   const stateEl = $('#motion-state'), speedEl = $('#speed'), saberEl = $('#saber-state'), squadEl = $('#squad-state'), precisionEl = $('#precision');
+  const killsEl = $('#kills'), waveEl = $('#wave'), reinforceEl = $('#reinforce-state'), streakEl = $('#streak'), streakCountEl = $('#streak-count'), streakNoteEl = $('#streak-note');
   const targetFocus = new THREE.Vector3(), shakenFocus = new THREE.Vector3();
+  // The camera's own axes (for the shake), and the lean of the view towards the fight.
+  camera.updateMatrixWorld();
+  const viewRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0), viewUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  const lean = new THREE.Vector3(), leanTarget = new THREE.Vector3();
+  // Footsteps (the hero's and the troopers'), and bolts already heard whizzing past.
+  let heroStep = 0.6, lastActionShake = 0, scrape = 0;
+  const trooperSteps = new WeakMap();
   function frame(now, manual = false) {
     // Never backwards: a stepped check (advance) may run ahead of the display clock.
     const rawDt = Math.max(0, (now - lastFrame) / 1000);
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
+    audio.listen(character.root.position, screenRight);
     if (!paused) {
       // A clean cut freezes the action for a beat, then eases back to speed.
       const sim = dt * (hitStop ? hitStopScale(hitStop.age, hitStop) : 1);
@@ -773,10 +931,18 @@ function init() {
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
       // Thrown by a blast: no control until he is back on his feet.
       const down = knockdown.active;
-      if (down) { attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0; }
+      inputClock += dt;
+      if (down) {
+        attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0;
+        pending.attack = pending.dash = pending.power = -Infinity;
+      }
       // The dash: along the stick, or straight ahead with the stick at rest.
       dashCooldown = Math.max(0, dashCooldown - sim);
-      if (dashPressed && !dash && dashCooldown <= 0 && !skewered && !combat.impaling) {
+      dodge = Math.max(0, dodge - sim);
+      dashAfter = Math.max(0, dashAfter - sim);
+      if (dashPressed) pending.dash = inputClock;
+      if (waiting(pending.dash) && !dash && dashCooldown <= 0 && !skewered && !combat.impaling) {
+        pending.dash = -Infinity;
         const along = Math.hypot(worldX, worldZ) > 0.2 ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
         startDash(along);
       }
@@ -784,19 +950,36 @@ function init() {
       dashPressed = twirlPressed = false;
       // Powers cut any strike short; a parry too; B strikes and chains.
       keepHold();
-      impaleInput(dt, padAttack || keys.has('KeyJ'), down);
-      autoParry(guard);
-      if (powerPressed) combat.power(powerPressed);
+      const attackHeld = padAttack || keys.has('KeyJ');
+      impaleInput(dt, attackHeld, down);
+      // The guard: held, or just pressed (a parry, the window of a perfect one).
+      if (parryPressed) parryPress();
+      autoParry(guard || time - parryTry < 0.3);
+      if (powerPressed) { pending.power = inputClock; pending.powerName = powerPressed; }
+      if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
       if (parryPressed) combat.parry();
-      if (attackPressed) combat.attack({ speed: motion.speed });
+      if (attackPressed) pending.attack = inputClock;
+      if (waiting(pending.attack)) {
+        // During the dash or just after it, the strike lunges from it.
+        const rushing = Boolean(dash) || dashAfter > 0;
+        if (combat.attack({ speed: rushing ? Math.max(motion.speed, 5) : motion.speed })) {
+          pending.attack = -Infinity;
+          strikeFromDash = rushing;
+          endDash();
+          dashAfter = 0;
+        }
+      }
       attackPressed = parryPressed = false;
       powerPressed = null;
-      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held) });
-      // Each move re-aims towards the stick before it lands; a power with the
-      // stick at rest turns towards the trooper the hero is facing most.
+      // B kept down through a strike calls the finisher (not while running a trooper through).
+      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held), charging: attackHeld && !thrust && !skewered });
+      // A strike finds its mark (lockOn); other moves re-aim towards the stick;
+      // a power with the stick at rest turns towards the trooper the hero is facing most.
       const started = combat.takeStart();
       if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
-      if (started && !/^(parry|impale)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
+      if (strike) { lockOn(started, worldX, worldZ); audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
+      else if (started && !/^(parry|impale)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       else if (started === 'forcePull' || started === 'forcePush') {
         const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
         if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
@@ -807,7 +990,10 @@ function init() {
         const at = knockdown.position, moving = knockdown.velocity;
         motion.x = at.x; motion.z = at.z; motion.vx = moving.x; motion.vz = moving.z; motion.speed = 0;
       } else if (dash) dashStep(sim);
-      else motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+      else {
+        motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+        lungeStep(sim);
+      }
       for (const trooper of troopers) {
         const blocker = trooper.blocker();
         if (!blocker || down) continue;
@@ -833,7 +1019,14 @@ function init() {
       }
       cape.update({ dt: sim, time, velocity });
       // Igniting the blade, moving or not, comes with a quick draw twirl.
-      if (saber.update(motion.saber, time, action.flare) === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); }
+      const saberEvent = saber.update(motion.saber, time, action.flare);
+      if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); audio.ignite(); }
+      else if (saberEvent === 'retract') audio.retract();
+      // His steps on the deck.
+      if (!down && !dash && motion.speed > 0.35) {
+        heroStep += motion.speed * sim / (motion.runBlend > 0.5 ? 1.25 : 0.7);
+        if (heroStep >= 1) { heroStep %= 1; audio.step(character.root.position, { pace: Math.min(1, motion.speed / SPRINT_PACE) }); }
+      } else heroStep = 0.6;
       // Running feet and the blade's hum carry.
       stepClock -= sim; humClock -= sim;
       if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 7 : 4.5, { from: character.root.position }); }
@@ -847,16 +1040,21 @@ function init() {
       // Reinforcements: the alarm, the door, the men coming out one by one.
       const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
       for (const event of reinforcements.update(sim, { living, entering })) {
-        if (event === 'alarm') audio.alarm();
-        else if (event === 'open' || event === 'close') audio.door();
+        if (event === 'alarm') audio.alarm(arena.door.centre);
+        else if (event === 'open' || event === 'close') audio.door(arena.door.centre);
         else if (event.type === 'spawn') bringIn(event.index);
       }
       for (const shot of thoughts.shots) {
         blasters.fire(shot.from, shot.direction, { owner: shot.trooper, speed: FEEL.blaster.speed });
-        audio.shot(shot.from.distanceTo(character.root.position));
+        audio.shot(shot.from);
         noise(shot.from, 12, { alarm: true, from: character.root.position, source: shot.trooper });
       }
-      for (const cue of thoughts.cues) audio.alert(cue.type === 'alert' ? '!' : '?');
+      for (const cue of thoughts.cues) {
+        const at = cue.trooper.root.position;
+        if (cue.type === 'alert') { audio.alert('!', at); audio.radio(at, 'contact', cue.trooper); }
+        else if (cue.type === 'suspicious') audio.alert('?', at);
+        else if (cue.radio) audio.radio(at, cue.radio, cue.trooper);
+      }
       keepSkewer(sim);
       for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
       collideSquad(troopers);
@@ -881,18 +1079,20 @@ function init() {
           }
           shove(event.velocity, felling ? FEEL.camera.kickFelling : heavy ? FEEL.camera.kick : 0.012);
           if (heavy) punch(FEEL.camera.punch * (felling ? 1.8 : event.type === 'cut' ? 1 : 0.7));
-          impactShake = Math.max(impactShake, felling ? 0.3 : heavy ? 0.14 : 0.05);
-          audio.impact(heavy ? 1 : 0.35);
+          trauma.add(felling ? 0.26 : heavy ? 0.14 : 0.03);
+          if (heavy) rumble(felling ? 0.55 : 0.2, felling ? 0.6 : 0.5, felling ? 0.15 : 0.08);
+          audio.impact(felling ? 1.1 : heavy ? 0.9 : 0.35, trooper.root.position);
+          if (heavy) score(1);
         }
         // Landings, armour coming off: heard and felt in step with the physics.
         for (const item of trooper.news) {
-          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8)); impactShake = Math.max(impactShake, Math.min(0.18, item.speed * 0.025)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
-          if (item.type === 'armor') audio.clank();
+          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
+          if (item.type === 'armor') audio.clank(trooper.root.position);
           // A grenade leaves his hand (or drops at his feet if he was knocked over).
           if (item.type === 'grenade') {
             if (item.dropped) grenades.drop(item.from);
             else grenades.throwAt(item.from, item.target, { fuse: pick(FEEL.grenade.fuse) });
-            audio.whoosh?.();
+            audio.toss(item.from);
           }
         }
       });
@@ -908,7 +1108,8 @@ function init() {
           effects.sparks(contact.point, contact.normal.clone().addScaledVector(along.normalize(), -0.6).normalize(), along, { count: contact.fresh ? 9 : 3, speed: 2.4, saber: 0.35 });
         }
         if (contacts.length && scarSparks <= 0) scarSparks = 0.05;
-        if (contacts.length && scarSizzle <= 0) { scarSizzle = 0.3; audio.sizzle(); }
+        if (contacts.some(contact => contact.fresh) && scarSizzle <= 0) { scarSizzle = 0.3; audio.sizzle(contacts[0].point); }
+        if (contacts.length) scrape = 1;
       }
       scars.update(sim);
       bladeReady = saber.extension > 0.6;
@@ -916,8 +1117,26 @@ function init() {
       lastTip.copy(bladeTip);
       // Bolts fly: the blade, the hero, the troopers, then crates and floor.
       for (const event of blasters.update(sim, boltMeets)) {
-        if (event.type === 'impact') audio.boltImpact(event.point.distanceTo(character.root.position));
+        if (event.type === 'impact') audio.boltImpact(event.point);
       }
+      // Bolts whizzing past his head.
+      chest.set(motion.x, 1.15, motion.z);
+      for (const bolt of blasters.live) {
+        if (bolt.deflected || bolt.whizzed) continue;
+        offset.subVectors(bolt.position, chest);
+        if (offset.length() < 1.6 && offset.dot(bolt.velocity) > 0) { bolt.whizzed = true; audio.flyby(bolt.position, bolt.velocity); }
+      }
+      // The troopers' steps as they run, the armour clacking.
+      for (const trooper of troopers) {
+        if (trooper.fallen || trooper.dead) continue;
+        const pace = trooper.velocity.length();
+        if (pace < 1.1 || trooper.root.position.distanceTo(character.root.position) > 13) { trooperSteps.set(trooper, 0.5); continue; }
+        let phase = (trooperSteps.get(trooper) ?? 0.5) + pace * sim / 1.3;
+        if (phase >= 1) { phase %= 1; audio.step(trooper.root.position, { pace: Math.min(1, pace / 3.7), armour: true }); }
+        trooperSteps.set(trooper, phase);
+      }
+      // Kills: every man down for good counts once.
+      for (const trooper of troopers) if (trooper.dead && !counted.has(trooper)) { counted.add(trooper); eliminated++; score(2); }
       for (const at of grenades.update(sim)) detonate(at);
       explosions.update(sim, camera);
       debris.update(sim);
@@ -925,17 +1144,34 @@ function init() {
       effects.update(sim);
       playerPosition.copy(character.root.position);
       lighting.follow(playerPosition);
-      targetFocus.set(motion.x + motion.vx * 0.16, 0.6, motion.z + motion.vz * 0.16);
+      // In a fight, the view leans a little towards the squad, so the shooters stay in frame.
+      leanTarget.set(0, 0, 0);
+      let weight = 0;
+      for (const mind of squad.minds) {
+        if (mind.mode !== 'combat' || mind.trooper.dead) continue;
+        const p = mind.trooper.root.position, distance = Math.hypot(p.x - motion.x, p.z - motion.z);
+        if (distance > 14) continue;
+        const w = 1 / (1 + distance * 0.2);
+        leanTarget.x += (p.x - motion.x) * w; leanTarget.z += (p.z - motion.z) * w; weight += w;
+      }
+      if (weight > 0) leanTarget.multiplyScalar(0.32 / weight).clampLength(0, 2.2);
+      lean.lerp(leanTarget, 1 - Math.exp(-1.6 * sim));
+      targetFocus.set(motion.x + motion.vx * 0.16 + lean.x, 0.6, motion.z + motion.vz * 0.16 + lean.z);
       cameraFocus.lerp(targetFocus, 1 - Math.exp(-7 * sim));
       stage.update({ time, playerPosition });
       lab.update(time);
       arena.update(time);
-      // A heavy landing shakes the view for a moment.
-      impactShake = Math.max(0, impactShake - dt * 3);
-      shake.set(Math.sin(time * 91 + now * 0.05), Math.sin(time * 77 + 1 + now * 0.04), Math.sin(time * 83 + 2)).multiplyScalar(action.shake * action.shake * 0.09 + impactShake * impactShake * 0.07);
-      // The kick runs in real time, so it rings through a hit stop.
+      // A finisher landing jolts the view.
+      if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
+      lastActionShake = action.shake;
+      // The shake: trauma (real time, so it rings through a hit stop) along the view's own axes.
+      const jolt = trauma.update(dt);
+      shake.copy(viewRight).multiplyScalar(jolt.offset.x).addScaledVector(viewUp, jolt.offset.y);
+      roll = jolt.roll;
+      // The kick runs in real time too.
       cameraKick.age += dt;
       shake.add(kickOffset.copy(cameraKick.direction).multiplyScalar(cameraKick.amplitude * kick(cameraKick.age, { duration: 0.3, frequency: 11 })));
+      scrape = Math.max(0, scrape - dt * 6);
       zoomPunch.age += dt;
       audio.swing = Math.min(1, swing / 12) * action.weight;
     }
@@ -946,7 +1182,21 @@ function init() {
     updateProjection(viewHeight * (1 - zoomPunch.amount * punched));
     camera.position.copy(cameraFocus).add(cameraOffset).add(shake);
     camera.lookAt(shakenFocus.copy(cameraFocus).add(shake));
-    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate);
+    if (roll) camera.rotateZ(roll);
+    camera.updateMatrixWorld();
+    // Warnings: glints at the muzzles about to fire, chevrons for threats out of view.
+    const aiming = [], threats = [];
+    for (const mind of squad.minds) {
+      const t = mind.trooper;
+      if (t.dead || mind.mode !== 'combat') continue;
+      if (mind.charge > 0 && t.holding) aiming.push({ position: t.muzzle, amount: mind.charge });
+      threats.push({ position: t.root.position.clone().setY(1.1), kind: mind.charge > 0 ? 'aiming' : 'shooter' });
+    }
+    for (const grenade of grenades.live) threats.push({ position: grenade.position, kind: 'grenade' });
+    telegraph.update(paused ? 0 : dt, aiming);
+    telegraph.edges(camera, paused ? [] : threats, window.innerWidth, window.innerHeight);
+    const burning = skewered?.entered ? (skewered.trooper.dead ? 0.3 : 0.75) : 0;
+    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning), hold: paused || !held ? 0 : 1, fight: paused ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt });
     composer.render(dt);
     fps = damp(fps, 1 / Math.max(rawDt, 0.001), 1, dt);
     hudTimer += dt;
@@ -961,7 +1211,21 @@ function init() {
       squadEl.textContent = mood.toUpperCase();
       squadEl.dataset.mood = mood;
       precisionEl.textContent = `${Math.round(precision * 100)} %`;
+      killsEl.textContent = String(eliminated).padStart(2, '0');
+      waveEl.textContent = String(reinforcements.waves).padStart(2, '0');
+      const phase = reinforcements.phase;
+      reinforceEl.textContent = phase === 'wait' ? `${Math.max(0, Math.ceil(reinforcements.countdown))} S` : phase === 'alarm' ? 'ALERTE' : phase === 'closing' ? 'FERMETURE' : 'ENTRÉE';
     }
+    // The streak shows while it lives (a few seconds after the last point); a broken one flashes red.
+    streakAge += dt; streakNoteAge += dt; streakBroken += dt;
+    const showing = (streak >= 2 && streakAge < 3.5) || streakBroken < 0.9;
+    streakEl.classList.toggle('on', showing);
+    streakEl.classList.toggle('broken', streakBroken < 0.9);
+    if (streakBroken < 0.9 && streak === 0) streakCountEl.textContent = '×';
+    else streakCountEl.textContent = String(streak);
+    if (streakAge >= 3.5 && streak) streak = 0;
+    streakNoteEl.textContent = streakNote;
+    streakNoteEl.classList.toggle('on', streakNoteAge < 1.1);
     if (++frameCount === 3) {
       $('#loading').style.opacity = '0';
       setTimeout(() => $('#loading').hidden = true, 550);
@@ -976,7 +1240,7 @@ function init() {
     advance(seconds, step = 1 / 60) { for (let t = 0; t < seconds - 1e-9; t += step) frame(lastFrame + step * 1000, true); lastFrame = performance.now(); },
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
-    squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars,
+    squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph,
     camera,
     /** For checks: the lit blade this frame. */
     blade: () => ({ base: bladeBase.clone(), tip: bladeTip.clone() }),
@@ -984,186 +1248,12 @@ function init() {
     grenade(x, z, from = null) { const start = from ?? troopers[0].root.position.clone().setY(1.3); return grenades.throwAt(start, new THREE.Vector3(x, 0, z), { fuse: 1.6 }); },
     explode(x, z) { detonate(new THREE.Vector3(x, 0, z)); },
     set guard(value) { forcedGuard = value; },
+    /** For checks: the strike's glide to its target (null when none). */
+    get lunge() { return lunge && { age: lunge.age, duration: lunge.duration, gap: lunge.gap, done: lunge.done, track: lunge.track }; },
     /** For checks: who is on the blade (null if nobody). */
     get skewered() { return skewered?.trooper ?? null; },
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, burns, kills, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, perfects, burns, kills, eliminated, streak, trauma: trauma.trauma, aiming: squad.minds.filter(mind => mind.charge > 0).length, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }
 
-function createAudio() {
-  let context, gain, oscillatorA, oscillatorB;
-  return {
-    enabled: false,
-    start() {
-      if (!context) {
-        context = new (window.AudioContext || window.webkitAudioContext)();
-        gain = context.createGain(); gain.gain.value = 0; gain.connect(context.destination);
-        oscillatorA = context.createOscillator(); oscillatorB = context.createOscillator();
-        oscillatorA.type = 'sine'; oscillatorB.type = 'triangle';
-        oscillatorA.frequency.value = 72; oscillatorB.frequency.value = 144.6;
-        const secondary = context.createGain(); secondary.gain.value = 0.16;
-        oscillatorA.connect(gain); oscillatorB.connect(secondary); secondary.connect(gain);
-        oscillatorA.start(); oscillatorB.start();
-      }
-      context.resume().catch(() => {});
-    },
-    swing: 0,
-    /** A crackling hiss with a low thud when the blade bites. */
-    impact(strength) {
-      if (!this.enabled || !context) return;
-      const length = Math.floor(context.sampleRate * 0.35);
-      const buffer = context.createBuffer(1, length, context.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * 0.22));
-      const noise = context.createBufferSource(), band = context.createBiquadFilter(), level = context.createGain();
-      noise.buffer = buffer; band.type = 'bandpass'; band.frequency.value = 2200; band.Q.value = 0.7;
-      level.gain.value = 0.14 * strength;
-      noise.connect(band); band.connect(level); level.connect(context.destination);
-      noise.start();
-      const thud = context.createOscillator(), thudLevel = context.createGain();
-      thud.frequency.setValueAtTime(110, context.currentTime);
-      thud.frequency.exponentialRampToValueAtTime(45, context.currentTime + 0.2);
-      thudLevel.gain.setValueAtTime(0.18 * strength, context.currentTime);
-      thudLevel.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.25);
-      thud.connect(thudLevel); thudLevel.connect(context.destination);
-      thud.start(); thud.stop(context.currentTime + 0.3);
-    },
-    /** A Force whoosh: a rising sweep for a push, a falling one for a pull. */
-    force(kind) {
-      if (!this.enabled || !context) return;
-      const length = Math.floor(context.sampleRate * 0.5), now = context.currentTime;
-      const buffer = context.createBuffer(1, length, context.sampleRate), data = buffer.getChannelData(0);
-      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * i / length) ** 2;
-      const noise = context.createBufferSource(), band = context.createBiquadFilter(), level = context.createGain();
-      noise.buffer = buffer; band.type = 'bandpass'; band.Q.value = 1.4;
-      const [from, to] = kind === 'push' ? [260, 1500] : [1500, 260];
-      band.frequency.setValueAtTime(from, now);
-      band.frequency.exponentialRampToValueAtTime(to, now + 0.4);
-      level.gain.value = 0.22;
-      noise.connect(band); band.connect(level); level.connect(context.destination);
-      noise.start();
-    },
-    /** A body hitting the floor. */
-    thud(strength) {
-      if (!this.enabled || !context) return;
-      const now = context.currentTime, thud = context.createOscillator(), level = context.createGain();
-      thud.frequency.setValueAtTime(90, now);
-      thud.frequency.exponentialRampToValueAtTime(38, now + 0.18);
-      level.gain.setValueAtTime(0.2 * strength, now);
-      level.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-      thud.connect(level); level.connect(context.destination);
-      thud.start(); thud.stop(now + 0.25);
-    },
-    /** Armour clattering off. */
-    clank() {
-      if (!this.enabled || !context) return;
-      const now = context.currentTime, tone = context.createOscillator(), level = context.createGain();
-      tone.type = 'square';
-      tone.frequency.setValueAtTime(620 + Math.random() * 300, now);
-      tone.frequency.exponentialRampToValueAtTime(240, now + 0.09);
-      level.gain.setValueAtTime(0.035, now);
-      level.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-      tone.connect(level); level.connect(context.destination);
-      tone.start(); tone.stop(now + 0.14);
-    },
-    /** A burst of filtered noise (a crack, a fizz, a thump of air). */
-    noiseBurst({ duration = 0.12, type = 'bandpass', frequency = 2000, q = 0.8, gain = 0.1, decay = 0.25 } = {}) {
-      const length = Math.floor(context.sampleRate * duration), buffer = context.createBuffer(1, length, context.sampleRate), data = buffer.getChannelData(0);
-      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * decay));
-      const source = context.createBufferSource(), filter = context.createBiquadFilter(), level = context.createGain();
-      source.buffer = buffer; filter.type = type; filter.frequency.value = frequency; filter.Q.value = q; level.gain.value = gain;
-      source.connect(filter); filter.connect(level); level.connect(context.destination);
-      source.start();
-    },
-    tone({ type = 'sine', from = 880, to = 440, duration = 0.15, gain = 0.05, delay = 0 } = {}) {
-      const now = context.currentTime + delay, tone = context.createOscillator(), level = context.createGain();
-      tone.type = type;
-      tone.frequency.setValueAtTime(from, now);
-      tone.frequency.exponentialRampToValueAtTime(to, now + duration);
-      level.gain.setValueAtTime(0.0001, now);
-      level.gain.exponentialRampToValueAtTime(gain, now + 0.006);
-      level.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-      tone.connect(level); level.connect(context.destination);
-      tone.start(now); tone.stop(now + duration + 0.02);
-    },
-    /** A blaster shot: a bright zap falling in pitch, fainter far off. */
-    shot(distance = 5) {
-      if (!this.enabled || !context) return;
-      const near = Math.max(0.2, 1 - distance / 18);
-      this.tone({ type: 'sawtooth', from: 1500 + Math.random() * 400, to: 150, duration: 0.17, gain: 0.05 * near });
-      this.tone({ type: 'square', from: 900 + Math.random() * 200, to: 110, duration: 0.12, gain: 0.025 * near });
-      this.noiseBurst({ duration: 0.05, frequency: 3000, gain: 0.05 * near, decay: 0.3 });
-    },
-    /** The blade sends a bolt back: a crack and a ringing metallic zing. */
-    deflect() {
-      if (!this.enabled || !context) return;
-      this.noiseBurst({ duration: 0.06, type: 'highpass', frequency: 2500, gain: 0.12, decay: 0.2 });
-      this.tone({ from: 2900 + Math.random() * 500, to: 1900, duration: 0.32, gain: 0.05 });
-      this.tone({ from: 4300 + Math.random() * 400, to: 3100, duration: 0.22, gain: 0.03 });
-      this.tone({ type: 'triangle', from: 640, to: 220, duration: 0.14, gain: 0.05 });
-    },
-    /** A bolt bursting on a crate or the floor. */
-    boltImpact(distance = 5) {
-      if (!this.enabled || !context) return;
-      const near = Math.max(0.15, 1 - distance / 16);
-      this.noiseBurst({ duration: 0.14, type: 'lowpass', frequency: 1600, gain: 0.12 * near, decay: 0.2 });
-      this.tone({ from: 180, to: 60, duration: 0.12, gain: 0.06 * near });
-    },
-    /** A bolt burning the hero's robe. */
-    sizzle() {
-      if (!this.enabled || !context) return;
-      this.noiseBurst({ duration: 0.28, type: 'highpass', frequency: 3200, gain: 0.07, decay: 0.45 });
-    },
-    /** An explosion: a crack, a deep thump and a long rumble, quieter far off. */
-    boom(distance = 5) {
-      if (!this.enabled || !context) return;
-      const near = Math.max(0.25, 1 - distance / 26);
-      this.noiseBurst({ duration: 0.14, type: 'highpass', frequency: 1500, gain: 0.3 * near, decay: 0.16 });
-      this.tone({ from: 85, to: 26, duration: 1.2, gain: 0.42 * near });
-      this.tone({ type: 'triangle', from: 140, to: 40, duration: 0.5, gain: 0.18 * near });
-      this.noiseBurst({ duration: 2.2, type: 'lowpass', frequency: 360, q: 0.4, gain: 0.55 * near, decay: 0.33 });
-      this.noiseBurst({ duration: 1.2, type: 'bandpass', frequency: 2400, q: 0.6, gain: 0.05 * near, decay: 0.5 });
-    },
-    /** The grenade's countdown: a short beep, higher as time runs out. */
-    beep(progress = 0, distance = 5) {
-      if (!this.enabled || !context) return;
-      const near = Math.max(0.2, 1 - distance / 16), pitch = 1700 + progress * 900;
-      this.tone({ type: 'square', from: pitch, to: pitch * 0.98, duration: 0.05, gain: 0.035 * near });
-    },
-    /** The door's klaxon: two falling tones, twice. */
-    alarm() {
-      if (!this.enabled || !context) return;
-      for (let k = 0; k < 2; k++) {
-        this.tone({ type: 'sawtooth', from: 540, to: 520, duration: 0.32, gain: 0.025, delay: k * 0.75 });
-        this.tone({ type: 'sawtooth', from: 410, to: 395, duration: 0.32, gain: 0.025, delay: k * 0.75 + 0.36 });
-      }
-    },
-    /** The door's leaves: a heavy rumble, a clunk as they stop. */
-    door() {
-      if (!this.enabled || !context) return;
-      this.noiseBurst({ duration: 1.3, type: 'lowpass', frequency: 240, gain: 0.08, decay: 1.1 });
-      this.tone({ type: 'square', from: 95, to: 60, duration: 0.14, gain: 0.05, delay: 1.25 });
-    },
-    whoosh() {
-      if (!this.enabled || !context) return;
-      this.noiseBurst({ duration: 0.25, type: 'bandpass', frequency: 900, q: 1.2, gain: 0.05, decay: 0.5 });
-    },
-    /** "?" — a wondering rise; "!" — the alert's sharp double sting. */
-    alert(kind) {
-      if (!this.enabled || !context) return;
-      if (kind === '!') {
-        this.tone({ type: 'square', from: 1320, to: 1300, duration: 0.07, gain: 0.04 });
-        this.tone({ type: 'square', from: 1760, to: 1740, duration: 0.16, gain: 0.04, delay: 0.07 });
-        this.noiseBurst({ duration: 0.04, type: 'highpass', frequency: 4000, gain: 0.04, decay: 0.3 });
-      } else this.tone({ type: 'triangle', from: 480, to: 760, duration: 0.2, gain: 0.05 });
-    },
-    update(saber, speed, turn) {
-      if (!context) return;
-      // Strikes swell and raise the hum, like a blade cutting the air.
-      gain.gain.setTargetAtTime(this.enabled ? saber * (0.022 + this.swing * 0.05) : 0, context.currentTime, 0.04);
-      oscillatorA.frequency.setTargetAtTime(72 + speed * 4 + Math.abs(turn) * 1.5 + this.swing * 60, context.currentTime, 0.04);
-      oscillatorB.frequency.setTargetAtTime(144.6 + speed * 7 + this.swing * 110, context.currentTime, 0.04);
-    },
-  };
-}

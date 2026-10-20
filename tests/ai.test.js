@@ -212,11 +212,21 @@ test('a bolt the blade sends back goes straight back at the shooter close by, an
   }
   assert.ok(aimedFar < 30, `rarely aimed from far (${aimedFar}/300)`);
   assert.ok(left > 80 && right > 80 && down > 20, `at random (${left} left, ${right} right, ${down} down)`);
-  // Close: always straight back at the shooter.
+  // Close, the guard held: mostly straight back at the shooter, and then exactly.
+  let aimedClose = 0;
   for (let i = 0; i < 200; i++) {
     const { aim, target } = returnDirection({ at, incoming, precision: 0, closeness: 1, enemies, random });
-    assert.ok(target?.shooter, 'the shooter');
+    if (!target) continue;
+    aimedClose++;
+    assert.ok(target.shooter, 'the shooter');
     assert.ok(aim.angleTo(target.point.clone().sub(at)) < 1e-6, 'exactly at him');
+  }
+  assert.ok(aimedClose > 120 && aimedClose < 190, `close, mostly at him (${aimedClose}/200)`);
+  // A perfect parry: always straight back at him, however far.
+  for (let i = 0; i < 200; i++) {
+    const { aim, target } = returnDirection({ at, incoming, precision: 0, closeness: 0, enemies, random, perfect: true });
+    assert.ok(target?.shooter, 'perfect: the shooter');
+    assert.ok(aim.angleTo(target.point.clone().sub(at)) < 1e-6, 'perfect: exactly at him');
   }
   // Halfway: sometimes aimed, and then less exactly.
   let aimedMid = 0, error = 0;
@@ -273,5 +283,5 @@ test('the closer the hero is to the shooter, the surer the return goes back at h
     return aimed / 400;
   };
   const far = rate(0), half = rate(0.5), close = rate(1);
-  assert.ok(far < 0.08 && half > 0.3 && half < 0.55 && close === 1, `${far} → ${half} → ${close}`);
+  assert.ok(far < 0.08 && half > 0.2 && half < 0.5 && close > 0.65 && close < 0.9, `${far} → ${half} → ${close}`);
 });

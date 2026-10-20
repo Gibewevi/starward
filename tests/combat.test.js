@@ -9,11 +9,11 @@ import { createSaber, IGNITE_TIME } from '../src/saber.js';
 function seeded(seed) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 }
-function run(combat, seconds, { press = () => false, guard = false, speed = 0, hold = false } = {}) {
+function run(combat, seconds, { press = () => false, guard = false, speed = 0, hold = false, charging = () => false } = {}) {
   const started = [];
   for (let frame = 0; frame < Math.round(seconds * 60); frame++) {
     if (press(frame)) combat.attack({ speed });
-    combat.update(1 / 60, { guard, speed, hold });
+    combat.update(1 / 60, { guard, speed, hold, charging: charging(frame) });
     const name = combat.takeStart();
     if (name) started.push(name);
   }
@@ -36,21 +36,25 @@ test('every move is well formed and every strike can follow another', () => {
   }
 });
 
-test('combos are varied: random flowing chains, no immediate repeats, a finisher at the end', () => {
+test('combos are varied: random flowing chains, no immediate repeats, the finisher when B is held', () => {
   const combat = new CombatController({ random: seeded(11) });
-  const sequence = run(combat, 40, { press: frame => frame % 9 === 0 });
+  // Tapping B; every so often it is held down through a strike (the player calls the finisher).
+  const hold = frame => frame % 240 > 200 && frame % 240 < 235;
+  const sequence = run(combat, 40, { press: frame => frame % 9 === 0, charging: hold });
   assert.ok(sequence.length > 50);
   assert.ok(new Set(sequence).size >= 12, `distinct strikes: ${new Set(sequence).size}`);
   for (let i = 1; i < sequence.length; i++) assert.notEqual(sequence[i], sequence[i - 1], 'never the same strike twice in a row');
-  // Split into combos at the finishers: lengths vary between three and six.
+  // Split into combos at the finishers: they end when B is held, not before.
   const lengths = [];
   let count = 0;
   for (const name of sequence) {
     count++;
     if (MOVES[name].role.includes('finisher')) { lengths.push(count); count = 0; }
   }
-  assert.ok(lengths.length >= 6 && lengths.every(length => length >= 2 && length <= 6), `combo lengths ${lengths}`);
-  assert.ok(new Set(lengths).size >= 2, 'combo lengths change');
+  assert.ok(lengths.length >= 6 && lengths.every(length => length >= 2), `combo lengths ${lengths}`);
+  // Tapping alone never ends a combo.
+  const tapped = run(new CombatController({ random: seeded(5) }), 20, { press: frame => frame % 9 === 0 });
+  assert.ok(tapped.length > 25 && tapped.every(name => !MOVES[name].role.includes('finisher')), 'no finisher without holding B');
   // Consecutive strikes inside a combo start where the previous one ended.
   for (let i = 1; i < sequence.length; i++) {
     const previous = MOVES[sequence[i - 1]], next = MOVES[sequence[i]];
@@ -122,16 +126,33 @@ test('spins turn whole circles; finishers leap, land and shake the view', () => 
   }
 });
 
-test('holding guard raises a two-handed guard that caps the pace and blocks attacks', () => {
+test('holding guard raises a two-handed guard that caps the pace; B out of it is a riposte, back to guard after', () => {
   const combat = new CombatController();
   run(combat, 0.5, { guard: true });
   assert.ok(combat.guarding);
   const out = combat.output;
   assert.ok(out.grip > 0.99 && out.blade.y > 0.9, 'blade upright, both hands on the hilt');
   assert.ok(Math.abs(out.maxSpeed - GUARD_SPEED) < 0.05 && out.engaged);
-  assert.equal(combat.attack(), false);
+  assert.equal(combat.attack(), true, 'a riposte straight out of the guard');
+  assert.ok(MOVES[combat.action.name].role.includes('opener'));
+  run(combat, 0.6, { guard: true });
+  assert.ok(!combat.busy && combat.guarding, 'the blow struck, the guard comes back');
   run(combat, 0.6);
   assert.ok(!combat.guarding && combat.output.maxSpeed === Infinity, 'releasing restores full speed');
+});
+
+test('every opener lands quickly, so a press is answered at once; links keep a steady rhythm', () => {
+  for (const name of strikes) {
+    const move = MOVES[name], landing = move.duration * move.active[0];
+    if (move.role.includes('opener') || move.role.includes('run')) assert.ok(landing * 1.03 * 0.86 <= 0.2, `${name} opens in ${landing.toFixed(2)} s`);
+    if (move.role.includes('link')) assert.ok(landing * 1.03 * 0.86 <= 0.26, `${name} lands in ${landing.toFixed(2)} s`);
+  }
+  // A press during the finisher's end starts a new combo as it ends.
+  const combat = new CombatController({ random: seeded(3) });
+  const started = run(combat, 3, { press: frame => frame === 0 || frame === 50, charging: frame => frame < 30 });
+  const finisher = started.findIndex(name => MOVES[name].role.includes('finisher'));
+  assert.ok(finisher === 1, `opener then the finisher (${started})`);
+  assert.ok(started.length === 3 && MOVES[started[2]].role.includes('opener'), `then a new combo (${started})`);
 });
 
 test('the draw twirl keeps the legs free and gives way to a strike', () => {

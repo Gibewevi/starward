@@ -14,10 +14,11 @@ import { FEEL, pick } from './feel.js';
  * Returns { aim (unit vector), target (the enemy aimed at, or null) }.
  */
 const UP = new THREE.Vector3(0, 1, 0);
-export function returnDirection({ at, incoming, precision = 0, closeness = 0, enemies = [], random = Math.random }) {
+export function returnDirection({ at, incoming, precision = 0, closeness = 0, enemies = [], perfect = false, random = Math.random }) {
   const back = incoming.clone().normalize().negate();
-  const near = THREE.MathUtils.clamp(closeness, 0, 1);
-  const chance = Math.min(1, THREE.MathUtils.lerp(0.04, 1, near ** 1.3) + FEEL.deflect.precision.bonus * precision * near);
+  // A perfect parry: straight back, as if from point blank.
+  const near = perfect ? 1 : THREE.MathUtils.clamp(closeness, 0, 1);
+  const chance = perfect ? 1 : Math.min(1, THREE.MathUtils.lerp(0.04, 1, near ** 1.3) * FEEL.deflect.held + FEEL.deflect.precision.bonus * precision * near);
   if (random() < chance) {
     let best = null, score = Infinity;
     for (const enemy of enemies) {

@@ -10,7 +10,19 @@ export const FEEL = {
   attacks: {
     tempo: 0.86, // strike durations are scaled by this: lower is snappier
     memory: 4, // moves used this recently are avoided, so combos never loop
+    hold: 0.24, // s: B held this long through a strike calls the finisher
   },
+  // Help finding the mark: a strike turns to the trooper nearest the stick's way and closes the gap.
+  assist: {
+    range: 3.2, // m: who a strike can lock on to
+    cone: 0.95, coneIdle: 1.5, // rad, half-angles: about the stick's way, or about his facing with the stick at rest
+    reach: 1.15, // m: how far from the target the blow is struck (centre to centre)
+    step: 1.9, // m: the most a strike closes in
+    lunge: 0.14, // s: the closing glide
+    dashRange: 5, dashStep: 3.2, // after (or during) a dash: further
+  },
+  // Presses kept this long while they cannot be taken yet (mid-strike, cooldowns).
+  input: { buffer: 0.22 },
   sparks: {
     graze: [3, 16], // spark counts, picked at random for every hit
     cut: [26, 92],
@@ -66,6 +78,8 @@ export const FEEL = {
     duration: 0.19, // s
     cooldown: 0.45, // s before the next one
     carry: 0.3, // share of its speed he keeps when it ends
+    dodge: 0.08, // s after it during which bolts still pass through him (and all through it)
+    strike: 0.22, // s after it a press of B still makes a lunging dash strike
   },
   flee: {
     speed: [3.2, 4], time: [1.2, 1.9], stride: 1.3, // m/s, seconds, metres per running cycle
@@ -113,6 +127,14 @@ export const FEEL = {
     close: [3, 12],
     yaw: [0.25, 1.55], lift: [-0.22, 0.5], // scatter (rad) of a return left to chance: either side, into the floor or up
     speedUp: 1.3, // a sent-back bolt flies faster
+    held: 0.75, // the guard merely held: at best this share of returns go back at the shooter
+    // The perfect parry: the guard pressed this long (s) or less before the bolt
+    // meets the blade sends it straight back into its shooter, from any range.
+    perfect: 0.2,
+    chain: 0.32, // s: after one, the next bolts this soon after are perfect too (the rest of the burst)
+    mash: 0.35, // s: a press this soon after the last one opens no window (no mashing)
+    perfectSpeed: 1.75, // the perfect return flies faster still
+    perfectStop: [0.05, 0.16], // its beat of slow motion: hold, recover
     precision: { start: 0.1, gain: 0.003, hitGain: 0.006, max: 0.95, bonus: 0.12 }, // training: grows per deflection, more per hit; adds at most `bonus` to the chance
     error: 0.16, // rad: aim error of an aimed return made from far off (none close by)
   },
@@ -140,7 +162,7 @@ export const FEEL = {
   },
   ai: {
     startle: [0.18, 0.32], // s from "!" to acting on it
-    hide: [0.35, 0.9], // s crouched behind cover between bursts
+    hide: [0.3, 0.75], // s crouched behind cover between bursts
     cycles: [2, 3], // bursts from one cover (or one stop in the open) before moving on
     range: [4.5, 9], // m from the hero a good cover lies (anchors)
     flankRange: [3.5, 7], // m: the same for a flanker, at the hero's side
@@ -151,6 +173,13 @@ export const FEEL = {
     kneel: 0.5, // chance he kneels to fire in the open (else he stands)
     blind: 0.35, // chance, behind a low crate, of a blind burst over it
     blindBurst: [5, 8], blindGap: [0.06, 0.1], blindSpread: 0.16, // shots, s between them, rad of scatter
+    windup: 0.32, // s the aim takes to settle before a burst (the glint at the muzzle)
+    // The squad as a team.
+    movers: 0.4, // share of the squad that may move at once under fire (the others cover them)
+    stagger: 0.3, // s at least between two bursts starting
+    suppress: 3, // s out of sight during which the anchors keep the hero pinned where he hides
+    spread: [4.5, 6], // m from the Jedi: where they spread out to when he is among them
+    panic: 8, fallback: 4, fallbackRange: [7, 11], // so many lost within this many s: they fall back (s) to covers this far (m)
   },
 };
 

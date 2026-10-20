@@ -13,7 +13,7 @@ import * as THREE from 'three';
  */
 const GRAVITY = 9.8, RADIUS = 0.065;
 
-export function createGrenades(scene, { lab = null, random = Math.random, reach = 3.4, onBeep = null } = {}) {
+export function createGrenades(scene, { lab = null, random = Math.random, reach = 3.4, onBeep = null, onBounce = null } = {}) {
   const glow = (() => {
     const n = 16, data = new Uint8Array(n * n * 4);
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
@@ -96,6 +96,7 @@ export function createGrenades(scene, { lab = null, random = Math.random, reach 
     if (p.y < RADIUS) {
       p.y = RADIUS;
       if (v.y < -1.2) {
+        onBounce?.(grenade, -v.y);
         v.y *= -0.38;
         v.x *= 0.72; v.z *= 0.72;
         grenade.spin.multiplyScalar(0.6).add(temp.set(v.z, 0, -v.x).multiplyScalar(1 / RADIUS * 0.4));
@@ -116,7 +117,7 @@ export function createGrenades(scene, { lab = null, random = Math.random, reach 
         if (distance < 1e-6) n.set(0, 1, 0); else n.divideScalar(distance);
         p.addScaledVector(n, RADIUS - distance);
         const into = v.dot(n);
-        if (into < 0) { v.addScaledVector(n, -into * 1.45); v.multiplyScalar(0.8); }
+        if (into < 0) { if (into < -1.2) onBounce?.(grenade, -into); v.addScaledVector(n, -into * 1.45); v.multiplyScalar(0.8); }
         if (n.y > 0.7 && Math.abs(v.y) < 1.2) { v.y = Math.max(0, v.y); grenade.rolling = true; v.x *= Math.exp(-2.4 * h); v.z *= Math.exp(-2.4 * h); }
       }
     }

@@ -10,9 +10,10 @@ import { FEEL, pick } from './feel.js';
  * marches him in), 'close'.
  */
 export function createReinforcements({ door, random = Math.random } = {}) {
-  let phase, clock, queue, index;
+  let phase, clock, queue, index, waves = 0;
   function reset() {
     phase = 'wait';
+    waves = 0;
     clock = FEEL.reinforce.first;
     queue = index = 0;
     if (door) door.alarm = false;
@@ -34,6 +35,7 @@ export function createReinforcements({ door, random = Math.random } = {}) {
           door.alarm = true;
           queue = Math.min(Math.round(pick(r.wave, random)), r.cap - living);
           index = 0;
+          waves++;
           events.push('alarm');
         }
         break;
@@ -62,5 +64,5 @@ export function createReinforcements({ door, random = Math.random } = {}) {
     }
     return events;
   }
-  return { update, reset, get phase() { return phase; }, get countdown() { return clock; } };
+  return { update, reset, get phase() { return phase; }, get countdown() { return clock; }, get waves() { return waves; } };
 }

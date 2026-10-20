@@ -6,9 +6,12 @@ import { FEEL } from './feel.js';
  * each other through a graph — every move ends with the blade on one side
  * (high right, left, or low in front) and the next is drawn at random among
  * the moves that start there, never one used just before. After three to six
- * strikes a finisher closes the combo. A press while running opens with a
- * dashing move. Several moves begin with flourishes: moulinets beside the
- * body, a helicopter twirl overhead, wrist rolls. Holding A raises a
+ * strikes, when B is held, a finisher closes the combo. A press while
+ * running opens with a dashing move. Several moves begin with flourishes:
+ * moulinets beside the body, a helicopter twirl overhead, wrist rolls. The
+ * first strike of a combo is always a quick one, so a press is answered at
+ * once; B held through a strike calls the finisher (the player decides when
+ * the combo ends). Holding A raises a
  * two-handed guard the hero can walk or run in. Igniting the blade plays a
  * quick draw twirl that never stops the legs.
  *
@@ -73,13 +76,13 @@ export const MOVES = {
   },
   // Two moulinets at the right side, a pull back, then a straight thrust.
   twirlThrust: {
-    role: ['opener', 'link'], from: ['R'], to: 'F', duration: 0.72, buffer: 0.3, chain: 0.78, active: [0.62, 0.82], trail: [0.02, 0.9],
-    drive: [[0.6, 0.85, 3.2]], twirls: [[0.04, 0.5, 2, MOULINET, SHOULDER]],
+    role: ['link'], from: ['R'], to: 'F', duration: 0.6, buffer: 0.22, chain: 0.74, active: [0.46, 0.72], trail: [0.02, 0.88],
+    drive: [[0.42, 0.74, 3.2]], twirls: [[0.04, 0.34, 1, MOULINET, SHOULDER]],
     keys: [
       key(0, [-0.3, 0.98, 0.12], [-0.5, 0.4, 0.75], { left: [0.26, 0.98, 0.2], yaw: -0.25, crouch: 0.5 }),
-      key(0.45, [-0.32, 1.0, 0.1], [-0.5, 0.4, 0.75], { left: [0.27, 0.98, 0.2], yaw: -0.35, crouch: 0.6 }),
-      key(0.58, [-0.2, 1.02, -0.02], [-0.15, 0.1, 0.98], { left: [0.3, 0.98, 0.15], yaw: -0.5, crouch: 0.7 }),
-      key(0.74, [-0.04, 1.0, 0.5], [0.02, 0.06, 1], { left: [0.3, 0.95, -0.15], yaw: 0.25, pitch: 0.15, crouch: 1 }),
+      key(0.3, [-0.32, 1.0, 0.1], [-0.5, 0.4, 0.75], { left: [0.27, 0.98, 0.2], yaw: -0.35, crouch: 0.6 }),
+      key(0.42, [-0.2, 1.02, -0.02], [-0.15, 0.1, 0.98], { left: [0.3, 0.98, 0.15], yaw: -0.5, crouch: 0.7 }),
+      key(0.6, [-0.04, 1.0, 0.5], [0.02, 0.06, 1], { left: [0.3, 0.95, -0.15], yaw: 0.25, pitch: 0.15, crouch: 1 }),
       key(1, [-0.06, 0.95, 0.44], [-0.05, -0.2, 0.98], { left: [0.3, 0.95, -0.1], yaw: 0.2, pitch: 0.1, crouch: 0.8 }),
     ],
   },
@@ -97,7 +100,7 @@ export const MOVES = {
   },
   // A wrist roll overhead, then a flat cut across the chest.
   horizontal: {
-    role: ['opener', 'link'], from: ['R'], to: 'L', duration: 0.56, buffer: 0.22, chain: 0.68, active: [0.5, 0.76], trail: [0.0, 0.84],
+    role: ['link'], from: ['R'], to: 'L', duration: 0.56, buffer: 0.22, chain: 0.68, active: [0.5, 0.76], trail: [0.0, 0.84],
     drive: [[0.4, 0.7, 2.0]], twirls: [[0.02, 0.28, 1, Z]],
     keys: [
       COCKED(0, { crouch: 0.45 }),
@@ -134,14 +137,14 @@ export const MOVES = {
   },
   // The blade spins flat above the head like a rotor, then cuts down.
   helicopter: {
-    role: ['opener', 'link'], from: ['R', 'L', 'F'], to: 'L', duration: 0.78, buffer: 0.3, chain: 0.8, active: [0.6, 0.84], trail: [0.1, 0.9],
-    drive: [[0.55, 0.8, 2.0]], twirls: [[0.12, 0.54, 2, Y]],
+    role: ['link'], from: ['R', 'L', 'F'], to: 'L', duration: 0.62, buffer: 0.24, chain: 0.74, active: [0.44, 0.74], trail: [0.08, 0.88],
+    drive: [[0.4, 0.7, 2.0]], twirls: [[0.08, 0.36, 1, Y]],
     keys: [
       key(0, [-0.2, 1.1, 0.2], [-0.4, 0.5, 0.7], { yaw: -0.2, crouch: 0.4 }),
-      key(0.12, [-0.08, 1.4, 0.1], [-0.95, 0.12, 0.2], { left: [0.3, 1.0, 0.1], yaw: -0.1, pitch: -0.15, crouch: 0.3 }),
-      key(0.52, [-0.08, 1.4, 0.1], [-0.95, 0.12, 0.2], { left: [0.3, 1.0, 0.1], yaw: -0.1, pitch: -0.15, crouch: 0.3 }),
-      key(0.68, [0.02, 1.0, 0.46], [0.35, -0.35, 0.86], { yaw: 0.25, pitch: 0.25, crouch: 0.9 }),
-      key(0.82, [0.16, 0.8, 0.34], [0.75, -0.55, 0.3], { left: [0.3, 0.93, -0.12], yaw: 0.45, crouch: 0.9 }),
+      key(0.08, [-0.08, 1.4, 0.1], [-0.95, 0.12, 0.2], { left: [0.3, 1.0, 0.1], yaw: -0.1, pitch: -0.15, crouch: 0.3 }),
+      key(0.36, [-0.08, 1.4, 0.1], [-0.95, 0.12, 0.2], { left: [0.3, 1.0, 0.1], yaw: -0.1, pitch: -0.15, crouch: 0.3 }),
+      key(0.54, [0.02, 1.0, 0.46], [0.35, -0.35, 0.86], { yaw: 0.25, pitch: 0.25, crouch: 0.9 }),
+      key(0.72, [0.16, 0.8, 0.34], [0.75, -0.55, 0.3], { left: [0.3, 0.93, -0.12], yaw: 0.45, crouch: 0.9 }),
       LOW_LEFT(1),
     ],
   },
@@ -159,7 +162,7 @@ export const MOVES = {
   },
   // Finisher: leap, sword raised in both hands, slammed into the floor.
   slam: {
-    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.84, buffer: 1, chain: 2, active: [0.45, 0.66], trail: [0.38, 0.7],
+    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.84, buffer: 0.5, chain: 0.86, active: [0.45, 0.66], trail: [0.38, 0.7],
     drive: [[0.18, 0.6, 2.4]], lift: [0.2, 0.6, 0.22], impact: [0.6, 1],
     keys: [
       key(0, [-0.25, 0.95, 0.35], [-0.55, 0.2, 0.8], { left: [0.3, 0.95, 0.1], yaw: -0.1, crouch: 0.6 }),
@@ -172,7 +175,7 @@ export const MOVES = {
   },
   // Finisher: a spinning leap ending in a two-handed downward cut.
   spinSlam: {
-    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.95, buffer: 1, chain: 2, active: [0.2, 0.78], trail: [0.15, 0.82],
+    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.95, buffer: 0.55, chain: 0.88, active: [0.2, 0.78], trail: [0.15, 0.82],
     drive: [[0.15, 0.72, 2.6]], spin: [0.2, 0.6, 1], lift: [0.3, 0.72, 0.3], impact: [0.72, 1],
     keys: [
       key(0, [-0.25, 1.0, 0.2], [-0.6, 0.3, 0.7], { yaw: -0.2, crouch: 0.6 }),
@@ -186,7 +189,7 @@ export const MOVES = {
   },
   // Finisher: a crouch, a rising cut carried into a jump, a moulinet in the air.
   risingLeap: {
-    role: ['finisher'], from: ['R', 'L', 'F'], to: 'R', duration: 0.84, buffer: 1, chain: 2, active: [0.36, 0.62], trail: [0.3, 0.86],
+    role: ['finisher'], from: ['R', 'L', 'F'], to: 'R', duration: 0.84, buffer: 0.5, chain: 0.86, active: [0.36, 0.62], trail: [0.3, 0.86],
     drive: [[0.25, 0.6, 1.5]], lift: [0.32, 0.8, 0.38], impact: [0.8, 0.45], twirls: [[0.6, 0.8, -1, X]],
     keys: [
       key(0, [-0.1, 0.85, 0.35], [-0.2, -0.5, 0.85], { crouch: 0.7 }),
@@ -199,7 +202,7 @@ export const MOVES = {
   },
   // Finisher: three fast moulinets, then a long lunging thrust.
   lunge: {
-    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.8, buffer: 1, chain: 2, active: [0.52, 0.8], trail: [0.0, 0.85],
+    role: ['finisher'], from: ['R', 'L', 'F'], to: 'F', duration: 0.8, buffer: 0.55, chain: 0.88, active: [0.52, 0.8], trail: [0.0, 0.85],
     drive: [[0.5, 0.78, 6]], impact: [0.62, 0.5], twirls: [[0.02, 0.4, 3, MOULINET, SHOULDER]],
     keys: [
       key(0, [-0.28, 1.0, 0.1], [-0.6, 0.5, 0.6], { yaw: -0.3, crouch: 0.5 }),
@@ -455,9 +458,11 @@ export class CombatController {
     this.pinned = false;
     this.time = 0;
     this.hits = 0;
-    this.length = 0;
     this.side = null;
     this.queued = false;
+    // B held through a strike: the finisher comes next.
+    this.heavy = false;
+    this.charge = 0;
     this.recovery = 0;
     this.guard = 0;
     this.cooldown = 0;
@@ -471,10 +476,13 @@ export class CombatController {
   get guarding() { return this.guard > 0.5 && !this.busy; }
   /** Name of the move that began since the last call, so the hero can re-aim. */
   takeStart() { const name = this.started; this.started = null; return name; }
-  /** Picks the next strike at random among those that start where the last ended. */
+  /**
+   * Picks the next strike at random among those that start where the last
+   * ended: a quick opener, links, and the finisher once B has been held.
+   */
   choose({ speed = 0 } = {}) {
     const fresh = this.hits === 0;
-    const role = fresh ? (speed > 2.6 ? 'run' : 'opener') : this.hits >= this.length - 1 ? 'finisher' : 'link';
+    const role = fresh ? (speed > 2.6 ? 'run' : 'opener') : this.heavy ? 'finisher' : 'link';
     const ofRole = Object.keys(MOVES).filter(name => MOVES[name].role.includes(role));
     let candidates = fresh ? ofRole : ofRole.filter(name => MOVES[name].from.includes(this.side));
     if (!candidates.length) candidates = ofRole;
@@ -483,17 +491,21 @@ export class CombatController {
     if (unused.length) candidates = unused;
     return candidates[Math.min(candidates.length - 1, Math.floor(this.random() * candidates.length))];
   }
-  /** B pressed. */
+  /**
+   * B pressed: a strike at once (out of the guard too: a riposte), or the next
+   * one queued. False when it cannot be taken yet — the caller keeps the press
+   * a moment and tries again.
+   */
   attack({ speed = 0 } = {}) {
-    if (this.guarding || this.cooldown > 0) return false;
+    if (this.cooldown > 0) return false;
     if (this.busy) {
       const t = this.time / this.action.duration;
       if (t >= this.action.buffer) this.queued = true;
       return this.queued;
     }
     // Shortly after a strike the combo goes on; otherwise a new one begins.
-    if (!(this.recovery > 0 && this.hits > 0)) { this.hits = 0; this.side = null; }
-    if (this.hits === 0) { this.length = 3 + Math.floor(this.random() * 4); this.sequence++; }
+    if (!(this.recovery > 0 && this.hits > 0)) { this.hits = 0; this.side = null; this.heavy = false; }
+    if (this.hits === 0) this.sequence++;
     this.start(this.choose({ speed }));
     return true;
   }
@@ -583,7 +595,7 @@ export class CombatController {
     this.blendFrom = this.output.weight > 0.5 ? 1 : 0;
     // Each strike differs a little: tempo, twist and reach vary. FEEL sets the pace.
     const plain = move.free || move.utility;
-    const tempo = plain ? 1 : (0.92 + this.random() * 0.16) * FEEL.attacks.tempo;
+    const tempo = plain ? 1 : (0.97 + this.random() * 0.06) * FEEL.attacks.tempo;
     this.action = { name, ...move, duration: move.duration * tempo, variation: plain ? 1 : 0.85 + this.random() * 0.3, push: plain ? 1 : 0.85 + this.random() * 0.35, released: false };
     if (!plain) {
       this.hits++;
@@ -594,9 +606,15 @@ export class CombatController {
     this.queued = false;
     this.impacted = false;
     this.started = name;
+    this.charge = 0;
+    if (move.role.includes('finisher')) this.heavy = false;
   }
-  /** guard: RB held; hold: a trooper held up by the Force (the free hand stays out, even while striking). */
-  update(dt, { guard = false, speed = 0, hold = false } = {}) {
+  /**
+   * guard: RB held; hold: a trooper held up by the Force (the free hand stays
+   * out, even while striking); charging: B kept down — through a strike, it
+   * calls the finisher.
+   */
+  update(dt, { guard = false, speed = 0, hold = false, charging = false } = {}) {
     const out = this.output;
     this.clock += dt;
     this.force += ((hold ? 1 : 0) - this.force) * (1 - Math.exp(-12 * dt));
@@ -610,8 +628,14 @@ export class CombatController {
       // A held move (the impale) waits in its sustain window while pinned.
       if (action.sustain && this.pinned && this.time / action.duration > action.sustain[1]) this.time = action.sustain[0] * action.duration;
       const t = this.time / action.duration, held = action.sustain && this.pinned;
-      if (this.queued && !held && t >= action.chain && !action.role.includes('finisher')) {
+      const striking = !action.free && !action.utility, finisher = action.role.includes('finisher');
+      // B held through a strike: the finisher is next.
+      this.charge = striking && !finisher && charging ? this.charge + dt : 0;
+      if (this.charge >= FEEL.attacks.hold && !this.heavy) { this.heavy = true; this.queued = true; }
+      if (this.queued && !held && t >= action.chain) {
         if (!action.utility) this.side = action.to;
+        // After a finisher, a fresh combo.
+        if (finisher) { this.hits = 0; this.heavy = false; }
         if (this.hits === 0) this.sequence++;
         this.start(this.choose({ speed }));
       } else if (guard && !held && (action.free || t >= action.active[1])) {

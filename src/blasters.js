@@ -81,7 +81,7 @@ export function createBlasters(scene, { effects = null, lab = null, marks = null
     const bolt = pool.find(entry => !entry.live) ?? live[0];
     if (bolt.live) remove(bolt);
     // A recycled bolt starts afresh (not parried, not deflected).
-    Object.assign(bolt, { live: true, age: 0, life: 3, owner, deflected: false, parried: false, stretch: 0 });
+    Object.assign(bolt, { live: true, age: 0, life: 3, owner, deflected: false, parried: false, perfect: false, whizzed: false, stretch: 0 });
     bolt.position.copy(from);
     bolt.velocity.copy(aim).normalize().multiplyScalar(speed);
     bolt.core.material.color.copy(coreColor);
