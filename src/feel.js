@@ -39,7 +39,9 @@ export const FEEL = {
     // The lamps: a warm white, wide and soft, a little glow round the lens lighting the man and what is near.
     lamp: { color: 0xffd6a0, intensity: 15, distance: 12, angle: 0.62, penumbra: 0.95, decay: 1.45, spill: 1.6, spillDistance: 3.2 },
     beam: { length: 4.4, radius: 1.35, level: 0.42 }, // m, m (at its end), brightness
-    dust: { motes: 70, swirl: [0.25, 0.9], drift: 0.05, size: [1, 2.2], stir: 2.5 }, // per beam; rad/s; share of the beam per s; px; a passing blade stirs them this much
+    // The dust in the air, seen only in the beams: motes per m³ (at most cap); each wanders this far (m) round where it
+    // hangs at these rates (rad/s) and twirls (rad/s, m); px; brightness; stirred within reach (m) this much, settling in s.
+    dust: { density: 4.5, cap: 8000, wander: { reach: 0.3, rate: [0.08, 0.25] }, swirl: [0.4, 1.2], orbit: [0.03, 0.1], size: [1, 1.4], glow: 0.6, reach: 0.8, stir: 1.4, settle: 0.6 },
     onAfter: [0.7, 1.9], // s after the blackout before each trooper switches his lamp on
     sight: 4.5, saberSight: 9, // m: how far a trooper sees the hero in the dark — and when his blade is lit
   },

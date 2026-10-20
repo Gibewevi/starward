@@ -104,7 +104,7 @@ test('in the dark the troopers switch on their rifle lamps one by one; the neare
   assert.ok(Math.max(...times) - Math.min(...times) > 0.3, 'one after another');
   assert.ok(Math.min(...times) >= FEEL.blackout.onAfter[0] - 0.05, 'after a moment');
   assert.equal(lamps.on, troopers.length, 'all beams showing');
-  assert.ok(lamps.motes > 50, `dust in the beams (${lamps.motes})`);
+  assert.ok(lamps.motes > 8, `dust in the beams (${lamps.motes})`);
   assert.ok([...lamps.beams.values()].every(beam => beam.cone.layers.mask === 2 && beam.glint.layers.mask === 2) && lamps.dust.layers.mask === 2, 'beams and dust out of the floor’s reflection (layer 1)');
   const lit = lamps.pool.filter(light => light.intensity > 0);
   assert.equal(lit.length, FEEL.blackout.lamps, 'a fixed number of real lights, never more');
@@ -114,6 +114,42 @@ test('in the dark the troopers switch on their rifle lamps one by one; the neare
   for (const light of lit) assert.ok(nearest.some(trooper => trooper.muzzle.distanceTo(light.position) < 0.2), 'on a near rifle');
   lamps.clear();
   assert.equal(lamps.on, 0);
+});
+
+test('the dust hangs in the air: a lamp turning lights other motes, it does not drag them along', () => {
+  const { scene, lab } = room();
+  const trooper = createStormtrooper({ scene, position: new THREE.Vector3(0, 0, 0), heading: 0, random: seeded(21), lab });
+  const lamps = createFlashlights(scene, { random: seeded(22) });
+  const hero = new THREE.Vector3(0, 1, 6);
+  lamps.darkness([trooper], [0, 0]);
+  // Rifle up, aiming level across the room.
+  trooper.order.aim = true;
+  trooper.order.aimAt = new THREE.Vector3(0, 1.1, 8);
+  let time = 0;
+  for (; time < 1.5; time += 1 / 60) { trooper.update(1 / 60, time); lamps.update(1 / 60, { troopers: [trooper], hero, night: 1 }); }
+  const beam = lamps.beams.get(trooper);
+  // The motes the beam lights now (well inside its cone).
+  const inBeam = () => lamps.air.map((at, i) => {
+    const local = at.clone().sub(beam.lens), along = local.dot(beam.forward) / FEEL.blackout.beam.length;
+    return along > 0.1 && along < beam.reach * 0.9 && local.addScaledVector(beam.forward, -along * FEEL.blackout.beam.length).length() < FEEL.blackout.beam.radius * along * 0.7 ? i : -1;
+  }).filter(i => i >= 0);
+  const before = inBeam(), still = lamps.air.map(at => at.clone());
+  assert.ok(before.length >= 3 && lamps.motes >= 3, `motes in the beam (${before.length}, ${lamps.motes} glowing)`);
+  // He swings his rifle round: the beam sweeps on, the dust stays where it hangs.
+  trooper.root.rotation.y += 1.2;
+  lamps.update(1 / 60, { troopers: [trooper], hero, night: 1 });
+  // (Past the floor or the ceiling, one may come back in from the other side: not dragged.)
+  const dragged = lamps.air.filter((at, i) => at.distanceTo(still[i]) > 0.01 && at.distanceTo(still[i]) < 1);
+  assert.equal(dragged.length, 0, 'no mote dragged along');
+  const after = inBeam();
+  assert.ok(after.length >= 3 && lamps.motes >= 3, 'other motes lit');
+  assert.ok(after.filter(i => before.includes(i)).length < before.length / 3, 'mostly new ones');
+  // The hero walking through pushes them aside.
+  const through = beam.lens.clone().addScaledVector(beam.forward, 1.5), near = lamps.air.map((at, i) => [i, at.distanceTo(through)]).filter(([, d]) => d < 0.5).map(([i]) => i);
+  const there = near.map(i => lamps.air[i].clone());
+  for (let i = 0; i < 20; i++) lamps.update(1 / 60, { troopers: [trooper], hero, night: 1, stirs: [{ at: through, speed: 5 }] });
+  const gained = near.map((i, k) => lamps.air[i].distanceTo(through) - there[k].distanceTo(through));
+  assert.ok(near.length && gained.reduce((sum, d) => sum + d, 0) / near.length > 0.05, `pushed aside (${near.length} motes)`);
 });
 
 test('in the dark a trooper sees the hero only close by — further if his blade is lit, or in the beam of his lamp', () => {

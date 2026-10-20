@@ -12,10 +12,14 @@ import { glowTexture } from './kit.js';
  * The light is a warm white, wide and soft-edged, with a little glow round
  * the lens that lights the man himself and what stands near him. Every rifle
  * shows its beam — a soft cone of light in the dusty air, fading along its
- * length, stopping where a crate or a wall stands in the way — with dust
- * motes drifting and swirling in it (stirred when the hero or his blade
- * goes through). Beams, glints and motes are on layer 1: the wet floor does
- * not mirror them, only the light they cast.
+ * length, stopping where a crate or a wall stands in the way.
+ *
+ * The dust hangs in the room's air, drifting and twirling slowly where it is;
+ * a beam only reveals it. A lamp sweeping the room lights new motes as it
+ * goes and leaves the others in the dark — it never carries its own. The
+ * hero or his blade going through pushes the dust aside and whirls it.
+ * Beams, glints and motes are on layer 1: the wet floor does not mirror
+ * them, only the light they cast.
  *
  * The light itself comes from a small fixed pool of spot lights (each with
  * its spill) handed each frame to the rifles nearest the hero, all casting
@@ -24,12 +28,13 @@ import { glowTexture } from './kit.js';
  *
  * update(dt, { troopers, hero, stirs, night }) returns the troopers who
  * switched their lamp on this frame (a click to play). `stirs`: points
- * moving through the air ({ at, speed }) that stir the dust.
+ * moving through the air ({ at, speed }) that stir the dust. `bounds`: the
+ * room's floor (x, z) the dust fills.
  */
 const LENS = new THREE.Vector3(0, -0.035, 0.36);
 const LAYER = 1;
 
-export function createFlashlights(scene, { lab = null, random = Math.random } = {}) {
+export function createFlashlights(scene, { lab = null, bounds = { minX: -10, maxX: 10, minZ: -10, maxZ: 10 }, random = Math.random } = {}) {
   const { lamps: count, shadows, lamp, beam: B, dust: D } = FEEL.blackout;
   const warmth = new THREE.Color(lamp.color);
   const pool = Array.from({ length: count }, (_, index) => {
@@ -85,8 +90,10 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
   warm.layers.set(LAYER);
   scene.add(warm);
 
-  // Dust: motes living in the beams, each in its beam's own space (along, out from the axis, round it).
-  const MOTES = D.motes * count * 2;
+  // Dust: motes hanging in the room's air (a little past its edges, where the beams reach over the railing).
+  const room = { minX: bounds.minX - 1.5, maxX: bounds.maxX + 1.5, minY: 0.05, maxY: 2.4, minZ: bounds.minZ - 1.5, maxZ: bounds.maxZ + 1.5 };
+  const span = new THREE.Vector3(room.maxX - room.minX, room.maxY - room.minY, room.maxZ - room.minZ);
+  const MOTES = Math.min(D.cap, Math.round(D.density * span.x * span.y * span.z));
   const dustPositions = new Float32Array(MOTES * 3), dustGlow = new Float32Array(MOTES), dustSizes = new Float32Array(MOTES);
   const dustGeometry = new THREE.BufferGeometry();
   dustGeometry.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3).setUsage(THREE.DynamicDrawUsage));
@@ -94,7 +101,7 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
   dustGeometry.setAttribute('size', new THREE.BufferAttribute(dustSizes, 1).setUsage(THREE.DynamicDrawUsage));
   const dust = new THREE.Points(dustGeometry, new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    uniforms: { tint: { value: warmth.clone().multiplyScalar(1.4) } },
+    uniforms: { tint: { value: warmth.clone() } },
     vertexShader: /* glsl */`
       attribute float glow; attribute float size; varying float vGlow;
       void main() { vGlow = glow; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = size; }`,
@@ -105,13 +112,47 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
   dust.name = 'Lamp dust';
   dust.frustumCulled = false;
   dust.layers.set(LAYER);
+  dustGeometry.setDrawRange(0, 0);
   scene.add(dust);
-  // Each mote: along (0..1), out (0..1 of the radius there), round (rad), its own swirl and twinkle.
-  const motes = Array.from({ length: MOTES }, () => ({ along: random(), out: Math.sqrt(random()), round: random() * Math.PI * 2, swirl: pick(D.swirl, random) * (random() < 0.5 ? -1 : 1), phase: random() * 10, size: pick(D.size, random), owner: null }));
+  // Each mote: where it hangs (it wanders slowly round that point), its own little twirl (rad/s, m) and twinkle.
+  const motes = Array.from({ length: MOTES }, () => ({
+    anchor: new THREE.Vector3(room.minX + random() * span.x, room.minY + random() * span.y, room.minZ + random() * span.z),
+    wander: [pick(D.wander.rate, random), pick(D.wander.rate, random), pick(D.wander.rate, random)], phase: random() * Math.PI * 2,
+    swirl: pick(D.swirl, random) * (random() < 0.5 ? -1 : 1), orbit: pick(D.orbit, random), size: pick(D.size, random),
+    velocity: new THREE.Vector3(), cell: -1,
+  }));
+  // Filed by the square metre of floor they hang over: only those near a lit beam (or a stir) are looked at.
+  const columns = Math.ceil(span.x), rows = Math.ceil(span.z);
+  const cells = Array.from({ length: columns * rows }, () => []);
+  const cellAt = (x, z) => THREE.MathUtils.clamp(Math.floor(z - room.minZ), 0, rows - 1) * columns + THREE.MathUtils.clamp(Math.floor(x - room.minX), 0, columns - 1);
+  const file = (mote, index) => {
+    const cell = cellAt(mote.anchor.x, mote.anchor.z);
+    if (cell === mote.cell) return;
+    if (mote.cell >= 0) cells[mote.cell].splice(cells[mote.cell].indexOf(index), 1);
+    cells[cell].push(index);
+    mote.cell = cell;
+  };
+  motes.forEach(file);
+  function eachNear(minX, minZ, maxX, maxZ, visit) {
+    const x0 = Math.max(0, Math.floor(minX - room.minX)), x1 = Math.min(columns - 1, Math.floor(maxX - room.minX));
+    const z0 = Math.max(0, Math.floor(minZ - room.minZ)), z1 = Math.min(rows - 1, Math.floor(maxZ - room.minZ));
+    for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) for (const index of cells[z * columns + x]) visit(index);
+  }
+  /** Where a mote is now: round its anchor on slow eddies, twirling. */
+  function where(mote, out) {
+    const t = clock, p = mote.phase, [a, b, c] = mote.wander, w = D.wander.reach, turn = p + t * mote.swirl;
+    return out.set(
+      mote.anchor.x + w * (Math.sin(t * a + p) + 0.5 * Math.sin(t * b * 1.7 + p * 2.3)) + Math.cos(turn) * mote.orbit,
+      mote.anchor.y + w * 0.35 * Math.sin(t * c + p * 1.3) + Math.sin(turn * 1.3) * mote.orbit * 0.6,
+      mote.anchor.z + w * (Math.cos(t * b + p * 1.9) + 0.5 * Math.cos(t * a * 1.3 + p * 0.7)) + Math.sin(turn) * mote.orbit);
+  }
+  const seenAt = new Int32Array(MOTES).fill(-1), glowOf = new Float32Array(MOTES), placed = new Float32Array(MOTES * 3), touched = [];
+  const moving = new Set();
+  let shown = 0, frame = 0;
 
   const beams = new Map();
-  const lens = new THREE.Vector3(), end = new THREE.Vector3(), forward = new THREE.Vector3(), side = new THREE.Vector3(), up = new THREE.Vector3(), rotation = new THREE.Quaternion(), scale = new THREE.Vector3();
-  const local = new THREE.Vector3();
+  const lens = new THREE.Vector3(), end = new THREE.Vector3(), forward = new THREE.Vector3(), rotation = new THREE.Quaternion(), scale = new THREE.Vector3();
+  const local = new THREE.Vector3(), point = new THREE.Vector3();
   let clock = 0;
 
   /** A trooper's beam (made when first needed); the lamp itself is off until switched on. */
@@ -129,7 +170,7 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
     glint.scale.setScalar(0.2);
     halo.scale.setScalar(0.85);
     for (const object of [cone, glint, halo]) { object.visible = false; object.layers.set(LAYER); scene.add(object); }
-    beam = { cone, glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, stir: 0, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1), rotation: new THREE.Quaternion() };
+    beam = { cone, glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1) };
     beams.set(trooper, beam);
     return beam;
   }
@@ -145,9 +186,8 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
     for (const [, beam] of beams) for (const object of [beam.cone, beam.glint, beam.halo]) { object.removeFromParent(); object.material.dispose(); }
     beams.clear();
     for (const { light, spill } of pool) light.intensity = spill.intensity = 0;
-    for (const mote of motes) mote.owner = null;
-    dustGlow.fill(0);
-    dustGeometry.attributes.glow.needsUpdate = true;
+    shown = 0;
+    dustGeometry.setDrawRange(0, 0);
   }
   const hide = beam => { beam.cone.visible = beam.glint.visible = beam.halo.visible = false; };
   function update(dt, { troopers, hero, night = 0, stirs = [] }) {
@@ -191,16 +231,6 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
       beam.glint.visible = beam.halo.visible = true;
       beam.lens.copy(lens);
       beam.forward.copy(forward);
-      beam.rotation.copy(rotation);
-      // Something moving through it stirs the dust.
-      for (const stir of stirs) {
-        local.copy(stir.at).sub(lens);
-        const along = local.dot(forward);
-        if (along < 0 || along > B.length * reach) continue;
-        const radius = B.radius * along / B.length + 0.3;
-        if (local.addScaledVector(forward, -along).length() < radius) beam.stir = Math.min(1, beam.stir + stir.speed * dt * 0.6);
-      }
-      beam.stir = Math.max(0, beam.stir - dt * 0.7);
       lit.push({ beam, at: lens.clone(), forward: forward.clone(), on: beam.on, distance: hero ? lens.distanceTo(hero) : 0 });
     }
     // The real lights for the rifles nearest the hero.
@@ -215,41 +245,92 @@ export function createFlashlights(scene, { lab = null, random = Math.random } = 
       spill.position.copy(entry.at).addScaledVector(entry.forward, 0.35);
       spill.intensity = lamp.spill * entry.on;
     });
-    updateDust(dt, lit.map(entry => entry.beam));
+    updateDust(dt, lit.map(entry => entry.beam), stirs);
     return clicks;
   }
-  /** The motes: shared among the lit beams; each drifts down its beam and swirls round it, glowing where the light is. */
-  function updateDust(dt, live) {
-    const share = live.length ? Math.floor(MOTES / live.length) : 0;
-    motes.forEach((mote, index) => {
-      const beam = share && index < share * live.length ? live[Math.floor(index / share)] : null;
-      if (!beam) { dustGlow[index] = 0; mote.owner = null; return; }
-      if (mote.owner !== beam) { mote.owner = beam; mote.along = random(); }
-      const stir = 1 + beam.stir * D.stir;
-      mote.round += mote.swirl * stir * dt;
-      mote.along += (D.drift * (0.3 + random()) + beam.stir * (random() - 0.4) * 0.6) * dt;
-      mote.out = THREE.MathUtils.clamp(mote.out + (random() - 0.5) * dt * 0.6 * stir, 0.05, 1);
-      if (mote.along > 1 || mote.along < 0) { mote.along = random() * 0.15; mote.out = Math.sqrt(random()); }
-      if (mote.along > beam.reach) { dustGlow[index] = 0; return; }
-      const radius = B.radius * mote.along * mote.out;
-      side.set(1, 0, 0).applyQuaternion(beam.rotation);
-      up.set(0, 1, 0).applyQuaternion(beam.rotation);
-      local.copy(beam.lens).addScaledVector(beam.forward, mote.along * B.length).addScaledVector(side, Math.cos(mote.round) * radius).addScaledVector(up, Math.sin(mote.round) * radius);
-      local.toArray(dustPositions, index * 3);
-      // Brightest near the lamp and on the axis, twinkling as they turn in the light.
-      const twinkle = 0.55 + 0.45 * Math.sin(clock * 2.3 + mote.phase);
-      dustGlow[index] = beam.on * (1 - mote.along) ** 1.4 * (1 - 0.6 * mote.out) * twinkle * Math.min(1, mote.along * 12);
-      dustSizes[index] = mote.size;
-    });
-    for (const attribute of [dustGeometry.attributes.position, dustGeometry.attributes.glow, dustGeometry.attributes.size]) attribute.needsUpdate = true;
+  /**
+   * The motes: each wanders round the point where it hangs, and is drawn only
+   * if a beam lights it — brightest near the lamp and on the axis, twinkling
+   * as it twirls. Only the motes over the floor a lit beam covers are looked
+   * at. Day, or no lamp on: nothing to see, nothing done.
+   */
+  function updateDust(dt, live, stirs) {
+    shown = 0;
+    if (!live.length) { dustGeometry.setDrawRange(0, 0); return; }
+    // Pushed aside and whirled by the hero or his blade going through; they slow down and stay where they end.
+    const R = D.reach;
+    for (const stir of stirs) {
+      if (stir.speed < 0.5) continue;
+      eachNear(stir.at.x - R, stir.at.z - R, stir.at.x + R, stir.at.z + R, index => {
+        const mote = motes[index], d2 = where(mote, point).distanceToSquared(stir.at);
+        if (d2 > R * R) return;
+        const d = Math.sqrt(d2) + 1e-3, push = (1 - d / R) * stir.speed * D.stir * dt, spin = random() < 0.5 ? -0.6 : 0.6;
+        local.subVectors(point, stir.at).divideScalar(d);
+        mote.velocity.x += (local.x - local.z * spin + random() - 0.5) * push;
+        mote.velocity.y += (local.y + random() - 0.5) * push * 0.4;
+        mote.velocity.z += (local.z + local.x * spin + random() - 0.5) * push;
+        if (mote.velocity.lengthSq() > 2.25) mote.velocity.setLength(1.5);
+        moving.add(index);
+      });
+    }
+    for (const index of moving) {
+      const mote = motes[index];
+      mote.anchor.addScaledVector(mote.velocity, dt);
+      mote.anchor.y = THREE.MathUtils.clamp(mote.anchor.y, room.minY, room.maxY);
+      mote.velocity.multiplyScalar(Math.exp(-dt / D.settle));
+      file(mote, index);
+      if (mote.velocity.lengthSq() < 1e-4) { mote.velocity.set(0, 0, 0); moving.delete(index); }
+    }
+    // Lit by a beam? (Not right at the lens: the glint is there.)
+    frame++;
+    touched.length = 0;
+    const margin = D.wander.reach * 1.5 + D.orbit[1];
+    for (const beam of live) {
+      const length = B.length * beam.reach;
+      end.copy(beam.lens).addScaledVector(beam.forward, length);
+      const r = B.radius * beam.reach + margin;
+      eachNear(Math.min(beam.lens.x, end.x) - r, Math.min(beam.lens.z, end.z) - r, Math.max(beam.lens.x, end.x) + r, Math.max(beam.lens.z, end.z) + r, index => {
+        // Too far from the cone for its wandering to bring it in: skipped before working out where it is.
+        local.subVectors(motes[index].anchor, beam.lens);
+        const ahead = local.dot(beam.forward), limit = B.radius * Math.max(0, ahead) / B.length + margin;
+        if (ahead < -margin || ahead > length + margin || local.lengthSq() - ahead * ahead > limit * limit) return;
+        if (seenAt[index] !== frame) {
+          seenAt[index] = frame;
+          glowOf[index] = 0;
+          where(motes[index], point).toArray(placed, index * 3);
+          touched.push(index);
+        }
+        local.fromArray(placed, index * 3).sub(beam.lens);
+        const along = local.dot(beam.forward) / B.length;
+        if (along < 0.05 || along > beam.reach) return;
+        const edge = local.addScaledVector(beam.forward, -along * B.length).lengthSq() / (B.radius * along) ** 2;
+        if (edge < 1) glowOf[index] += beam.on * (1 - along) * (1 - edge) * Math.min(1, (along - 0.05) * 12);
+      });
+    }
+    for (const index of touched) {
+      if (glowOf[index] < 0.01) continue;
+      const mote = motes[index];
+      for (let k = 0; k < 3; k++) dustPositions[shown * 3 + k] = placed[index * 3 + k];
+      dustGlow[shown] = Math.min(1, glowOf[index]) * D.glow * (0.55 + 0.45 * Math.sin(clock * 2.3 + mote.phase * 3));
+      dustSizes[shown] = mote.size;
+      shown++;
+    }
+    dustGeometry.setDrawRange(0, shown);
+    if (!shown) return;
+    for (const attribute of [dustGeometry.attributes.position, dustGeometry.attributes.glow, dustGeometry.attributes.size]) {
+      attribute.clearUpdateRanges();
+      attribute.addUpdateRange(0, shown * attribute.itemSize);
+      attribute.needsUpdate = true;
+    }
   }
   return {
     update, darkness, clear,
     pool: pool.map(({ light }) => light), spills: pool.map(({ spill }) => spill), dust,
     /** How many lamps are on (beams showing). */
     get on() { let n = 0; for (const [, beam] of beams) n += beam.cone.visible ? 1 : 0; return n; },
-    /** Motes glowing now. */
-    get motes() { let n = 0; for (let i = 0; i < MOTES; i++) n += dustGlow[i] > 0.02 ? 1 : 0; return n; },
+    /** Motes glowing now (in a beam), and where each one hangs. */
+    get motes() { let n = 0; for (let i = 0; i < shown; i++) n += dustGlow[i] > 0.02 ? 1 : 0; return n; },
+    get air() { return motes.map(mote => where(mote, new THREE.Vector3())); },
     beams,
   };
 }

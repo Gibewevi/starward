@@ -210,7 +210,7 @@ function init() {
   const transformer = createTransformer(scene, { lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
   // The room's power: every light of it follows one level; the rifle lamps for the dark.
   const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
-  const flashlights = createFlashlights(scene, { lab });
+  const flashlights = createFlashlights(scene, { lab, bounds: arena.bounds });
   const nav = createNav(lab, ARENA);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
