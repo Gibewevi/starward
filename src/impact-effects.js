@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createTweens, ease } from './tween.js';
+import { FEEL, pick } from './feel.js';
 
 /**
  * Lightsaber impact effects, stylised and without gore. A physical particle
@@ -12,7 +13,10 @@ import { createTweens, ease } from './tween.js';
  * fades, and a ring of light racing out along the cut plane — both tweened.
  * A Force wave is a few pale rings rushing out of the hand (a push) or
  * converging on it (a pull), eased.
- * sparks()/flash()/burst()/wave()/smoulder()/glow(), then update(dt).
+ * A limb coming off throws red drops too (bleed(), drip()): heavier than
+ * the sparks, falling fast without a bounce, opaque rather than glowing, and
+ * lying on the floor for half a minute before they fade.
+ * sparks()/flash()/burst()/wave()/smoulder()/glow()/bleed()/drip(), then update(dt).
  */
 const SPARK = 0, DROP = 1, EMBER = 2;
 
@@ -72,6 +76,51 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   trails.name = 'Explosion fragment trails';
   trails.frustumCulled = false;
   scene.add(beads, streaks, trails);
+
+  // Red drops: their own small pool, drawn opaque (not added light).
+  const RED = 700;
+  const redPosition = new Float32Array(RED * 3), redVelocity = new Float32Array(RED * 3);
+  const redState = new Uint8Array(RED), redTime = new Float32Array(RED), redLife = new Float32Array(RED), redSize = new Float32Array(RED), redShade = new Float32Array(RED);
+  const redGeometry = new THREE.BufferGeometry();
+  const redPoints = new Float32Array(RED * 3), redColors = new Float32Array(RED * 4), redSizes = new Float32Array(RED);
+  redGeometry.setAttribute('position', new THREE.BufferAttribute(redPoints, 3).setUsage(THREE.DynamicDrawUsage));
+  redGeometry.setAttribute('tint', new THREE.BufferAttribute(redColors, 4).setUsage(THREE.DynamicDrawUsage));
+  redGeometry.setAttribute('size', new THREE.BufferAttribute(redSizes, 1).setUsage(THREE.DynamicDrawUsage));
+  const reds = new THREE.Points(redGeometry, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    vertexShader: /* glsl */`
+      attribute vec4 tint; attribute float size; varying vec4 vTint;
+      void main() {
+        vTint = tint;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size;
+      }`,
+    fragmentShader: /* glsl */`
+      varying vec4 vTint;
+      void main() {
+        vec2 c = gl_PointCoord - 0.5;
+        float d = dot(c, c) * 4.0;
+        if (d > 1.0) discard;
+        // A round drop, a touch lighter at its top.
+        gl_FragColor = vec4(vTint.rgb * (1.15 - d * 0.35 - c.y * 0.3), vTint.a);
+      }`,
+  }));
+  reds.name = 'Red drops';
+  reds.frustumCulled = false;
+  scene.add(reds);
+  let redCursor = 0;
+  const drips = [];
+  function emitRed(at, v) {
+    const i = redCursor;
+    redCursor = (redCursor + 1) % RED;
+    at.toArray(redPosition, i * 3);
+    v.toArray(redVelocity, i * 3);
+    redState[i] = 1;
+    redTime[i] = 0;
+    redLife[i] = pick(FEEL.severed.linger, random);
+    redSize[i] = pick(FEEL.severed.size, random);
+    redShade[i] = 0.8 + random() * 0.35;
+  }
 
   const lights = [0, 1].map(() => {
     const light = new THREE.PointLight(0xff8a3a, 0, 3.2, 1.8);
@@ -170,6 +219,26 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6, !drop && random() < saber ? 1 : 0);
     }
   }
+  /**
+   * A limb comes off: red drops thrown along the blade's sweep, mostly
+   * downwards, from the cut.
+   */
+  function bleed(at, direction, normal, { speed = 4, count = Math.round(pick(FEEL.severed.red, random)) } = {}) {
+    const v = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
+    if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+    side.normalize();
+    const throw_ = speed * FEEL.severed.speed;
+    for (let i = 0; i < count; i++) {
+      v.copy(direction).multiplyScalar(throw_ * (0.3 + random() * 0.8))
+        .addScaledVector(side, (random() - 0.5) * throw_ * 0.8)
+        .addScaledVector(normal, (random() - 0.5) * throw_ * 0.4);
+      v.y = Math.min(v.y, 0.6) + random() * 0.9 - 0.4;
+      start.copy(at).addScaledVector(v, random() * 0.02);
+      emitRed(start, v);
+    }
+  }
+  /** A few more drops falling from a cut for a moment (`object`: where it is). */
+  function drip(object, duration = pick(FEEL.severed.drip, random)) { drips.push({ object, age: 0, duration, clock: random() * 0.1 }); }
   /**
    * An explosion tears into uneven jets. A few hot leaders draw long trails;
    * smaller, cooler splinters follow the same low lobes, with dark space
@@ -320,6 +389,40 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       }
     }
     for (let i = smoulders.length - 1; i >= 0; i--) if (smoulders[i].age >= smoulders[i].duration) smoulders.splice(i, 1);
+    // Drips from fresh cuts, slower and slower.
+    for (const entry of drips) {
+      entry.age += dt;
+      entry.clock -= dt;
+      if (entry.clock > 0 || entry.age > entry.duration) continue;
+      entry.clock = 0.08 + 0.2 * (entry.age / entry.duration) + random() * 0.06;
+      entry.object.getWorldPosition(point);
+      emitRed(point, new THREE.Vector3((random() - 0.5) * 0.3, -0.2 - random() * 0.4, (random() - 0.5) * 0.3));
+    }
+    for (let i = drips.length - 1; i >= 0; i--) if (drips[i].age > drips[i].duration) drips.splice(i, 1);
+    // Red drops: heavy, no bounce; on the floor they stay, darkening, then fade.
+    const { gravity, fade } = FEEL.severed;
+    for (let i = 0; i < RED; i++) {
+      const o = i * 3, c = i * 4;
+      if (!redState[i]) { redSizes[i] = 0; continue; }
+      if (redState[i] === 1) {
+        const drag = Math.exp(-0.35 * dt);
+        redVelocity[o] *= drag; redVelocity[o + 2] *= drag;
+        redVelocity[o + 1] -= gravity * dt;
+        redPosition[o] += redVelocity[o] * dt; redPosition[o + 1] += redVelocity[o + 1] * dt; redPosition[o + 2] += redVelocity[o + 2] * dt;
+        if (redPosition[o + 1] <= 0.008) { redPosition[o + 1] = 0.008; redState[i] = 2; redTime[i] = 0; }
+      } else redTime[i] += dt;
+      const lying = redState[i] === 2;
+      if (lying && redTime[i] >= redLife[i] + fade) { redState[i] = 0; redSizes[i] = 0; continue; }
+      const dark = lying ? Math.min(1, redTime[i] / 2.5) : 0, shade = redShade[i];
+      redPoints[o] = redPosition[o]; redPoints[o + 1] = redPosition[o + 1]; redPoints[o + 2] = redPosition[o + 2];
+      redColors[c] = (0.62 - 0.26 * dark) * shade;
+      redColors[c + 1] = (0.03 - 0.012 * dark) * shade;
+      redColors[c + 2] = (0.022 - 0.008 * dark) * shade;
+      redColors[c + 3] = lying ? Math.min(1, Math.max(0, (redLife[i] + fade - redTime[i]) / fade)) : 1;
+      // Landed, a drop spreads a little.
+      redSizes[i] = redSize[i] * (lying ? 1.3 : 1);
+    }
+    for (const attribute of [redGeometry.attributes.position, redGeometry.attributes.tint, redGeometry.attributes.size]) attribute.needsUpdate = true;
     for (const entry of glows) {
       entry.age += dt;
       const t = Math.min(1, entry.age / entry.duration);
@@ -432,6 +535,9 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
       beadPositions, beadColors, beadSizes, streakPositions, streakColors, trailPositions, trailColors]) array.fill(0);
     cursor = nextLight = nextFlare = nextRing = nextWave = 0;
     smoulders.length = 0;
+    for (const array of [redPosition, redVelocity, redState, redTime, redLife, redSize, redShade, redPoints, redColors, redSizes]) array.fill(0);
+    redCursor = 0;
+    drips.length = 0;
     glows.length = 0;
     tweens.clear();
     for (const slot of lights) { slot.light.intensity = 0; slot.tween = null; }
@@ -442,8 +548,10 @@ export function createImpactEffects(scene, { random = Math.random } = {}) {
   const live = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i]; return count; };
   const restingCount = () => { let count = 0; for (let i = 0; i < MAX; i++) count += alive[i] && resting[i]; return count; };
   return {
-    points: beads, beads, streaks, trails, sparks, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
+    points: beads, beads, streaks, trails, reds, sparks, bleed, drip, blast, flash, burst, wave, smoulder, glow, update, clear, hot, cold,
     get live() { return live(); }, get resting() { return restingCount(); },
+    /** Red drops in the air, and lying on the floor. */
+    get red() { let flying = 0, lying = 0; for (let i = 0; i < RED; i++) { flying += redState[i] === 1; lying += redState[i] === 2; } return { flying, lying }; },
     /** Flares and rings currently shown. */
     get bursts() { return flareSlots.filter(slot => slot.sprite.visible).length + ringSlots.filter(slot => slot.mesh.visible).length; },
     get waves() { return waveSlots.filter(slot => slot.mesh.visible).length; },

@@ -2101,8 +2101,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     else if (/^thigh/.test(name)) joint = hit.s < 0.35 ? `hip${side}` : `knee${side}`;
     else if (/^shin/.test(name)) joint = hit.s < 0.45 ? `knee${side}` : `ankle${side}`;
     else if (/^foot/.test(name)) joint = `ankle${side}`;
-    // The faster the blade, the bigger the spray — never twice the same.
-    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(pick(FEEL.sparks.cut, random) * THREE.MathUtils.clamp(0.5 + speed / 12, 0.6, 1.2)), speed: 2 + Math.min(speed, 8) * 0.5 });
+    // The faster the blade, the bigger the spray — never twice the same
+    // (sent once the blow is settled: a limb coming off sends fewer).
+    let spray = pick(FEEL.sparks.cut, random) * THREE.MathUtils.clamp(0.5 + speed / 12, 0.6, 1.2);
     effects?.flash(hit.point, Math.min(1.2, speed / 5));
     flashPart(body, 1);
     if (sparing && name !== 'blaster') {
@@ -2123,6 +2124,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     } else if (joint && cut(joint, hit)) {
       event.type = 'cut';
       event.joint = joint;
+      // A limb off: fewer sparks, red drops thrown with the blade, a few more falling from both sides of the cut.
+      spray *= FEEL.severed.sparks;
+      effects?.bleed?.(hit.point, sparkDirection, hit.normal, { speed: 2 + Math.min(speed, 8) * 0.5 });
+      for (const { cap } of caps[joint]) effects?.drip?.(cap);
       flashPart(bodies[CUTS[joint].child], 1);
       effects?.burst(hit.point, { normal: hit.normal, power: 0.5 + speed / 10 });
       chip(bodies[CUTS[joint].parent], hit.point, hit.velocity, FEEL.armor.cut);
@@ -2144,6 +2149,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       else if (alive) { suffer(0.7); jolt(body, hit); }
       else jolt(body, hit);
     }
+    effects?.sparks(hit.point, sparkDirection, hit.normal, { count: Math.round(spray), speed: 2 + Math.min(speed, 8) * 0.5 });
     if (!wasDead && trooper.dead) event.lethal = true;
     if (wasStanding && trooper.fallen) event.felled = true;
     trooper.events.push(event);
