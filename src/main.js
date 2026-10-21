@@ -33,6 +33,7 @@ import { createSaberScars } from './saber-scars.js';
 import { createDebris } from './debris.js';
 import { createGrenades } from './grenades.js';
 import { createHeroRagdoll } from './hero-ragdoll.js';
+import { createWounds } from './wounds.js';
 import { createAudio } from './audio.js';
 import { createShake } from './shake.js';
 import { createTelegraph } from './telegraph.js';
@@ -206,6 +207,11 @@ function init() {
   // Warnings: a glint at a muzzle about to fire; chevrons at the screen's edges for threats out of view.
   const telegraph = createTelegraph(scene, { overlay: $('#threats') });
   const knockdown = createHeroRagdoll(character, { lab });
+  // Die and retry: god mode (on unless turned off in the settings) keeps him alive; off, one mistake kills him.
+  const wounds = createWounds();
+  wounds.scene = scene;
+  let godMode = true, death = null, retryPressed = false, padRetry = false;
+  try { const saved = localStorage.getItem('starward.god'); if (saved !== null) godMode = saved === '1'; } catch { /* no storage */ }
   const blasters = createBlasters(scene, { effects, lab, marks });
   // The squad finds its way round the crates and walls on a navigation grid.
   // In the back corner, the transformer the room's lights hang on (an obstacle like a crate).
@@ -867,6 +873,7 @@ function init() {
   function boltMeets(bolt, a, b) {
     const wall = lab.segmentHit(a, b, box => box.kind === 'rail'), end = wall ? wall.point : b;
     if (!bolt.deflected) {
+      if (death) return null;
       chest.set(motion.x, 1.05, motion.z);
       // Guarding, the blade takes a bolt coming at him from the front, and any
       // bolt it has gone out to meet (from behind, or passing close by).
@@ -883,7 +890,11 @@ function init() {
       if (dodge > 0) return null;
       heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
       const body = closestSegments(a, end, heroFeet, heroHead);
-      if (body.distance < 0.26) { burnHero(bolt, body.c1); return 'spent'; }
+      if (body.distance < 0.26) {
+        burnHero(bolt, body.c1);
+        if (!godMode) killHero('bolt', { point: body.c1, direction: bolt.velocity });
+        return 'spent';
+      }
       return null;
     }
     let best = null, struck = null;
@@ -928,9 +939,10 @@ function init() {
     if (reach < blast.radius) {
       const falloff = (1 - reach / blast.radius) ** 1.1;
       const direction = reach > 1e-3 ? toHero.clone().divideScalar(reach) : new THREE.Vector3(1, 0, 0);
-      if (reach < blast.knock && !knockdown.active) knockHero(direction, Math.max(0.45, falloff));
+      if (!godMode && !death && reach < FEEL.death.blast) killHero('blast', { point: at, direction, falloff: Math.max(0.6, falloff) });
+      else if (reach < blast.knock && !knockdown.active) knockHero(direction, Math.max(0.45, falloff));
       else if (reach < blast.knock) knockdown.knock(direction.clone().multiplyScalar(3 * falloff).setY(2 * falloff));
-      else { motion.vx += direction.x * 6 * falloff; motion.vz += direction.z * 6 * falloff; }
+      else if (!death) { motion.vx += direction.x * 6 * falloff; motion.vz += direction.z * 6 * falloff; }
     }
     const near = Math.max(0, 1 - reach / 14);
     // The whole view rocks: hard at his feet, still felt across the room.
@@ -941,6 +953,49 @@ function init() {
     stopFor(0.012, 0.05);
     audio.boom(at, Math.max(0, 1 - reach / 7));
     noise(at, 15, { alarm: true, from: character.root.position });
+  }
+  /**
+   * God mode off, one mistake: he falls dead where the hit throws him. A
+   * bolt: a charred wound where it went in, red sprayed out the other side,
+   * a twist as he drops. A blast: thrown hard and tumbling, torn and
+   * spattered over the side that faced it, red flying everywhere. Then the
+   * moment slows, the sound sinks, his blade goes out, his body bleeds where
+   * it lies — and "MORT", a press away from the next try.
+   */
+  function killHero(cause, { point, direction, falloff = 1 }) {
+    if (death) return;
+    const D = FEEL.death, bones = character.rig.bones, flat = direction.clone().setY(0).normalize();
+    death = { cause, age: 0, lying: 0, radioed: false, pooled: false };
+    breakStreak();
+    unskewer();
+    combat.reset();
+    trail.clear();
+    dash = lunge = turn = intent = null;
+    if (held) { held.drop(); held = null; }
+    character.root.updateMatrixWorld(true);
+    const chestAt = bones.Spine2.getWorldPosition(new THREE.Vector3()), up = new THREE.Vector3(0, 1, 0);
+    if (cause === 'bolt') {
+      knockdown.knock(flat.clone().multiplyScalar(D.bolt.push).setY(D.bolt.lift), { spin: D.bolt.spin, dead: true, hit: { at: point, velocity: flat.clone().multiplyScalar(D.bolt.hit) } });
+      wounds.strike(bones, point, flat.clone().negate(), 'bolt');
+      effects.bleed(point, flat, up, { speed: 3, amount: D.bleed.bolt });
+    } else {
+      const velocity = flat.clone().multiplyScalar(pick(FEEL.blast.speed) * falloff * D.blastThrow).setY(pick(FEEL.blast.lift) * falloff * D.blastThrow);
+      knockdown.knock(velocity, { spin: pick(FEEL.blast.tumble) * 1.3, dead: true });
+      wounds.riddle(bones, flat.clone().negate(), Math.round(pick(D.wound.blast.count)));
+      effects.bleed(chestAt, flat, up, { speed: 5, amount: D.bleed.blast });
+      effects.bleed(chestAt, new THREE.Vector3(-flat.z, 0, flat.x).multiplyScalar(Math.random() < 0.5 ? 1 : -1).add(flat).normalize(), up, { speed: 4, amount: D.bleed.blast * 0.6 });
+    }
+    // His body keeps bleeding where it lies.
+    for (const name of cause === 'bolt' ? ['Spine2'] : ['Spine2', 'Hips', 'Head', 'LeftForeArm']) effects.drip(bones[name], pick(D.drip), cause === 'bolt' ? 1.3 : 1.6);
+    const [hold, recover] = D.slow;
+    stopFor(hold, recover);
+    trauma.add(0.65);
+    rumble(1, 0.8, 0.45);
+    shove(flat, FEEL.camera.kick * 1.5);
+    punch(FEEL.camera.punch * 1.6);
+    audio.death();
+    if (motion.saber > 0.5) audio.retract();
+    bladeReady = false;
   }
   function knockHero(direction, falloff) {
     breakStreak();
@@ -1012,6 +1067,7 @@ function init() {
       if (event.code === 'KeyH') togglePanel('help');
       if (event.code === 'KeyF') fullscreen();
       if (event.code === 'KeyT') restart();
+      if (death && ['Enter', 'Space', 'KeyJ', 'KeyK'].includes(event.code)) retryPressed = true;
       if (event.code === 'Space') dashPressed = true;
       if (event.code === 'KeyE') twirlPressed = true;
       if (event.code === 'KeyJ') attackPressed = true;
@@ -1033,6 +1089,9 @@ function init() {
   function setPause(value) { paused = value; clearInput(); $('#pause-overlay').hidden = !paused; if (!paused) renderer.domElement.focus(); }
   function reset() {
     knockdown.stop();
+    death = null;
+    wounds.clear();
+    $('#death').classList.remove('on');
     motion.reset(); character.root.position.set(0, 0, 0); character.root.rotation.y = motion.heading;
     character.update({ dt: 0, time, speed: 0, runBlend: 0, turnRate: 0 });
     combat.reset(); trail.clear(); cape.reset(); bladeReady = false; cameraFocus.set(0, 0.6, 0);
@@ -1079,6 +1138,13 @@ function init() {
   audio.volume = Number($('#audio-volume').value);
   $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; if (audio.enabled) audio.start(); });
   $('#audio-volume').addEventListener('input', event => { audio.volume = Number(event.target.value); });
+  $('#god-mode').checked = godMode;
+  document.body.classList.toggle('god', godMode);
+  $('#god-mode').addEventListener('change', event => {
+    godMode = event.target.checked;
+    document.body.classList.toggle('god', godMode);
+    try { localStorage.setItem('starward.god', godMode ? '1' : '0'); } catch { /* no storage */ }
+  });
   rumbleOn = $('#rumble').checked;
   $('#rumble').addEventListener('change', event => { rumbleOn = event.target.checked; });
   document.body.classList.toggle('tech-info', $('#tech-info').checked);
@@ -1106,6 +1172,27 @@ function init() {
       const sim = dt * (hitStop ? hitStopScale(hitStop.age, hitStop) : 1);
       if (hitStop && (hitStop.age += dt) > hitStop.hold + hitStop.recover) hitStop = null;
       time += sim;
+      if (death) {
+        death.age += dt;
+        // His blade goes out as he falls; a trooper tells the others.
+        motion.saber = Math.max(0, motion.saber - sim * 3);
+        if (!death.radioed && death.age > 0.8) {
+          death.radioed = true;
+          const near = troopers.filter(trooper => !trooper.dead).sort((a, b) => a.root.position.distanceTo(character.root.position) - b.root.position.distanceTo(character.root.position))[0];
+          if (near) audio.radio(near.root.position, 'down', near);
+        }
+        // Lying still, a pool spreads from under him.
+        death.lying += sim;
+        if (!death.pooled && death.lying > FEEL.death.pool.after && knockdown.still > 0.2) {
+          death.pooled = true;
+          const chestAt = character.rig.bones.Spine2.getWorldPosition(new THREE.Vector3());
+          wounds.spill(chestAt.lerp(knockdown.position, 0.5));
+        }
+        wounds.update(sim);
+        $('#death').classList.toggle('on', death.age > FEEL.death.show);
+        if (retryPressed && death.age > FEEL.death.retry) restart();
+      }
+      retryPressed = false;
       let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft')) + joystick.x;
       let y = Number(keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) + joystick.y;
       let sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') || joystick.running;
@@ -1140,6 +1227,10 @@ function init() {
         const dashButton = !!gamepad.buttons[3]?.pressed;
         if (dashButton && !padDash) dashPressed = true;
         padDash = dashButton;
+        // Dead: A, B or Start, and the next try begins.
+        const retryButton = [0, 1, 9].some(index => gamepad.buttons[index]?.pressed);
+        if (retryButton && !padRetry) retryPressed = true;
+        padRetry = retryButton;
         const restartButton = !!gamepad.buttons[10]?.pressed;
         if (restartButton && !padRestart) restart();
         padRestart = restartButton;
@@ -1269,6 +1360,7 @@ function init() {
       // The squad: senses, decisions, orders; then the shots leave the muzzles.
       const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises, darkness: night });
       noises.length = 0;
+      if (death) thoughts.shots.length = 0;
       // Reinforcements: the alarm, the door, the men coming out one by one.
       const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
       for (const event of reinforcements.update(sim, { living, entering })) {
@@ -1321,7 +1413,7 @@ function init() {
           if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
           if (item.type === 'armor') audio.clank(trooper.root.position);
           // A grenade leaves his hand (or drops at his feet if he was knocked over).
-          if (item.type === 'grenade') {
+          if (item.type === 'grenade' && !death) {
             if (item.dropped) grenades.drop(item.from);
             else grenades.throwAt(item.from, item.target, { fuse: pick(FEEL.grenade.fuse) });
             audio.toss(item.from);
@@ -1459,13 +1551,14 @@ function init() {
       promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight).toFixed(0)}px)`;
       promptEl.dataset.device = lastDevice;
     }
+    if (death) $('#death').dataset.device = lastDevice;
     composer.render(dt);
     fps = damp(fps, 1 / Math.max(rawDt, 0.001), 1, dt);
     hudTimer += dt;
     if (hudTimer > 0.15) {
       hudTimer = 0;
       const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : knockdown.active ? 'À TERRE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      stateEl.textContent = paused ? 'EN PAUSE' : death ? 'MORT' : knockdown.active ? 'À TERRE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
@@ -1503,7 +1596,10 @@ function init() {
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
     squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
-    renderer, composer, reflection, prints, transformer, power, flashlights,
+    renderer, composer, reflection, prints, transformer, power, flashlights, wounds, knockdown,
+    get death() { return death; },
+    get god() { return godMode; },
+    set god(value) { godMode = value; $('#god-mode').checked = value; document.body.classList.toggle('god', value); },
     get night() { return night; },
     camera,
     /** For checks: the lit blade this frame. */

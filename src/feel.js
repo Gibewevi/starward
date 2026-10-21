@@ -225,6 +225,21 @@ export const FEEL = {
     fuse: [1.9, 2.4], // s
     reach: 3.4, // m: the red circle on the floor
   },
+  // Die and retry (god mode off): one mistake and he is dead — a bolt through him, a grenade at his feet.
+  death: {
+    blast: 2.4, // m: a grenade this close kills him (further, it throws him off his feet and he gets up)
+    blastThrow: 1.25, // the blast throws his body this much harder than it knocks him down alive
+    bolt: { push: 1.4, lift: 0.4, spin: 1.1, hit: 4.5 }, // m/s, m/s, rad/s, and m/s on the part hit
+    slow: [0.08, 1.3], // s: the moment held, then the slow motion easing back
+    show: 0.9, retry: 0.7, // s before "MORT" shows, and before a press can start again
+    bleed: { bolt: 1.7, blast: 2.8 }, // how much he sprays (as a cut limb's spray)
+    drip: [3.5, 5], // s his body keeps bleeding as it falls and lies
+    pool: { after: 0.9, size: [0.45, 0.7], spread: [4, 6] }, // s (slowed time) after he falls, it starts under him: m across at most, s to spread
+    wound: {
+      bolt: { specks: [10, 15], spread: 0.04, size: [1.6, 2.8], char: 0.35 },
+      blast: { specks: [6, 11], spread: 0.055, size: [1.4, 2.6], char: 0.12, count: [5, 8] },
+    },
+  },
   blast: {
     radius: 4.6, // m: bodies are thrown within this
     speed: [5.5, 8.5], lift: [3.2, 5.2], tumble: [3, 7], // at point blank: m/s, m/s, rad/s

@@ -15,6 +15,11 @@ import { ease } from './tween.js';
  *
  * knock(velocity) starts it; update(dt) returns null while he is down and
  * { x, z, heading } the moment he is back on his feet.
+ *
+ * knock(velocity, { dead: true }): he is dead — no muscles, a limp body that
+ * falls where the hit throws it and never gets up (a blast still moves it).
+ * `hit` ({ at, velocity }): the part nearest `at` takes a push of its own (a
+ * bolt through the shoulder twists him round as he goes down).
  */
 const JOINTS = [
   ['hips', 'Hips', 0.13, 4], ['chest', 'Spine2', 0.14, 4], ['neck', 'Neck', 0.06, 1], ['head', 'Head', 0.1, 1.5],
@@ -76,14 +81,15 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
     ['head', 'chest', [0, 0.2, 0.08]],
   ];
   function muscles() {
-    if (!state || state.phase === 'rising' || effort <= 0 || !frame()) return;
+    if (!state || state.dead || state.phase === 'rising' || effort <= 0 || !frame()) return;
     for (const [name, anchor, [x, y, z]] of targets) {
       const target = temp.copy(P(anchor)).addScaledVector(left, x).addScaledVector(up, y).addScaledVector(front, z);
       P(name).lerp(target, 0.035 * effort);
     }
   }
 
-  function knock(velocity, { spin = 4 + random() * 4 } = {}) {
+  function knock(velocity, { spin = 4 + random() * 4, dead = false, hit = null } = {}) {
+    dead ||= Boolean(state?.dead);
     if (state?.phase === 'rising') state = null;
     if (!state) build();
     const all = ragdoll.particles.map((_, i) => i);
@@ -95,8 +101,13 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
       const particle = ragdoll.particles[i];
       ragdoll.push([i], temp.crossVectors(axis, new THREE.Vector3().subVectors(particle.position, centre)).add(velocity).multiplyScalar(0.93 + random() * 0.14));
     }
-    state = { phase: 'flying', age: 0, still: 0 };
-    effort = 1;
+    if (hit) {
+      let nearest = 0;
+      ragdoll.particles.forEach((particle, i) => { if (particle.position.distanceToSquared(hit.at) < ragdoll.particles[nearest].position.distanceToSquared(hit.at)) nearest = i; });
+      ragdoll.push([nearest], hit.velocity);
+    }
+    state = { phase: 'flying', age: 0, still: 0, dead };
+    effort = dead ? 0 : 1;
     return true;
   }
 
@@ -162,6 +173,8 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
 
   function update(dt, time = 0) {
     if (!state || !(dt > 0)) return null;
+    // Dead and lying still: nothing more to work out.
+    if (state.dead && state.still > 1.5) return null;
     if (state.phase === 'rising') {
       if (!riseStep(dt)) return null;
       const result = { x: root.position.x, z: root.position.z, heading: state.heading };
@@ -173,12 +186,12 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
     ragdoll.step(dt);
     // Flying he braces; down, he stays curled, his effort easing off.
     const airborne = P('hips').y > 0.35;
-    effort += ((airborne ? 1 : 0.18) - effort) * (1 - Math.exp(-4 * dt));
+    if (!state.dead) effort += ((airborne ? 1 : 0.18) - effort) * (1 - Math.exp(-4 * dt));
     let fastest = 0;
     for (let i = 0; i < ragdoll.particles.length; i++) fastest = Math.max(fastest, ragdoll.velocity(i, temp).length());
     state.still = fastest < 0.5 ? state.still + dt : 0;
     fit();
-    if ((state.age > 0.9 && state.still > 0.3) || state.age > 2.6) beginRise(time);
+    if (!state.dead && ((state.age > 0.9 && state.still > 0.3) || state.age > 2.6)) beginRise(time);
     return null;
   }
   /** Back on his feet at once (the hero is reset). */
@@ -186,6 +199,9 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
   return {
     knock, update, stop,
     get active() { return Boolean(state); },
+    get dead() { return Boolean(state?.dead); },
+    /** How long he has lain still (s). */
+    get still() { return state?.still ?? 0; },
     get phase() { return state?.phase ?? null; },
     /** Where his hips are (the camera follows them). */
     get position() { return ragdoll && state?.phase !== 'rising' ? P('hips') : root.position; },

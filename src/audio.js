@@ -514,6 +514,30 @@ export function createAudio({ context = null } = {}) {
       }
     },
 
+    /**
+     * The hero dies: a heavy dull hit, the room sinking under water, a ringing
+     * in the ears and two slow heartbeats — then the sound comes back.
+     */
+    death() {
+      if (!this.enabled || !ready) return;
+      const v = voice(null, { gain: 1.4, reverb: 0.5 });
+      tone(v.input, { from: 90, to: 32, duration: 0.7, gain: 0.8, attack: 0.002 });
+      hiss(v.input, { buffer: pink, type: 'lowpass', frequency: 500, to: 120, duration: 0.9, gain: 0.6, attack: 0.003 });
+      for (const delay of [0.55, 1.45]) {
+        tone(v.input, { from: 58, to: 40, duration: 0.16, gain: 0.55, delay });
+        tone(v.input, { from: 52, to: 36, duration: 0.18, gain: 0.4, delay: delay + 0.2 });
+      }
+      const now = ctx.currentTime;
+      muffle.frequency.cancelScheduledValues(now);
+      muffle.frequency.setValueAtTime(muffle.frequency.value, now);
+      muffle.frequency.exponentialRampToValueAtTime(420, now + 0.08);
+      muffle.frequency.setTargetAtTime(20000, now + 1.6, 0.7);
+      const ears = ctx.createGain();
+      ears.gain.value = 1;
+      ears.connect(master);
+      tone(ears, { from: 3900, to: 3850, duration: 2.6, gain: 0.03, attack: 0.1 });
+    },
+
     // ---- The transformer and the blackout ------------------------------------------------
     /** Electricity biting: a tearing crackle, a few bright chirps, a dull thump. */
     zap(at = null, strength = 1) {
