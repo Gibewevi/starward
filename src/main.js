@@ -1168,7 +1168,7 @@ function init() {
   const audio = createAudio();
   audio.enabled = $('#audio-enabled').checked;
   audio.volume = Number($('#audio-volume').value);
-  const radio = createRadioComms({ element: $('#radio-comms'), audio });
+  const radio = createRadioComms({ element: $('#radio-comms'), marker: $('#radio-speaker-marker'), camera, audio });
   const radioCall = (kind, speaker) => radio.offer(kind, speaker, Math.max(0, troopers.indexOf(speaker)));
   // A focused visual/audio preview for checking this same HUD in the real scene.
   const radioPreview = new URLSearchParams(location.search).get('radioPreview');

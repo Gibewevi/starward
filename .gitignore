@@ -1,5 +1,18 @@
 node_modules/
 dist/
+.venv-radio/
+.voice-cache/
+artifacts/radio-chatterbox-preview/
+artifacts/radio-chatterbox-staging/
+artifacts/radio-voice-references/
+artifacts/radio-voice-candidates/
+artifacts/radio-native-candidates/
+artifacts/radio-edge-backup/
+artifacts/radio-chatterbox-v1-backup/
+artifacts/radio-qwen-preview/
+artifacts/radio-qwen-staging/
+artifacts/radio-qwen-clone-preview/
+artifacts/radio-qwen-clone-staging/
 .playwright/
 *.log
 # Mantaflow noise cache written by scripts/explosion-blender.py

@@ -137,9 +137,70 @@ Le modèle du personnage a été créé pour ce prototype. Le corps est un maill
 
 ## Communications ennemies
 
-Une fenêtre radio discrète s'affiche en bas à droite quand l'escouade repère ou perd le Jedi, change de position, lance une grenade, perd un soldat, appelle des renforts ou réagit à la coupure de courant. Quatre portraits pixel art distinguent les voix. Les appels urgents passent avant les ordres courants ; les répliques varient et chaque type d'annonce a un délai pour éviter les répétitions.
+Une fenêtre radio translucide s'affiche en bas à droite quand l'escouade repère ou perd le Jedi, change de position, lance une grenade, perd un soldat, appelle des renforts ou réagit à la coupure de courant. Le portrait est découpé sur le fond de la fenêtre ; un petit marqueur désigne le soldat qui parle. Les appels de routine sont rares, les annonces urgentes ont priorité et les répliques varient. Si le locuteur meurt, le son et l'image se coupent avec un bref décrochage radio.
 
-Lorsque le son est activé, les répliques françaises préenregistrées sont jouées à travers un filtre radio étroit, avec grésillements et clics synchronisés. Elles fonctionnent aussi dans les navigateurs sans synthèse vocale. Si un fichier manque, la synthèse vocale du navigateur prend le relais quand elle est disponible. Le script `scripts/build-radio-voice.ps1` régénère les 36 répliques avec la voix locale française Microsoft Paul de Windows ; aucun service vocal en ligne n'est nécessaire pour jouer.
+Lorsque le son est activé, les répliques françaises préenregistrées sont jouées localement à travers un filtre de talkie-walkie : clic d'ouverture juste avant la voix, souffle léger, grésillements irréguliers et bande étroite qui garde les mots lisibles. Les fichiers actuels utilisent la quatrième voix française clonée avec Qwen3-TTS pour tous les soldats. La synthèse vocale du navigateur sert de secours si un fichier manque. Aucun appel à un service vocal n'est effectué pendant le jeu.
+
+### Voix françaises locales Qwen3-TTS
+
+`scripts/build-radio-voice-qwen-clone.py` propose quatre locuteurs humains français avec [Qwen3-TTS Base](https://github.com/QwenLM/Qwen3-TTS) ; la quatrième voix est retenue pour les 144 fichiers audio attendus par le jeu. Les références CC0 et leur transcription sont préparées par `scripts/fetch-radio-voice-references.py` dans `artifacts/radio-voice-references/`. La synthèse se fait localement sur GPU NVIDIA ; les modèles sont conservés dans `.voice-cache/` après le premier téléchargement. Préparer un environnement Python 3.11 ou 3.12 :
+
+```powershell
+python -m venv .venv-radio
+.\.venv-radio\Scripts\python.exe -m pip install qwen-tts==0.1.1 faster-whisper==1.2.1 librosa soundfile imageio-ffmpeg pyarrow==17.0.0
+.\.venv-radio\Scripts\python.exe -m pip install --force-reinstall torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+.\.venv-radio\Scripts\python.exe -c "import torch; print(torch.cuda.is_available())"
+```
+
+La dernière commande doit afficher `True`. La première génération télécharge les modèles et demande plusieurs gigaoctets de place dans `.voice-cache/`.
+
+```powershell
+.\.venv-radio\Scripts\python.exe scripts/fetch-radio-voice-references.py
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-qwen-clone.py --preview
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-qwen-clone.py --all --voice 3
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-qwen-clone.py --install --voice 3
+```
+
+`--preview` crée quatre essais de « Contact visuel ! Il est près des caisses. » dans `artifacts/radio-qwen-clone-preview/`, sans toucher au jeu. `--all --voice 3` génère une seule voix pour toutes les répliques dans `artifacts/radio-qwen-clone-staging/` ; chaque prise est transcrite par un second modèle et les mots manquants déclenchent une nouvelle prise. Le contrôle est enregistré dans `quality.json`. `--install --voice 3` refuse un lot incomplet ou contenant une réplique non validée avant de copier cette voix aux quatre emplacements attendus sous `public/audio/radio/`. Pour refaire une seule réplique, utiliser par exemple `--all --voice 3 --only contact-0-3 --force` ; `--rescore` recalcule le contrôle si les équivalences phonétiques françaises changent. Le contrôle automatique protège surtout l'intelligibilité, pas le jeu d'acteur.
+
+### Ancienne génération Chatterbox
+
+`scripts/build-radio-voice-chatterbox.py` reste disponible comme ancien générateur. Il prépare hors ligne les 144 fichiers attendus par `src/radio-comms.js`, au format `public/audio/radio/{type}-{variante}-{voix}.mp3`. Son paquet dépend d'une version différente de Transformers : utiliser un environnement séparé de Qwen. Le script utilise Chatterbox Multilingual V3 depuis la révision officielle `5de7a54aa4e5e2baadb0182dde554908b48b85c2` : le paquet PyPI 0.1.7 seul expose encore l'ancienne signature sans option V3. Python 3.11 ou 3.12, Git et plusieurs gigaoctets d'espace libre sont nécessaires. Sous Windows avec une carte NVIDIA, installer PyTorch CUDA 12.4 dans un environnement séparé :
+
+```powershell
+python -m venv .venv-chatterbox
+.\.venv-chatterbox\Scripts\python.exe -m pip install chatterbox-tts==0.1.7 imageio-ffmpeg pyarrow==17.0.0
+.\.venv-chatterbox\Scripts\python.exe -m pip install --no-deps --force-reinstall "git+https://github.com/resemble-ai/chatterbox.git@5de7a54aa4e5e2baadb0182dde554908b48b85c2"
+.\.venv-chatterbox\Scripts\python.exe -m pip install --force-reinstall torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+.\.venv-chatterbox\Scripts\python.exe -c "import torch; print(torch.cuda.is_available())"
+```
+
+La dernière commande doit afficher `True` pour le GPU ; pour un essai sur CPU, utiliser `--device cpu` et conserver les roues PyTorch installées par la première commande. `imageio-ffmpeg` fournit FFmpeg si celui-ci n'est pas déjà installé. Sans option, le script vérifie uniquement le nombre de répliques et ne charge pas le modèle.
+
+Pour essayer la chaîne sans changer les sons du jeu :
+
+```powershell
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-chatterbox.py --preview
+```
+
+Les quatre essais sont enregistrés dans `artifacts/radio-chatterbox-preview/`. Sans références, ils utilisent tous la voix intégrée du modèle : ils valident la synthèse et le traitement audio, pas la distinction des soldats. Pour créer quatre voix, placer `voice-0.wav`, `voice-1.wav`, `voice-2.wav` et `voice-3.wav` dans `artifacts/radio-voice-references/` : quatre prises différentes en français, mono, de 6 à 12 secondes, propres et sans musique. Le script accepte aussi `--references chemin\du\dossier`. Relancer `--preview` pour les écouter, puis :
+
+Quatre références humaines de locuteurs se déclarant « Français de France » peuvent être préparées automatiquement :
+
+```powershell
+.\.venv-radio\Scripts\python.exe scripts/fetch-radio-voice-references.py
+```
+
+Les prises viennent de [Mozilla Common Voice](https://commonvoice.mozilla.org/fr/datasets), via le [jeu de données Parquet](https://huggingface.co/datasets/keypa/common_voice_22) à la révision `6c5c52eff0ba452a3258bf3d2591561cb7382e91`. Le dossier de sortie contient `sources.json` avec les locuteurs, prises et empreintes. Les enregistrements Common Voice sont publiés sous CC0 ; les métadonnées du dépôt Parquet portent la mention Apache-2.0. Le téléchargement initial du Parquet demande environ 670 Mo d'espace dans `.voice-cache/`.
+
+```powershell
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-chatterbox.py --all
+.\.venv-radio\Scripts\python.exe scripts/build-radio-voice-chatterbox.py --install
+```
+
+`--all` met les 144 MP3 en attente dans `artifacts/radio-chatterbox-staging/` sans modifier le jeu ; une relance conserve les fichiers déjà générés. `--install` exige les quatre références et le lot complet avant de copier les fichiers aux noms attendus dans `public/audio/radio/`. Les alertes sont synthétisées avec plus d'expressivité, légèrement accélérées et comprimées ; les blancs anormalement longs sont raccourcis au montage final. Les sorties sont ramenées à un niveau cohérent, en mono MP3 44,1 kHz, 128 kbit/s. Écouter les sons installés dans le jeu : la qualité et l'identité vocale dépendent fortement des références.
+
+Pour enregistrer des voix ElevenLabs plus expressives, `scripts/build-radio-voice-elevenlabs.py` utilise le modèle Eleven v4. Il faut configurer `ELEVENLABS_API_KEY` dans l'environnement local, lister les voix françaises avec `--list-voices`, puis configurer `ELEVENLABS_VOICE_IDS` avec quatre identifiants distincts. L'option `--preview` crée quatre essais dans `artifacts/radio-elevenlabs-preview` sans toucher aux voix du jeu ; un lancement sans option produit les 144 fichiers et les installe seulement une fois la génération entièrement réussie. La clé ne doit jamais être placée dans le code client ni dans le dépôt. La génération utilise les crédits du compte ElevenLabs.
 
 ## Développement
 

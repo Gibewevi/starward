@@ -39,6 +39,7 @@ export function createAudio({ context = null } = {}) {
   const listener = { x: 0, z: 0, rx: 1, rz: 0 };
   const voices = { shots: [], steps: [] };
   const lastRadio = new WeakMap();
+  const radioBuffers = new Map();
   let clock = 0, lastAnyRadio = -Infinity, tension = 0;
 
   // ---- The mix ---------------------------------------------------------------
@@ -620,6 +621,86 @@ export function createAudio({ context = null } = {}) {
      * kind: 'contact' (spotted him), 'move' (moving up), 'cover' (covering
      * fire), 'flank', 'down' (a man down), 'grenade', 'lost' (lost sight).
      */
+    /** A French line behind a push-to-talk click, a clear narrow radio band and light carrier noise. */
+    radioClip(path, { rate = 1, onStart, onEnd, onError } = {}) {
+      if (!this.enabled || !ready) return null;
+      let cancelled = false, source = null;
+      const handle = {
+        stop() {
+          cancelled = true;
+          try { source?.stop(); } catch { /* already stopped */ }
+        },
+      };
+      let request = radioBuffers.get(path);
+      if (!request) {
+        request = fetch(path).then(response => {
+          if (!response.ok) throw new Error(`Radio voice ${response.status}`);
+          return response.arrayBuffer();
+        }).then(bytes => ctx.decodeAudioData(bytes));
+        radioBuffers.set(path, request);
+        request.catch(() => radioBuffers.delete(path));
+      }
+      request.then(buffer => {
+        if (cancelled || !this.enabled) return;
+        source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.playbackRate.value = rate;
+        const high = ctx.createBiquadFilter(), low = ctx.createBiquadFilter(), presence = ctx.createBiquadFilter();
+        const shaper = ctx.createWaveShaper(), compressor = ctx.createDynamicsCompressor(), level = ctx.createGain();
+        high.type = 'highpass'; high.frequency.value = 280;
+        low.type = 'lowpass'; low.frequency.value = 2950;
+        presence.type = 'peaking'; presence.frequency.value = 1550; presence.Q.value = 0.9; presence.gain.value = 3;
+        const curve = new Float32Array(256);
+        for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh((i / 128 - 1) * 1.65) * 0.82;
+        shaper.curve = curve;
+        compressor.threshold.value = -27; compressor.knee.value = 8; compressor.ratio.value = 2.7;
+        compressor.attack.value = 0.004; compressor.release.value = 0.12;
+        level.gain.value = 1.06;
+        source.connect(high); high.connect(low); low.connect(presence); presence.connect(shaper);
+        shaper.connect(compressor); compressor.connect(level); level.connect(dry);
+        source.onended = () => { if (!cancelled) onEnd?.(); };
+        const pushToTalk = 0.11;
+        source.start(ctx.currentTime + pushToTalk);
+        onStart?.(pushToTalk + buffer.duration / rate);
+      }).catch(error => { if (!cancelled) onError?.(error); });
+      return handle;
+    },
+    /** Click opens the channel before speech; faint static and irregular crackle sit underneath it. */
+    radioCarrier(duration = 3) {
+      if (!this.enabled || !ready) return;
+      const v = voice(null, { gain: 0.5, reverb: 0 });
+      const gate = ctx.createGain();
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass'; band.frequency.value = 1700; band.Q.value = 0.7;
+      band.connect(gate); gate.connect(v.input);
+      const start = ctx.currentTime;
+      const staticBed = ctx.createBufferSource(), staticLevel = ctx.createGain();
+      staticBed.buffer = pink; staticBed.loop = true;
+      staticLevel.gain.setValueAtTime(0.0001, start);
+      staticLevel.gain.linearRampToValueAtTime(0.07, start + 0.08);
+      staticLevel.gain.setValueAtTime(0.07, start + Math.max(0.09, duration - 0.1));
+      staticLevel.gain.linearRampToValueAtTime(0.0001, start + duration);
+      staticBed.connect(staticLevel); staticLevel.connect(band);
+      staticBed.start(start); staticBed.stop(start + duration + 0.02);
+      // The opening squelch ends just before the first phoneme.
+      tone(band, { type: 'square', from: 1700, to: 760, duration: 0.035, gain: 0.16 });
+      hiss(band, { buffer: crackle, type: 'bandpass', frequency: 2250, duration: 0.095, gain: 0.36 });
+      for (let at = 0.35; at < duration - 0.16; at += 0.34 + Math.random() * 0.19) {
+        if (Math.random() < 0.72) hiss(band, { buffer: crackle, type: 'bandpass', frequency: 1400 + Math.random() * 1100, duration: 0.025, gain: 0.075, delay: at });
+      }
+      tone(band, { type: 'square', from: 1100, to: 600, duration: 0.028, gain: 0.1, delay: Math.max(0.25, duration - 0.055) });
+      return { stop() {
+        gate.gain.setTargetAtTime(0, ctx.currentTime, 0.012);
+        try { staticBed.stop(ctx.currentTime + 0.04); } catch { /* already ended */ }
+      } };
+    },
+    /** The last syllable is severed by a short broken-carrier snap. */
+    radioDrop() {
+      if (!this.enabled || !ready) return;
+      const v = voice(null, { gain: 0.35, reverb: 0 });
+      hiss(v.input, { buffer: crackle, type: 'bandpass', frequency: 1450, duration: 0.13, gain: 0.28 });
+      tone(v.input, { type: 'square', from: 1550, to: 420, duration: 0.065, gain: 0.12 });
+    },
     radio(at, kind, speaker = null) {
       if (!this.enabled || !ready) return false;
       if (clock - lastAnyRadio < 0.7) return false;
