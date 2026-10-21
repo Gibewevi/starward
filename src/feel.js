@@ -46,6 +46,8 @@ export const FEEL = {
     // hangs at these rates (rad/s) and twirls (rad/s, m); px; brightness; stirred within reach (m) this much, settling in s.
     dust: { density: 4.5, cap: 8000, wander: { reach: 0.3, rate: [0.08, 0.25] }, swirl: [0.4, 1.2], orbit: [0.03, 0.1], size: [1, 1.4], glow: 0.6, reach: 0.8, stir: 1.4, settle: 0.6 },
     onAfter: [0.7, 1.9], // s after the blackout before each trooper switches his lamp on
+    // A dead man's lamp: on where it fell for a few seconds (s), then flickering out over this long (s), this many flashes a second at most.
+    dying: { after: [3, 6], flicker: [0.9, 1.8], rate: 14 },
     sight: 4.5, saberSight: 9, // m: how far a trooper sees the hero in the dark — and when his blade is lit
   },
   // Red footprints: a foot coming down in red drops takes some of them up and

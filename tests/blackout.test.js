@@ -205,6 +205,42 @@ test('the beam pass: every beam into the shader, the real lights with their shad
   pass.dispose();
 });
 
+test('in the dark a dead man’s lamp stays on a few seconds, flickers, and goes out for good; a man dead before the dark never lights his', () => {
+  const { scene, lab } = room();
+  const troopers = [0, 1].map(i => createStormtrooper({ scene, position: new THREE.Vector3(i * 3 - 1.5, 0, -2), heading: 0, random: seeded(50 + i), lab }));
+  const [living, dying] = troopers;
+  const early = createStormtrooper({ scene, position: new THREE.Vector3(4, 0, -2), heading: 0, random: seeded(53), lab });
+  early.die('blast', new THREE.Vector3(1, 0, 0));
+  const all = [...troopers, early];
+  const lamps = createFlashlights(scene, { random: seeded(54) });
+  const hero = new THREE.Vector3(0, 1, 3);
+  lamps.darkness(all, [0.2, 0.3]);
+  let time = 0;
+  const step = () => { time += 1 / 60; for (const trooper of all) trooper.update(1 / 60, time); return lamps.update(1 / 60, { troopers: all, hero, night: 1 }); };
+  for (let i = 0; i < 60; i++) step();
+  assert.ok(lamps.beams.get(dying).on > 0.9 && lamps.beams.get(living).on > 0.9, 'both lamps on');
+  assert.ok(!(lamps.beams.get(early)?.on > 0), 'the man dead before the dark: never lit');
+  dying.die('blast', new THREE.Vector3(-1, 0, 0));
+  const { after, flicker } = FEEL.blackout.dying;
+  const levels = [], clicks = [];
+  let outAt = null;
+  for (let t = 0; t < after[1] + flicker[1] + 1; t += 1 / 60) {
+    for (const trooper of step()) clicks.push([trooper, t]);
+    const on = lamps.beams.get(dying).on;
+    levels.push([t, on]);
+    if (outAt === null && on === 0) outAt = t;
+  }
+  // On at first where he fell, flickering later, then out.
+  assert.ok(levels.filter(([t]) => t < after[0]).every(([, on]) => on > 0.9), 'still on a few seconds');
+  const failing = levels.filter(([t]) => t >= after[0] && t < outAt);
+  assert.ok(failing.some(([, on]) => on < 0.2) && failing.some(([, on]) => on > 0.3), 'flickering');
+  assert.ok(outAt !== null && outAt >= after[0] && outAt <= after[1] + flicker[1] + 0.05, `out (${outAt?.toFixed(2)} s)`);
+  assert.ok(levels.filter(([t]) => t > outAt).every(([, on]) => on === 0), 'for good');
+  assert.ok(!lamps.beams.get(dying).glint.visible && !lamps.volumes.some(volume => volume.lens.distanceTo(lamps.beams.get(dying).lens) < 1e-6), 'no glint, no beam');
+  assert.equal(clicks.filter(([trooper]) => trooper === dying).length, 1, 'a last click');
+  assert.ok(lamps.beams.get(living).on > 0.9, 'the living man’s lamp on all along');
+});
+
 test('in the dark a trooper sees the hero only close by — further if his blade is lit, or in the beam of his lamp', () => {
   const { lab } = room();
   const make = () => {

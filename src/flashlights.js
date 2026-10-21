@@ -6,8 +6,10 @@ import { glowTexture } from './kit.js';
  * Lamps under the troopers' rifle barrels, for the dark. Once the power is
  * cut each trooper switches his on after a moment (a click, a stutter, then
  * steady), and it goes where his rifle goes: sweeping the room as he looks
- * for the hero, onto the hero as he aims, and on the floor, still lit, by a
- * dead man's dropped rifle.
+ * for the hero, onto the hero as he aims, and on the floor by a dead man.
+ * A dead man's lamp stays on where it fell for a few seconds, then flickers
+ * — fewer and dimmer flashes, as a dying battery — and goes out for good (a
+ * last click). A man already dead when the power goes never switches his on.
  *
  * The light is a warm white, wide and soft-edged, with a little glow round
  * the lens that lights the man himself and what stands near him. Every rifle
@@ -133,7 +135,7 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     glint.scale.setScalar(0.2);
     halo.scale.setScalar(0.85);
     for (const object of [glint, halo]) { object.visible = false; object.layers.set(LAYER); scene.add(object); }
-    beam = { glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1) };
+    beam = { glint, halo, on: 0, switchAt: Infinity, switched: false, flicker: 0, reach: 1, lens: new THREE.Vector3(), forward: new THREE.Vector3(0, 0, 1), diesAt: Infinity, fading: 1, seed: random() * 100, out: false };
     beams.set(trooper, beam);
     return beam;
   }
@@ -141,7 +143,7 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
   function darkness(troopers, delay = FEEL.blackout.onAfter) {
     for (const trooper of troopers) {
       const beam = beamOf(trooper);
-      if (!beam.switched) beam.switchAt = clock + pick(delay, random);
+      if (!beam.switched && !trooper.dead) beam.switchAt = clock + pick(delay, random);
     }
   }
   /** The power back (a restart): all off. */
@@ -154,6 +156,15 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     dustGeometry.setDrawRange(0, 0);
   }
   const hide = beam => { beam.glint.visible = beam.halo.visible = false; };
+  /** A dead man's lamp: 1 until its battery starts to go, then fewer and dimmer flashes, then 0 for good. */
+  function failing(beam) {
+    if (clock < beam.diesAt) return 1;
+    const progress = (clock - beam.diesAt) / beam.fading;
+    if (progress >= 1) return 0;
+    const slot = Math.floor((clock - beam.diesAt) * FEEL.blackout.dying.rate);
+    const chance = Math.abs(Math.sin(slot * 12.9898 + beam.seed) * 43758.5453) % 1;
+    return chance > 0.08 + 0.85 * progress ** 1.5 ? (0.45 + 0.55 * chance) * (1 - 0.5 * progress) : 0.03;
+  }
   function update(dt, { troopers, hero, night = 0, stirs = [] }) {
     clock += dt;
     const clicks = [];
@@ -161,17 +172,21 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     for (const trooper of troopers) {
       const beam = beams.get(trooper) ?? (night > 0.5 ? beamOf(trooper) : null);
       if (!beam) continue;
-      // A newcomer in the dark switches his on too.
-      if (night > 0.5 && !beam.switched && beam.switchAt === Infinity) beam.switchAt = clock + pick(FEEL.blackout.onAfter, random) * 0.5;
+      // A newcomer in the dark switches his on too (not a dead man).
+      if (night > 0.5 && !beam.switched && beam.switchAt === Infinity && !trooper.dead) beam.switchAt = clock + pick(FEEL.blackout.onAfter, random) * 0.5;
       // Gone (a body cleared away): its lamp with it.
       const rifle = trooper.parts?.blaster;
       if (!rifle || !trooper.debris?.parent) { hide(beam); continue; }
+      if (trooper.dead && !beam.switched) beam.switchAt = Infinity;
       if (!beam.switched && clock >= beam.switchAt) { beam.switched = true; beam.flicker = 0.35; clicks.push(trooper); }
-      // Switched on: a stutter, then steady (the power gone back: off).
-      if (beam.switched) {
+      // Dead, his lamp lit: in a few seconds its battery starts to go.
+      if (trooper.dead && beam.switched && beam.diesAt === Infinity) { beam.diesAt = clock + pick(FEEL.blackout.dying.after, random); beam.fading = pick(FEEL.blackout.dying.flicker, random); }
+      // Switched on: a stutter, then steady (the power gone back: off); a dead man's, failing, then out.
+      if (beam.switched && !beam.out) {
         beam.flicker = Math.max(0, beam.flicker - dt);
-        const stutter = beam.flicker > 0 ? (Math.sin(beam.flicker * 90) > 0.2 ? 1 : 0.15) : 1;
-        beam.on = night * stutter;
+        const stutter = beam.flicker > 0 ? (Math.sin(beam.flicker * 90) > 0.2 ? 1 : 0.15) : 1, left = failing(beam);
+        if (left <= 0) { beam.out = true; clicks.push(trooper); }
+        beam.on = night * stutter * left;
       } else beam.on = 0;
       if (beam.on <= 0.01) { hide(beam); continue; }
       rifle.updateWorldMatrix(true, false);
