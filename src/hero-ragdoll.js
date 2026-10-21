@@ -20,6 +20,9 @@ import { ease } from './tween.js';
  * falls where the hit throws it and never gets up (a blast still moves it).
  * `hit` ({ at, velocity }): the part nearest `at` takes a push of its own (a
  * bolt through the shoulder twists him round as he goes down).
+ * `severed` ('Head', 'RightArm', 'LeftArm'): that part was cut off — the
+ * ragdoll is built without it (the caller hides the bone). `twitch` (s): a
+ * dead body's nerves still jerk its limbs, weaker and rarer as they pass.
  */
 const JOINTS = [
   ['hips', 'Hips', 0.13, 4], ['chest', 'Spine2', 0.14, 4], ['neck', 'Neck', 0.06, 1], ['head', 'Head', 0.1, 1.5],
@@ -39,6 +42,10 @@ const LINKS = [['torso', 'neck'], ['neck', 'head'], ['torso', 'upperArmL'], ['up
   ['torso', 'thighL'], ['thighL', 'shinL'], ['shinL', 'footL'], ['torso', 'thighR'], ['thighR', 'shinR'], ['shinR', 'footR']];
 // Ranges that keep the joints anatomical: elbows and knees do not fold flat, the head stays on.
 const LIMITS = [['shoulderL', 'handL', 0.14], ['shoulderR', 'handR', 0.14], ['hipL', 'footL', 0.26], ['hipR', 'footR', 0.26], ['crown', 'chest', 0.27], ['head', 'hips', 0.5], ['kneeL', 'chest', 0.22], ['kneeR', 'chest', 0.22]];
+// The joints that go with a severed part.
+const SEVERED = { Head: ['head', 'crown'], RightArm: ['elbowR', 'handR'], LeftArm: ['elbowL', 'handL'] };
+// What a dead body's nerves jerk.
+const TWITCHING = ['handL', 'handR', 'elbowL', 'elbowR', 'shoulderL', 'shoulderR', 'kneeL', 'kneeR', 'footL', 'footR', 'chest'];
 const AIMS = [['Neck', 'Head', 'head'], ['LeftArm', 'LeftForeArm', 'elbowL'], ['LeftForeArm', 'LeftHand', 'handL'], ['RightArm', 'RightForeArm', 'elbowR'], ['RightForeArm', 'RightHand', 'handR'],
   ['LeftUpLeg', 'LeftLeg', 'kneeL'], ['LeftLeg', 'LeftFoot', 'footL'], ['LeftFoot', 'LeftToeBase', 'toeL'], ['RightUpLeg', 'RightLeg', 'kneeR'], ['RightLeg', 'RightFoot', 'footR'], ['RightFoot', 'RightToeBase', 'toeR']];
 // One knee down, the other up, leaning forward: halfway up from the floor.
@@ -52,16 +59,17 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
   const up = new THREE.Vector3(), left = new THREE.Vector3(), front = new THREE.Vector3(), basis = new THREE.Matrix4(), quaternion = new THREE.Quaternion();
   const P = name => ragdoll.particles[index[name]].position;
 
-  function build() {
+  function build(severed = null) {
     root.updateMatrixWorld(true);
     ragdoll = new Ragdoll({ gravity: -11, damping: 0.995, friction: 0.3, bounce: 0.18 });
     index = {};
-    for (const [name, bone, radius, mass] of JOINTS) index[name] = ragdoll.addParticle({ name, position: bones[bone].getWorldPosition(temp), radius, mass });
-    index.crown = ragdoll.addParticle({ name: 'crown', position: bones.Head.localToWorld(temp.copy(CROWN)), radius: 0.1, mass: 1 });
+    const gone = new Set(SEVERED[severed] ?? []);
+    for (const [name, bone, radius, mass] of JOINTS) if (!gone.has(name)) index[name] = ragdoll.addParticle({ name, position: bones[bone].getWorldPosition(temp), radius, mass });
+    if (!gone.has('crown')) index.crown = ragdoll.addParticle({ name: 'crown', position: bones.Head.localToWorld(temp.copy(CROWN)), radius: 0.1, mass: 1 });
     const bodies = {};
-    for (const [name, members] of BODIES) bodies[name] = ragdoll.addBody({ name, indices: members.map(member => index[member]) });
-    for (const [a, b] of LINKS) ragdoll.connect(bodies[a], bodies[b]);
-    for (const [a, b, min] of LIMITS) ragdoll.addLimit(index[a], index[b], min);
+    for (const [name, members] of BODIES) if (members.every(member => member in index)) bodies[name] = ragdoll.addBody({ name, indices: members.map(member => index[member]) });
+    for (const [a, b] of LINKS) if (bodies[a] && bodies[b]) ragdoll.connect(bodies[a], bodies[b]);
+    for (const [a, b, min] of LIMITS) if (a in index && b in index) ragdoll.addLimit(index[a], index[b], min);
     for (const particle of ragdoll.particles) particle.kinematic = false;
     ragdoll.boxes = lab?.obstacles ?? [];
     ragdoll.drivers.push(muscles);
@@ -83,15 +91,16 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
   function muscles() {
     if (!state || state.dead || state.phase === 'rising' || effort <= 0 || !frame()) return;
     for (const [name, anchor, [x, y, z]] of targets) {
+      if (!(name in index)) continue;
       const target = temp.copy(P(anchor)).addScaledVector(left, x).addScaledVector(up, y).addScaledVector(front, z);
       P(name).lerp(target, 0.035 * effort);
     }
   }
 
-  function knock(velocity, { spin = 4 + random() * 4, dead = false, hit = null } = {}) {
+  function knock(velocity, { spin = 4 + random() * 4, dead = false, hit = null, severed = null, twitch = 0 } = {}) {
     dead ||= Boolean(state?.dead);
     if (state?.phase === 'rising') state = null;
-    if (!state) build();
+    if (!state) build(severed);
     const all = ragdoll.particles.map((_, i) => i);
     const centre = all.reduce((sum, i) => sum.add(ragdoll.particles[i].position), new THREE.Vector3()).divideScalar(all.length);
     // Thrown, and tumbling about an axis across the push.
@@ -106,7 +115,7 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
       ragdoll.particles.forEach((particle, i) => { if (particle.position.distanceToSquared(hit.at) < ragdoll.particles[nearest].position.distanceToSquared(hit.at)) nearest = i; });
       ragdoll.push([nearest], hit.velocity);
     }
-    state = { phase: 'flying', age: 0, still: 0, dead };
+    state = { phase: 'flying', age: 0, still: 0, dead, twitch, twitchTotal: twitch, nextTwitch: 0 };
     effort = dead ? 0 : 1;
     return true;
   }
@@ -121,8 +130,8 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
     bones.Hips.quaternion.setFromRotationMatrix(basis.makeBasis(left, up, front));
     for (const name of ['Spine', 'Spine1', 'Spine2', 'LeftShoulder', 'RightShoulder']) bones[name].quaternion.identity();
     root.updateMatrixWorld(true);
-    for (const [bone, child, particle] of AIMS) aimBone(bones[bone], bones[bone].getWorldPosition(from), bones[child].getWorldPosition(current), P(particle));
-    aimBone(bones.Head, bones.Head.getWorldPosition(from), bones.Head.localToWorld(current.copy(CROWN)), P('crown'));
+    for (const [bone, child, particle] of AIMS) if (particle in index) aimBone(bones[bone], bones[bone].getWorldPosition(from), bones[child].getWorldPosition(current), P(particle));
+    if ('crown' in index) aimBone(bones.Head, bones.Head.getWorldPosition(from), bones.Head.localToWorld(current.copy(CROWN)), P('crown'));
     character.skeleton.update();
   }
 
@@ -174,7 +183,7 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
   function update(dt, time = 0) {
     if (!state || !(dt > 0)) return null;
     // Dead and lying still: nothing more to work out.
-    if (state.dead && state.still > 1.5) return null;
+    if (state.dead && state.still > 1.5 && !(state.twitch > 0)) return null;
     if (state.phase === 'rising') {
       if (!riseStep(dt)) return null;
       const result = { x: root.position.x, z: root.position.z, heading: state.heading };
@@ -183,6 +192,7 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
       return result;
     }
     state.age += dt;
+    if (state.twitch > 0) twitchStep(dt);
     ragdoll.step(dt);
     // Flying he braces; down, he stays curled, his effort easing off.
     const airborne = P('hips').y > 0.35;
@@ -193,6 +203,16 @@ export function createHeroRagdoll(character, { lab = null, random = Math.random 
     fit();
     if (!state.dead && ((state.age > 0.9 && state.still > 0.3) || state.age > 2.6)) beginRise(time);
     return null;
+  }
+  /** A dead body's nerves: a limb jerks, then another — weaker and rarer as the seconds pass. */
+  function twitchStep(dt) {
+    state.twitch -= dt;
+    if ((state.nextTwitch -= dt) > 0) return;
+    const strength = Math.max(0, state.twitch / state.twitchTotal);
+    const limbs = TWITCHING.filter(name => name in index);
+    const name = limbs[Math.floor(random() * limbs.length)];
+    ragdoll.push([index[name]], temp.set(random() - 0.5, 0.3 + random() * 0.7, random() - 0.5).multiplyScalar(2.6 * strength * (0.5 + random() * 0.5)));
+    state.nextTwitch = (0.04 + random() * 0.22) / Math.max(0.25, strength);
   }
   /** Back on his feet at once (the hero is reset). */
   function stop() { state = null; ragdoll = null; }

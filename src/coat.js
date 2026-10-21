@@ -11,7 +11,7 @@ import { gradeCharacterMaterial } from './character-shading.js';
  */
 export const COAT_COLOR = '#5a3b2e';
 
-export function createCoat({ scene, character }) {
+export function createCoat({ scene, character, palette = null }) {
   const { bones } = character.rig;
   const ROWS = 12, COLUMNS = 27, COUNT = ROWS * COLUMNS;
   const TOP = 0.80, HEM = 0.24;
@@ -23,7 +23,7 @@ export function createCoat({ scene, character }) {
   const smooth = (a, b, value) => THREE.MathUtils.smoothstep(value, a, b);
 
   // Tailored rest shape in the pelvis frame: an A-line wrap open at the front.
-  const base = new THREE.Color(COAT_COLOR), fold = new THREE.Color('#432c23'), hem = new THREE.Color('#6a4a3c');
+  const base = new THREE.Color(palette?.base ?? COAT_COLOR), fold = new THREE.Color(palette?.fold ?? '#432c23'), hem = new THREE.Color(palette?.hem ?? '#6a4a3c');
   const color = new THREE.Color();
   for (let row = 0; row < ROWS; row++) {
     const t = row / (ROWS - 1), flare = Math.pow(t, 0.85);

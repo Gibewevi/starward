@@ -9,7 +9,8 @@ import * as THREE from 'three';
 export const IGNITE_TIME = 0.3;
 export const RETRACT_TIME = 0.22;
 
-export function createSaber({ socket, scene }) {
+export function createSaber({ socket, scene, color = 'blue' }) {
+  const red = color === 'red';
   const saber = new THREE.Group();
   saber.name = 'Lightsaber';
   socket.add(saber);
@@ -29,8 +30,8 @@ export function createSaber({ socket, scene }) {
   blade.position.y = 0.115;
   saber.add(blade);
   const length = 0.9;
-  const auraMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.12, 0.65, 5.5), transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-  const coreMaterial = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.8, 5.5, 10), toneMapped: false });
+  const auraMaterial = new THREE.MeshBasicMaterial({ color: red ? new THREE.Color(5.5, 0.11, 0.14) : new THREE.Color(0.12, 0.65, 5.5), transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+  const coreMaterial = new THREE.MeshBasicMaterial({ color: red ? new THREE.Color(10, 2.1, 1.6) : new THREE.Color(2.8, 5.5, 10), toneMapped: false });
   // The beam is widest where it leaves the emitter, by the hand, and tapers
   // towards the tip.
   const core = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.021, length, 8), coreMaterial);
@@ -42,8 +43,8 @@ export function createSaber({ socket, scene }) {
   emitter.position.y = 0.012;
   blade.add(core, aura, emitter);
   // Held low, the blade lights the floor more than the coat.
-  const bladeLight = new THREE.PointLight(0x2671ff, 5, 3.2, 1.7);
-  const tipLight = new THREE.PointLight(0x2375ff, 4, 2.6, 1.7);
+  const bladeLight = new THREE.PointLight(red ? 0xff2828 : 0x2671ff, 5, 3.2, 1.7);
+  const tipLight = new THREE.PointLight(red ? 0xff4234 : 0x2375ff, 4, 2.6, 1.7);
   scene.add(bladeLight, tipLight);
   const center = new THREE.Vector3(), tip = new THREE.Vector3();
   let extension = 1, lit = true, lastTime = null, burst = 0;

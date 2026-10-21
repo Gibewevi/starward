@@ -6,7 +6,7 @@ import * as THREE from 'three';
  * between frames the blade is swept around its hilt, so fast cuts draw round
  * arcs rather than straight chords. update(dt, base, tip, intensity 0..1).
  */
-export function createBladeTrail(scene, { lifetime = 0.16, subdivisions = 4 } = {}) {
+export function createBladeTrail(scene, { lifetime = 0.16, subdivisions = 4, color = 'blue' } = {}) {
   const MAX = 48;
   const samples = [];
   const positions = new Float32Array(MAX * 2 * 3), colors = new Float32Array(MAX * 2 * 3);
@@ -27,7 +27,8 @@ export function createBladeTrail(scene, { lifetime = 0.16, subdivisions = 4 } = 
   mesh.renderOrder = 2;
   scene.add(mesh);
 
-  const glow = new THREE.Color(0.1, 0.42, 1.9), core = new THREE.Color(0.42, 1.05, 2.9);
+  const glow = color === 'red' ? new THREE.Color(1.9, 0.1, 0.08) : new THREE.Color(0.1, 0.42, 1.9);
+  const core = color === 'red' ? new THREE.Color(2.9, 0.46, 0.32) : new THREE.Color(0.42, 1.05, 2.9);
   const lastBase = new THREE.Vector3(), lastDirection = new THREE.Vector3(), direction = new THREE.Vector3();
   const from = new THREE.Quaternion(), turn = new THREE.Quaternion(), step = new THREE.Vector3();
   const inner = new THREE.Vector3(), outer = new THREE.Vector3();

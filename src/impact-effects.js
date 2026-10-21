@@ -220,8 +220,8 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
     return i;
   }
   /** A burst along the blade's motion, fanned across the cut plane. */
-  /** saber: share of the sparks that take the blade's blue. */
-  function sparks(at, direction, normal, { count = 40, speed = 4, saber = 0 } = {}) {
+  /** saber/red: shares of sparks coloured by the respective blades. */
+  function sparks(at, direction, normal, { count = 40, speed = 4, saber = 0, red = 0 } = {}) {
     const v = new THREE.Vector3(), side = new THREE.Vector3().crossVectors(direction, normal);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
@@ -234,7 +234,8 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
       v.y += drop ? 0.2 + random() * 0.6 : 0.6 + random() * 2;
       // Staggered along their paths, so the burst never piles up in one blinding point.
       start.copy(at).addScaledVector(v, random() * 0.03);
-      emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6, !drop && random() < saber ? 1 : 0);
+      const tint = random();
+      emit(start, v, drop ? DROP : SPARK, 0.78 + random() * 0.17, drop ? 0.2 + random() * 0.08 : 0.32 + random() * 0.25, drop ? 2.8 + random() * 0.6 : 1.7 + random() * 0.6, drop ? 0 : tint < saber ? 1 : tint < saber + red ? 2 : 0);
     }
   }
   /**
@@ -338,11 +339,16 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
     nextLight = (nextLight + 1) % lights.length;
     tweens.cancel(slot.tween);
     slot.light.position.copy(at);
+    // Callers may pass a THREE.Color or a hex colour. Color.lerp() needs a
+    // Color instance; lerping a number produces NaN light channels, which
+    // blackens every physically shaded surface in the room.
+    const targetColor = color == null ? lightOrange : color.isColor ? color : new THREE.Color(color);
+    slot.light.color.copy(lightWhite);
     slot.tween = tweens.add({
       duration: 0.22, curve: ease.outQuad,
       update: (eased, progress) => {
         slot.light.intensity = power * 4 * (1 - eased);
-        slot.light.color.copy(lightWhite).lerp(color ?? lightOrange, ease.outCubic(progress));
+        slot.light.color.copy(lightWhite).lerp(targetColor, ease.outCubic(progress));
       },
       complete: () => { slot.light.intensity = 0; },
     });
@@ -564,7 +570,8 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
         streakColors.fill(0, l, l + 6);
         continue;
       }
-      if (blue[i]) glowColor.setRGB(0.9 + heat[i] * 1.4, 1.3 + heat[i] * 1.2, 2.6 + heat[i] * 0.6).multiplyScalar(Math.min(1, heat[i] * 2.2));
+      if (blue[i] === 1) glowColor.setRGB(0.9 + heat[i] * 1.4, 1.3 + heat[i] * 1.2, 2.6 + heat[i] * 0.6).multiplyScalar(Math.min(1, heat[i] * 2.2));
+      else if (blue[i] === 2) glowColor.setRGB(2.7 + heat[i] * 0.5, 0.32 + heat[i] * 0.55, 0.25 + heat[i] * 0.38).multiplyScalar(Math.min(1, heat[i] * 2.2));
       else if (explosive[i]) blastIncandescence(heat[i], glowColor);
       else incandescence(heat[i], glowColor);
       const flicker = type === EMBER ? 0.75 + 0.25 * Math.sin(seed[i] * 7 + heat[i] * 60) : 1;
@@ -625,7 +632,7 @@ export function createImpactEffects(scene, { random = Math.random, lab = null } 
     redDirty = true;
     glows.length = 0;
     tweens.clear();
-    for (const slot of lights) { slot.light.intensity = 0; slot.tween = null; }
+    for (const slot of lights) { slot.light.intensity = 0; slot.light.color.copy(lightWhite); slot.tween = null; }
     for (const slot of flareSlots) { slot.sprite.visible = false; slot.tween = null; }
     for (const slot of [...ringSlots, ...waveSlots]) { slot.mesh.visible = false; slot.tween = null; }
     update(0);

@@ -10,6 +10,33 @@ Cliquer une fois dans le jeu pour donner le focus au clavier.
 
 Pour observer le stormtrooper de face, de profil et de dos : **http://127.0.0.1:5173/stormtrooper.html**. Cette vue utilise le même modèle et les mêmes animations que le jeu.
 
+### Duel Jedi 1 contre 1
+
+Depuis le jeu, choisir **DUEL JEDI**, ou ouvrir **http://127.0.0.1:5173/duel.html**. Le joueur et un Jedi ennemi (robe sombre, sabre rouge) face à face sur un sol métallique. Entrée, A ou B relance aussitôt après l'issue ; l'écran de fin dit pourquoi on est mort.
+
+| Clavier | Manette | Duel |
+|---|---|---|
+| ZQSD / WASD / flèches | Stick gauche | Déplacement, toujours face à l'adversaire |
+| J ou B | B | Frapper, enchaîner ; garde adverse brisée : achever |
+| K maintenu | RB maintenu | Garde : la lame va à la rencontre du coup |
+| K / RB juste avant l'impact | RB | Parade parfaite : c'est l'attaquant qui vacille |
+| K / RB pendant son propre élan | RB | Retenir le coup (feinte) |
+| Espace | Y | Esquive : passe sous un coup, contourne la garde |
+| U / I | LT / RT | Attirer / projeter avec la Force (la projection écrase une garde) |
+| J / B martelé | B martelé | Lames croisées : repousser l'autre |
+| Entrée | A ou B | Recommencer |
+
+Le duel se joue sur trois jauges par combattant (`src/duel-rules.js`) :
+- **Énergie** (en haut) : frappes, blocages, esquives et Force la dépensent ; elle revient quand on cesse de dépenser, plus vite à distance. Épuisé, chaque blocage coûte presque deux fois plus d'équilibre, la garde s'affaisse, les épaules se soulèvent.
+- **Équilibre** (en dessous, ambre puis rouge) : chaque coup bloqué le remplit ; une parade parfaite remplit celui de l'attaquant. Il redescend quand on n'est plus pressé, plus vite en garde. Plein, la garde se brise : la lame est rejetée, le corps chancelle ; l'invite pixel « ACHEVER » apparaît et le coup de grâce, une taille à plat qui bondit sur lui, le décapite.
+- **Blessures** (les croix) : un coup net hors garde (de côté, pendant un élan, sur un adversaire ébranlé) blesse et repousse ; un court répit empêche l'enchaînement de tuer d'un coup. La troisième blessure tue.
+
+Deux coups qui arrivent au même instant s'entrechoquent : les deux combattants sont rejetés (« CHOC DE LAMES »). Plus rarement (au plus une fois toutes les 18 s), les lames restent bloquées l'une contre l'autre : corps-à-corps des lames, croisées en X, pluie d'étincelles des deux couleurs et de métal en fusion, lumière qui pulse bleu et rouge, ralenti et caméra qui se resserre, l'invite « MARTELER » ; le plus frais et le plus acharné repousse l'autre, qui perd l'équilibre. Un appui sur B qui ne peut pas encore partir (en plein coup, déséquilibré, enchaînement bloqué) est gardé un demi-seconde et part dès que possible ; un coup lancé d'un peu trop loin bondit vers l'adversaire, une esquive est annoncée et un coup pendant le répit d'une blessure brûle et repousse. Le coup imparable de l'adversaire est annoncé par un reflet rouge : bloqué, il enfonce la garde ; il faut l'esquiver ou le parer à l'instant exact.
+
+Chaque rencontre de lames est un événement (`src/duel-main.js`) : gerbes d'étincelles aux deux couleurs, éclair, lames rejetées sur des ressorts puis qui se remettent en place (`src/duel-blades.js` : la garde suit le coup qui arrive, se place en travers de sa trajectoire, haute et à plat contre un coup d'en haut), gel de l'image bien marqué (de 0,07 s sur un blocage à 0,2 s sur le coup fatal) pendant lequel le corps touché tremble, les étincelles continuent de jaillir et la caméra, poussée d'un coup dans le sens de la frappe avec un léger zoom, reste figée ; puis l'action reprend en douceur et la secousse arrive. Ralenti sur une parade parfaite, une garde brisée et la mort, vibration de la manette. Les élans sont ralentis (lisibles, davantage chez l'adversaire) et les coupes accélérées ; une fois la coupe lancée, l'attaquant ne suit plus sa cible, on peut l'esquiver.
+
+L'adversaire (`src/duel-ai.js`) voit ce qu'un duelliste voit et réagit avec un temps humain : un coup très rapide, de côté ou retenu peut passer. Il garde sa lame levée à portée de frappe, attaque par séquences rythmées (un coup, deux, trois, un coup retenu, une feinte, un coup lourd, un imparable), riposte après un blocage ou une parade, se couvre après avoir été paré, recule pour souffler, utilise la Force contre une garde qui ne bouge plus et fonce sur une garde brisée. Il apprend vos habitudes : il pare davantage un joueur qui frappe sans arrêt, feinte et retient ses coups contre un joueur qui pare bien. La coupe finale (`src/duel-finisher.js`) reprend celle des stormtroopers : la tête (le bras sur une taille montante) est projetée par l'élan de la lame, en arc, en tournoyant autour de la coupe, puis rebondit et roule ; le corps reste le personnage animé, devenu un ragdoll inerte (`src/hero-ragdoll.js`) qui s'effondre sur place, manteau compris, et est agité de spasmes quelques secondes. Les parties touchées flashent en blanc quelques images, la coupe brille et fume des deux côtés, le sang part avec la lame et goutte du moignon ; le sabre tombe à part et sa lame se rétracte.
+
 | Commande | Action |
 |---|---|
 | ZQSD, WASD ou flèches | Marcher à 360°, relativement à l’écran |

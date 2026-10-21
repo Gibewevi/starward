@@ -8,12 +8,12 @@ import { gradeCharacterMaterial } from './character-shading.js';
 /** Skinned Jedi animated from motion capture. Caller owns root placement; +Z is forward.
  * update accepts seconds, m/s, rad/s, forwardAccel in m/s², immediate sprintIntent.
  * saberSocket +Y is the blade axis. Skeleton is updated before update returns. */
-export function createCharacter() {
+export function createCharacter({ palette = null } = {}) {
   const rig = createRig();
   const { root, bones, list } = rig;
   root.name = 'Jedi';
   rig.bindPose();
-  const { body } = createAvatarSurface({ bones, list });
+  const { body } = createAvatarSurface({ bones, list, palette });
   root.add(body);
   bones.Head.add(createJediHead());
 

@@ -15,7 +15,7 @@ export const PALETTE = {
   trousers: '#34261f', boot: '#2b1d18', bootCuff: '#44302a', sole: '#171210', lining: '#2a1d19',
 };
 
-export function createAvatarSurface({ bones, list }) {
+export function createAvatarSurface({ bones, list, palette: paletteOverride = null }) {
   const names = list.map(bone => bone.name);
   const ids = Object.fromEntries(names.map((name, index) => [name, index]));
   const p = name => bones[name].getWorldPosition(new THREE.Vector3());
@@ -99,7 +99,7 @@ export function createAvatarSurface({ bones, list }) {
   const { positions, indices, normals } = polygonize(field, bounds, 0.024);
   const count = positions.length / 3;
   const colors = new Float32Array(count * 3), skinIndex = new Uint16Array(count * 4), skinWeight = new Float32Array(count * 4);
-  const palette = Object.fromEntries(Object.entries(PALETTE).map(([key, value]) => [key, new THREE.Color(value)]));
+  const palette = Object.fromEntries(Object.entries({ ...PALETTE, ...paletteOverride }).map(([key, value]) => [key, new THREE.Color(value)]));
   const color = new THREE.Color();
 
   const spineCenters = [['Hips', 0.80], ['Spine', 0.877], ['Spine1', 0.95], ['Spine2', 1.05], ['Neck', 1.15], ['Head', 1.20]];

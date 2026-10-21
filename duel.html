@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="theme-color" content="#090d16"><title>STARWARD — Le duel</title>
+  <link rel="stylesheet" href="/src/duel.css">
+</head>
+<body>
+  <main id="duel" aria-label="Duel de sabres laser jouable"></main>
+  <div id="vignette"></div>
+  <header class="top"><a href="/" aria-label="Retour au jeu">← STARWARD</a><span>DUEL / PROTOTYPE 01</span><div class="top-actions"><button id="sound" title="Activer ou couper le son">SON : OUI</button><button id="help-toggle" class="icon-button" title="Commandes (H)" aria-label="Afficher les commandes" aria-expanded="false">?</button><button id="settings-toggle" class="icon-button" title="Réglages" aria-label="Afficher les réglages" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M9 4v6m6 4v6"/></svg></button><button id="fullscreen" class="icon-button" title="Plein écran (F)" aria-label="Plein écran"><svg viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4"/></svg></button></div></header>
+  <section id="help-panel" class="duel-panel" hidden aria-label="Commandes"><div class="panel-heading"><h2>Commandes</h2><button class="close-panel" aria-label="Fermer les commandes">×</button></div><p>Stick / ZQSD · se déplacer (toujours face à lui)</p><p>B / J · frapper, enchaîner ; garde brisée : achever</p><p>RB / K · maintenir : garde (remplit votre jauge d'équilibre) ; appuyer juste avant l'impact : parade parfaite, c'est lui qui vacille</p><p>RB pendant votre élan · retenir le coup (feinte)</p><p>Y / Espace · esquive : passe sous un coup, contourne sa garde</p><p>LT / U · attirer avec la Force · RT / I · projeter (écrase une garde)</p><p>Lames croisées · martelez B</p><p>Équilibre plein : la garde se brise, le coup de grâce tue. Trois blessures : la mort.</p><p>Entrée / A / B · recommencer</p></section>
+  <section id="settings-panel" class="duel-panel" hidden aria-label="Réglages"><div class="panel-heading"><h2>Réglages</h2><button class="close-panel" aria-label="Fermer les réglages">×</button></div><label>Taille des pixels<select id="pixel-size"><option value="1">Fin · 1×</option><option value="2">Détaillé · 2×</option><option value="3" selected>Équilibré · 3×</option><option value="4">Référence · 4×</option></select></label><label>Distance caméra<input id="camera-zoom" type="range" min="3.8" max="7" value="4.4" step="0.1"></label><label>Reflets du sol<input id="reflections" type="checkbox" checked></label><label>Son<input id="audio-enabled" type="checkbox" checked></label><label>Volume<input id="audio-volume" type="range" min="0" max="1" value="0.8" step="0.05"></label><label>Vibrations manette<input id="rumble" type="checkbox" checked></label></section>
+  <div class="enemy-status"><div><span>ADVERSAIRE <b class="wounds" id="enemy-wounds">✚✚</b></span><strong id="enemy-readout">EN GARDE</strong></div><div class="energy-track" id="enemy-energy" aria-label="Énergie de l'adversaire"></div><div class="posture-track" id="enemy-posture" aria-label="Équilibre de l'adversaire"></div></div>
+  <div id="duel-message" aria-live="polite"></div>
+  <div class="player-status"><div><span>VOUS <b class="wounds" id="player-wounds">✚✚</b></span><strong id="player-readout">PRÊT</strong></div><div class="energy-track" id="player-energy" aria-label="Votre énergie"></div><div class="posture-track" id="player-posture" aria-label="Votre équilibre"></div></div>
+  <div id="duel-prompt" aria-hidden="true"><canvas></canvas></div>
+  <div class="hint">B / J · FRAPPER <b>✦</b> RB / K · GARDE, PARADE AU BON MOMENT <b>✦</b> Y / ESPACE · ESQUIVER <b>✦</b> LT / U · ATTIRER <b>✦</b> RT / I · PROJETER</div>
+  <div id="outcome" hidden><div class="outcome-card"><span id="outcome-tag">DUEL TERMINÉ</span><h1 id="outcome-title">VICTOIRE</h1><p id="outcome-detail"></p><button id="retry">RECOMMENCER <small>ENTRÉE / A / B</small></button></div></div>
+  <div id="error" hidden role="alert"><p id="error-text"></p></div>
+  <script type="module" src="/src/duel-main.js"></script>
+</body>
+</html>
