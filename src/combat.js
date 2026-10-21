@@ -393,6 +393,25 @@ export const MOVES = {
       FRONT_LOW(1, { grip: 0 }),
     ],
   },
+  // B held by the transformer: the blade drawn far back along his right side,
+  // both hands on the hilt, the body wound round — held there as long as B is
+  // (the wind-up repeats); the hold full, it is driven straight forward into
+  // the arc window (the whole blade travelling from behind him to before him),
+  // held in while it surges (the sustain repeats), then torn out.
+  plunge: {
+    role: ['plunge'], utility: true, from: ['R', 'L', 'F'], to: 'F', duration: 1.6, buffer: 1, chain: 2, active: [2, 2], trail: [0.19, 0.31],
+    impact: [0.26, 0.6], windup: [0.13, 0.19], sustain: [0.34, 0.68],
+    keys: [
+      key(0, [-0.26, 1.0, 0.08], [-0.3, 0.3, 0.9], { left: [0.12, 1.12, 0.45], yaw: -0.2, crouch: 0.6 }),
+      key(0.13, [-0.38, 1.32, -0.42], [-0.05, 0.25, 0.97], { grip: 0.8, left: [-0.2, 1.26, -0.3], yaw: -0.9, pitch: -0.14, crouch: 0.95 }),
+      key(0.19, [-0.38, 1.32, -0.42], [-0.05, 0.25, 0.97], { grip: 0.8, left: [-0.2, 1.26, -0.3], yaw: -0.9, pitch: -0.14, crouch: 0.95 }),
+      key(0.26, [-0.04, 1.02, 0.6], [0, -0.04, 1], { grip: 0.9, left: [0.02, 1.0, 0.5], yaw: 0.32, pitch: 0.28, crouch: 1.25 }),
+      key(0.34, [-0.05, 1.04, 0.5], [0, 0, 1], { grip: 0.9, left: [0.03, 1.02, 0.42], yaw: 0.24, pitch: 0.18, crouch: 1.1 }),
+      key(0.68, [-0.05, 1.04, 0.5], [0, 0, 1], { grip: 0.9, left: [0.03, 1.02, 0.42], yaw: 0.24, pitch: 0.18, crouch: 1.1 }),
+      key(0.8, [-0.14, 1.0, 0.3], [-0.4, -0.25, 0.88], { grip: 0.3, left: [0.24, 0.98, 0.12], yaw: -0.15, pitch: 0.06, crouch: 0.85 }),
+      FRONT_LOW(1, { grip: 0 }),
+    ],
+  },
   // R3: a flourish for style — the blade spun upright round the wrist beside
   // him, three turns quickening then settling, hand at the shoulder. He keeps walking.
   twirl: {
@@ -648,6 +667,22 @@ export class CombatController {
   }
   /** LT let go: the blade comes out (the move plays on to its end). */
   unpin() { this.pinned = false; }
+  /** B held by the transformer: the blade drawn back and held there (cocked) until loose(). */
+  plunge() {
+    this.interrupt();
+    this.start('plunge');
+    this.cocked = true;
+    this.pinned = true;
+    return true;
+  }
+  /** The hold is full: the thrust goes in. */
+  loose() { this.cocked = false; }
+  /** B let go too soon: no thrust, the blade comes back down. */
+  uncock() {
+    if (this.action?.name !== 'plunge') return;
+    this.cocked = this.pinned = false;
+    this.finish();
+  }
   /** Holding the blade in a body (the thrust has gone in, the hold goes on). */
   get impaling() { return this.action?.name === 'impale' && this.pinned && this.time / this.action.duration >= this.action.sustain[0] - 0.12; }
   /** R3: the style twirl — never during a strike, the guard or a hold, nor twice at once. */
@@ -665,7 +700,8 @@ export class CombatController {
   }
   start(name) {
     const move = MOVES[name];
-    if (name !== 'impale') this.pinned = false;
+    if (name !== 'impale' && name !== 'plunge') this.pinned = false;
+    this.cocked = false;
     copyPose(this.fromPose, this.lastPose);
     this.blendFrom = this.output.weight > 0.5 ? 1 : 0;
     // Each strike differs a little: tempo, twist and reach vary. FEEL sets the pace.
@@ -702,7 +738,8 @@ export class CombatController {
     if (this.action) {
       const action = this.action;
       this.time += dt;
-      // A held move (the impale) waits in its sustain window while pinned.
+      // A cocked move (the plunge) waits drawn back in its wind-up; a held one (the impale) in its sustain window while pinned.
+      if (action.windup && this.cocked && this.time / action.duration > action.windup[1]) this.time = action.windup[0] * action.duration;
       if (action.sustain && this.pinned && this.time / action.duration > action.sustain[1]) this.time = action.sustain[0] * action.duration;
       const t = this.time / action.duration, held = action.sustain && this.pinned;
       const striking = !action.free && !action.utility, finisher = action.role.includes('finisher');

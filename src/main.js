@@ -34,7 +34,9 @@ import { createDebris } from './debris.js';
 import { createGrenades } from './grenades.js';
 import { createHeroRagdoll } from './hero-ragdoll.js';
 import { createWounds } from './wounds.js';
+import { createPixelPrompt } from './pixel-prompt.js';
 import { createAudio } from './audio.js';
+import { createRadioComms, RADIO_LINES } from './radio-comms.js';
 import { createShake } from './shake.js';
 import { createTelegraph } from './telegraph.js';
 import { createFootprints } from './footprints.js';
@@ -277,6 +279,7 @@ function init() {
   }
   // The streak: blows, returns and kills in a row without being hit.
   let streak = 0, streakAge = Infinity, streakNote = '', streakNoteAge = Infinity, streakBroken = Infinity, eliminated = 0;
+  let criticalCount = 0;
   const counted = new WeakSet();
   function score(points, note = '') {
     streak += points;
@@ -309,6 +312,7 @@ function init() {
   function punch(amount) { if (amount >= zoomPunch.amount * (zoomPunch.age < 0.3 ? 1 : 0)) Object.assign(zoomPunch, { amount, age: 0 }); }
   /** L3 / T: everything as it was — the squad at its posts, the hero at the start, the room clean. */
   function restart() {
+    radio.reset();
     resetTrooper();
     reset();
     // The power back on, the transformer as new.
@@ -319,7 +323,7 @@ function init() {
     power.level = 1;
     transformer.reset();
     flashlights.clear();
-    streak = eliminated = 0;
+    streak = eliminated = criticalCount = 0;
     streakAge = streakBroken = Infinity;
     trauma.clear();
     telegraph.clear();
@@ -527,8 +531,10 @@ function init() {
   }
 
   // ---- The sabotage ----------------------------------------------------------------
-  // B by the transformer: he squares up to its arc window and drives the blade
-  // in with both hands; it surges (sparks pouring out, arcs leaping to the
+  // B held by the transformer: he squares up to its arc window and draws the
+  // blade far back along his right side, both hands on the hilt, the arc
+  // crackling at it and the pad trembling more and more; let go too soon and
+  // he lowers it. The hold full, he drives it straight in; it surges (sparks pouring out, arcs leaping to the
   // blade, the room's lights stuttering, the view and the pad shaking harder),
   // then blows — a white flash, a beat of slow motion, the hero thrown back —
   // and the room's power dies: every light out at once, a wave of sparks
@@ -536,14 +542,39 @@ function init() {
   // dark: the troopers' rifle lamps clicking on one by one, the blade's glow
   // the only light round the hero.
   let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
-  const flashEl = $('#flash'), promptEl = $('#prompt');
+  const flashEl = $('#flash'), promptEl = $('#prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
   function startPlunge() {
     const s = transformer.socket, a = transformer.approach;
-    plunge = { age: 0, entered: false, from: new THREE.Vector3(motion.x, 0, motion.z), to: a.clone() };
+    plunge = { age: 0, phase: 'cocking', hold: 0, crackle: 0, entered: false, from: new THREE.Vector3(motion.x, 0, motion.z), to: a.clone() };
     motion.face(Math.atan2(s.x - a.x, s.z - a.z));
     motion.vx = motion.vz = 0;
     dash = lunge = turn = null;
-    combat.impale();
+    combat.plunge();
+  }
+  /** B pressed by the transformer starts the wind-up; held to the end, the thrust; let go before, nothing. */
+  function plungeInput(dt, attackHeld, down) {
+    if (plunge?.phase === 'cocking') {
+      // Let go, thrown, or another move took over: he lowers the blade.
+      if (down || !attackHeld || combat.action?.name !== 'plunge') { combat.uncock(); plunge = null; return; }
+      plunge.hold += dt;
+      const k = Math.min(1, plunge.hold / FEEL.sabotage.hold), s = transformer.socket, out = transformer.facing;
+      // The tension: the arc crackling at the blade, faster and harder, the pad trembling more and more.
+      rumble(0.06 + 0.3 * k, 0.12 + 0.35 * k, 0.06);
+      if ((plunge.crackle -= dt) <= 0) {
+        plunge.crackle = 0.3 - 0.16 * k;
+        effects.sparks(s.clone().addScaledVector(out, 0.06), out.clone().setY(0.3 + Math.random() * 0.4).normalize(), new THREE.Vector3(out.z, 0, -out.x), { count: Math.round(1 + 4 * k), speed: 1 + 2 * k, saber: 0.6 });
+        if (Math.random() < 0.3 + 0.5 * k) audio.zap(s, 0.12 + 0.25 * k);
+      }
+      if (k >= 1) {
+        plunge.phase = 'thrust';
+        combat.loose();
+        audio.whoosh(1.3);
+        rumble(0.3, 0.5, 0.08);
+      }
+      return;
+    }
+    // (The blade off after a moment standing still: it lights as he draws it back.)
+    if (attackPressed && !down && !plunge && !death && !combat.busy && transformer.reachable(character.root.position)) { attackPressed = false; startPlunge(); }
   }
   function plungeStep(dt) {
     if (!plunge) return;
@@ -555,7 +586,7 @@ function init() {
     const s = transformer.socket;
     motion.heading = Math.atan2(s.x - motion.x, s.z - motion.z);
     const action = combat.action;
-    if (!plunge.entered && action?.name === 'impale' && combat.time / action.duration >= 0.17) {
+    if (!plunge.entered && plunge.phase === 'thrust' && action?.name === 'plunge' && combat.time / action.duration >= action.impact[0] - 0.01) {
       plunge.entered = true;
       transformer.begin();
       // The blade goes in: a jolt, a gush of blue and molten sparks, a crack of electricity.
@@ -609,7 +640,8 @@ function init() {
     trauma.add(0.2);
     rumble(0.25, 0.2, 0.9);
     const cues = squad.blackout();
-    for (const cue of cues) if (cue.radio) audio.radio(cue.trooper.root.position, cue.radio, cue.trooper);
+    const witness = troopers.find(trooper => !trooper.dead && trooper.free);
+    if (witness) radioCall('blackout', witness);
     flashlights.darkness(troopers);
   }
   /** Each frame: the power's level (stuttering through the surge, the last flicker, then out) and the sparks of the wave. */
@@ -1086,7 +1118,7 @@ function init() {
     event.preventDefault(); desiredHeight = THREE.MathUtils.clamp(desiredHeight + event.deltaY * 0.005, 5, 12);
     $('#camera-zoom').value = desiredHeight;
   }, { passive: false });
-  function setPause(value) { paused = value; clearInput(); $('#pause-overlay').hidden = !paused; if (!paused) renderer.domElement.focus(); }
+  function setPause(value) { paused = value; clearInput(); radio.setPaused(value); $('#pause-overlay').hidden = !paused; if (!paused) renderer.domElement.focus(); }
   function reset() {
     knockdown.stop();
     death = null;
@@ -1136,7 +1168,12 @@ function init() {
   const audio = createAudio();
   audio.enabled = $('#audio-enabled').checked;
   audio.volume = Number($('#audio-volume').value);
-  $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; if (audio.enabled) audio.start(); });
+  const radio = createRadioComms({ element: $('#radio-comms'), audio });
+  const radioCall = (kind, speaker) => radio.offer(kind, speaker, Math.max(0, troopers.indexOf(speaker)));
+  // A focused visual/audio preview for checking this same HUD in the real scene.
+  const radioPreview = new URLSearchParams(location.search).get('radioPreview');
+  if (RADIO_LINES[radioPreview]) $('#game').addEventListener('pointerdown', () => radioCall(radioPreview, troopers[0]), { once: true });
+  $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; radio.setSound(audio.enabled); if (audio.enabled) audio.start(); });
   $('#audio-volume').addEventListener('input', event => { audio.volume = Number(event.target.value); });
   $('#god-mode').checked = godMode;
   document.body.classList.toggle('god', godMode);
@@ -1179,7 +1216,7 @@ function init() {
         if (!death.radioed && death.age > 0.8) {
           death.radioed = true;
           const near = troopers.filter(trooper => !trooper.dead).sort((a, b) => a.root.position.distanceTo(character.root.position) - b.root.position.distanceTo(character.root.position))[0];
-          if (near) audio.radio(near.root.position, 'down', near);
+          if (near) radioCall('targetDown', near);
         }
         // Lying still, a pool spreads from under him.
         death.lying += sim;
@@ -1252,7 +1289,7 @@ function init() {
       dodge = Math.max(0, dodge - sim);
       dashAfter = Math.max(0, dashAfter - sim);
       if (dashPressed) pending.dash = inputClock;
-      if (waiting(pending.dash) && !dash && dashCooldown <= 0 && !skewered && !combat.impaling) {
+      if (waiting(pending.dash) && !dash && dashCooldown <= 0 && !skewered && !plunge && !combat.impaling) {
         pending.dash = -Infinity;
         const along = Math.hypot(worldX, worldZ) > 0.2 ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
         startDash(along);
@@ -1269,7 +1306,7 @@ function init() {
       if (powerPressed) { pending.power = inputClock; pending.powerName = powerPressed; }
       if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
       if (parryPressed) combat.parry();
-      if (attackPressed && !down && !plunge && motion.saber > 0.5 && !combat.busy && transformer.reachable(character.root.position)) { attackPressed = false; startPlunge(); }
+      plungeInput(dt, attackHeld, down);
       if (attackPressed) pending.attack = inputClock;
       // Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
       if (intent && (intent.dead || intent.impaled)) intent = null;
@@ -1299,7 +1336,7 @@ function init() {
       const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
       if (strike) { lockOn(started, worldX, worldZ, intent ? markOf(intent) : mark); intent = null; audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
       else if (started) { turn = null; lead = 0; }
-      else if (started && !/^(parry|impale)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+      else if (started && !/^(parry|impale|plunge)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
       else if (started === 'forcePull' || started === 'forcePush') {
         const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
         if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
@@ -1364,7 +1401,7 @@ function init() {
       // Reinforcements: the alarm, the door, the men coming out one by one.
       const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
       for (const event of reinforcements.update(sim, { living, entering })) {
-        if (event === 'alarm') audio.alarm(arena.door.centre);
+        if (event === 'alarm') { audio.alarm(arena.door.centre); const caller = troopers.find(trooper => !trooper.dead); if (caller) radioCall('reinforce', caller); }
         else if (event === 'open' || event === 'close') audio.door(arena.door.centre);
         else if (event.type === 'spawn') bringIn(event.index);
       }
@@ -1375,9 +1412,9 @@ function init() {
       }
       for (const cue of thoughts.cues) {
         const at = cue.trooper.root.position;
-        if (cue.type === 'alert') { audio.alert('!', at); audio.radio(at, 'contact', cue.trooper); }
-        else if (cue.type === 'suspicious') audio.alert('?', at);
-        else if (cue.radio) audio.radio(at, cue.radio, cue.trooper);
+        if (cue.type === 'alert') { audio.alert('!', at); radioCall('contact', cue.trooper); }
+        else if (cue.type === 'suspicious') { audio.alert('?', at); radioCall('suspicious', cue.trooper); }
+        else if (cue.radio) radioCall(cue.radio, cue.trooper);
       }
       keepSkewer(sim);
       for (const trooper of troopers) { trooper.focus = character.root.position; trooper.update(sim, time); }
@@ -1465,6 +1502,11 @@ function init() {
       }
       // Kills: every man down for good counts once.
       for (const trooper of troopers) if (trooper.dead && !counted.has(trooper)) { counted.add(trooper); eliminated++; score(2); }
+      if (eliminated >= 3 && eliminated > criticalCount && troopers.filter(trooper => !trooper.dead).length <= 2) {
+        criticalCount = eliminated;
+        const caller = troopers.find(trooper => !trooper.dead && trooper.free);
+        if (caller) radioCall('critical', caller);
+      }
       for (const at of grenades.update(sim)) detonate(at);
       explosions.update(sim, camera);
       debris.update(sim);
@@ -1495,7 +1537,8 @@ function init() {
       const state = transformer.update(sim, { blade: plunge ? { base: bladeBase, tip: bladeTip } : null });
       if (state.burst) overload();
       if (state.spit) { audio.zap(transformer.socket, 0.5); trauma.add(0.04); }
-      surgeLevel = state.progress;
+      // The hum of the room's current: rising as he holds the blade back, then the surge itself.
+      surgeLevel = Math.max(state.progress, plunge?.phase === 'cocking' ? 0.35 * Math.min(1, plunge.hold / FEEL.sabotage.hold) : 0);
       if (state.progress > 0) { trauma.atLeast(0.12 + 0.3 * state.progress); rumble(0.12 + 0.45 * state.progress, 0.3 + 0.5 * state.progress, 0.12); }
       powerStep(sim, state.progress);
       power.apply();
@@ -1539,17 +1582,22 @@ function init() {
     telegraph.edges(camera, paused ? [] : threats, window.innerWidth, window.innerHeight);
     const burning = skewered?.entered ? (skewered.trooper.dead ? 0.3 : 0.75) : 0;
     audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning, plunge?.entered ? 0.9 : 0), hold: paused || !held ? 0 : 1, fight: paused ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt, surge: paused ? 0 : surgeLevel, power: power.level, dark: night });
+    radio.update(paused ? 0 : dt);
     document.body.classList.toggle('night', night > 0.5);
     // The burst's flash over everything, gone in a quarter of a second.
     flashAge += dt;
     flashEl.style.opacity = flashAge < 0.3 ? String((1 - flashAge / 0.3) ** 1.6 * 0.9) : '0';
-    // The prompt by the transformer: B (or J) to run the blade in.
-    const canPlunge = !paused && !plunge && transformer.reachable(character.root.position) && !knockdown.active;
+    // The prompt by the transformer, in pixels: B (or J) to hold, DÉTRUIRE, the gauge filling as it is held.
+    const cocking = plunge?.phase === 'cocking';
+    const canPlunge = !paused && !death && (cocking || (!plunge && transformer.reachable(character.root.position) && !knockdown.active));
     promptEl.classList.toggle('on', canPlunge);
     if (canPlunge) {
-      const p = transformer.socket.clone().setY(1.55).project(camera);
-      promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight).toFixed(0)}px)`;
-      promptEl.dataset.device = lastDevice;
+      const scale = Math.max(3, pixelSize), size = prompt.draw({ device: lastDevice, label: 'DÉTRUIRE', progress: cocking ? Math.min(1, plunge.hold / FEEL.sabotage.hold) : 0, time: performance.now() / 1000 });
+      const canvas = promptEl.firstElementChild;
+      canvas.style.width = `${size.width * scale}px`;
+      canvas.style.height = `${size.height * scale}px`;
+      const p = transformer.socket.clone().setY(1.7).project(camera);
+      promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth - size.width * scale / 2).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight - size.height * scale).toFixed(0)}px)`;
     }
     if (death) $('#death').dataset.device = lastDevice;
     composer.render(dt);
@@ -1558,7 +1606,7 @@ function init() {
     if (hudTimer > 0.15) {
       hudTimer = 0;
       const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : death ? 'MORT' : knockdown.active ? 'À TERRE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
+      stateEl.textContent = paused ? 'EN PAUSE' : death ? 'MORT' : knockdown.active ? 'À TERRE' : plunge ? 'SABOTAGE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
       speedEl.textContent = motion.speed.toFixed(1);
       saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
       $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
@@ -1598,6 +1646,8 @@ function init() {
     squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
     renderer, composer, reflection, prints, transformer, power, flashlights, wounds, knockdown,
     get death() { return death; },
+    get plunge() { return plunge; },
+    combat,
     get god() { return godMode; },
     set god(value) { godMode = value; $('#god-mode').checked = value; document.body.classList.toggle('god', value); },
     get night() { return night; },

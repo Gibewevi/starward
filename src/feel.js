@@ -23,8 +23,9 @@ export const FEEL = {
   },
   // The transformer in the corner: the blade run into it, the surge, the burst.
   sabotage: {
-    reach: 1.5, // m from where he stands to run the blade in: the prompt shows, B does it
-    stand: 1.05, // m before the arc window he stands to do it
+    reach: 1.5, // m from where he stands to run the blade in: the prompt shows, B held does it
+    hold: 0.75, // s: B held this long — the blade drawn back, the tension building — and the thrust goes in
+    stand: 1.05, angle: -0.6, // m before the arc window he stands to do it, rad aside (his sword side towards the view)
     surge: 1.45, // s from the blade going in to the burst
     spit: [1, 3.5], calm: 20, // s between spits of sparks once dead (less often after `calm` s)
     cascade: 0.75, // s for the blackout to run through the room's fittings (their sparks)

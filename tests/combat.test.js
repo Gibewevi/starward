@@ -358,6 +358,37 @@ test('the impale drives the blade straight ahead, holds it there as long as it i
   assert.ok(!combat.impaling);
 });
 
+test('the plunge: the blade drawn far back on his right and held there while cocked; loosed, the whole blade drives from behind him to before him, holds, then comes out', () => {
+  const combat = new CombatController({ random: () => 0.4 });
+  combat.update(1 / 60, {});
+  assert.ok(combat.plunge());
+  // Held back as long as B is: three seconds, still drawn.
+  let out = null;
+  for (let i = 0; i < 60 * 3; i++) out = combat.update(1 / 60, {});
+  assert.equal(combat.action?.name, 'plunge');
+  const back = { hand: out.hand.clone(), blade: out.blade.clone() };
+  assert.ok(back.hand.z < -0.3 && back.hand.x < -0.25 && back.hand.y > 1.1, `drawn back along his right side, high (${back.hand.toArray().map(v => v.toFixed(2))})`);
+  assert.ok(back.blade.z > 0.9, 'pointing ahead, ready to drive in');
+  // Loosed: the hand travels a metre forward in a blink.
+  combat.loose();
+  let landed = null, time = 0;
+  for (let i = 0; i < 60 && !landed; i++) { out = combat.update(1 / 60, {}); time += 1 / 60; if (out.hand.z > 0.45) landed = time; }
+  assert.ok(landed !== null && landed < 0.2, `driven in at once (${landed?.toFixed(2)} s)`);
+  assert.ok(out.hand.z - back.hand.z > 0.8, 'from behind him to before him');
+  // Held in while pinned, then out and back to rest.
+  for (let i = 0; i < 60 * 2; i++) combat.update(1 / 60, {});
+  assert.equal(combat.action?.name, 'plunge', 'held in while it surges');
+  combat.unpin();
+  for (let i = 0; i < 90; i++) combat.update(1 / 60, {});
+  assert.equal(combat.action, null, 'torn out and back to rest');
+  // Let go too soon: no thrust, the move is over.
+  assert.ok(combat.plunge());
+  for (let i = 0; i < 20; i++) combat.update(1 / 60, {});
+  combat.uncock();
+  assert.equal(combat.action, null, 'lowered, no thrust');
+  assert.equal(MOVES.plunge.active[0] > 1, true, 'never cuts anyone on the way');
+});
+
 test('the style twirl spins the blade upright round the wrist, three turns, while he keeps walking — never mid-strike or on guard', () => {
   const combat = new CombatController({ random: () => 0.3 });
   combat.update(1 / 60, {});

@@ -93,8 +93,9 @@ export function createTransformer(scene, { lab = null, effects = null, at, facin
   box.centre = box.min.clone().add(box.max).multiplyScalar(0.5);
   lab?.obstacles.push(box);
 
-  // Where the hero stands to run his blade into it.
-  const approach = socket.clone().addScaledVector(out, FEEL.sabotage.stand).setY(0);
+  // Where the hero stands to run his blade into it: before it, a little to one side (FEEL.sabotage.angle),
+  // so that his sword side is turned to the view and the thrust crosses the screen.
+  const approach = socket.clone().addScaledVector(out.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), FEEL.sabotage.angle), FEEL.sabotage.stand).setY(0);
   let state = 'ready', clock = 0, arcClock = 0, sprayClock = 0, spitClock = 0, flare = 0, time = 0;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
   const slotBase = slot.color.clone();
