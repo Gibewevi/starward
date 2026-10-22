@@ -51,7 +51,6 @@ import { lightStains } from './stain-light.js';
 const $ = selector => document.querySelector(selector);
 function showError(error) {
   console.error(error);
-  $('#loading').hidden = true;
   $('#error').hidden = false;
   $('#error-message').textContent = `Un navigateur compatible WebGL 2 est nécessaire. ${error.message || error}`;
 }
@@ -1791,11 +1790,7 @@ function init() {
     if (streakAge >= 3.5 && streak) streak = 0;
     streakNoteEl.textContent = streakNote;
     streakNoteEl.classList.toggle('on', streakNoteAge < 1.1);
-    if (++frameCount === 3) {
-      stageMenu.ready();
-      $('#loading').style.opacity = '0';
-      setTimeout(() => $('#loading').hidden = true, 550);
-    }
+    if (++frameCount === 3) stageMenu.ready();
     if (!manual) requestAnimationFrame(frame);
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
