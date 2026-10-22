@@ -1198,7 +1198,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
           const near = minds.filter(other => other !== mind && other.mode === 'combat' && !other.trooper.dead && other.trooper.root.position.distanceTo(t.root.position) < 11);
           if (near.length) cues.push({ type: 'radio', radio: 'down', trooper: near[Math.floor(random() * near.length)].trooper });
         }
-        endRescue(mind); release(mind); plan.movers.delete(mind); alerts?.hide(t); mind.mode = 'dead'; continue;
+        endRescue(mind); release(mind); plan.movers.delete(mind); alerts?.hide(t); mind.mode = 'dead'; mind.entering = null; continue;
       }
       o.velocity.set(0, 0, 0);
       o.face = null;

@@ -1229,12 +1229,22 @@ function init() {
   const radioCall = (kind, speaker) => radio.offer(kind, speaker, Math.max(0, troopers.indexOf(speaker)));
   // The score, and the Jedi who comes last (duel.js): while they fight, the duel has the hero's body.
   const music = createMusic(audio);
-  const duelStand = (nav.nearest(arena.door.centre.clone().addScaledVector(arena.door.out, 3.2)) ?? arena.door.centre.clone().addScaledVector(arena.door.out, 3.2)).clone().setY(0);
+  // Where he stops before the door: in the open, with room round him (the crates there are walked round).
+  const duelStand = (() => {
+    const door = arena.door, across = new THREE.Vector3(-door.out.z, 0, door.out.x);
+    for (const depth of [3.2, 3.6, 2.8, 4.2, 4.8]) for (const side of [0, -0.6, 0.6, -1.2, 1.2, -1.8, 1.8]) {
+      const spot = door.centre.clone().addScaledVector(door.out, depth).addScaledVector(across, side).setY(0);
+      if (nav.walkable(spot) && lab.pushOut(spot.clone(), 0.7).distanceTo(spot) < 1e-3) return spot;
+    }
+    return nav.nearest(door.centre.clone().addScaledVector(door.out, 3.2)) ?? door.centre.clone().addScaledVector(door.out, 3.2).setY(0);
+  })();
   const duel = createDuel({
     scene, effects, audio, music, wounds, keys, screenRight, screenUp, rumble,
     hero: { character, coat: cape, saber, trail, motion, combat, base: bladeBase, tip: bladeTip },
     door: arena.door, stand: duelStand,
     confine: body => { here.set(body.x, 0, body.z); lab.pushOut(here, 0.3); body.x = here.x; body.z = here.z; },
+    route: (from, to) => nav.path(from, to),
+    place: point => nav.nearest(point) ?? point,
     onStep: f => bodyFootfall(f.character, f.motion.heading),
     kick: (at, moving) => debris.kick(at, moving),
   });
@@ -1500,7 +1510,8 @@ function init() {
       noises.length = 0;
       if (death) thoughts.shots.length = 0;
       // The escort: the alarm, the door, the men coming out one by one. Then the Jedi.
-      const entering = squad.minds.filter(mind => mind.entering).length;
+      // Only the living hold the door open: a man cut down in the doorway is not coming in any more.
+      const entering = squad.minds.filter(mind => mind.entering && !mind.trooper.dead).length;
       for (const event of reinforcements.update(sim, { entering })) {
         if (event === 'alarm') { audio.alarm(arena.door.centre); const caller = troopers.find(trooper => !trooper.dead); if (caller) radioCall('reinforce', caller); }
         else if (event === 'open' || event === 'close') audio.door(arena.door.centre);

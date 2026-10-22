@@ -80,9 +80,10 @@ const ENEMY_COAT = { base: '#24202a', fold: '#15121c', hem: '#372a39' };
 /**
  * hero: { character, coat, saber, trail, motion, combat, base, tip } — the game's own.
  * door: the arena's great door; stand: where he stops before it. keys: the keys held (the game's set).
- * confine(motion): crates and walls push a body out. onStep(fighter): a foot comes down. kick(position, velocity): debris.
+ * confine(motion): crates and walls push a body out. route(from, to): a way round the crates (points), or null.
+ * place(point): the nearest spot a man can stand. onStep(fighter): a foot comes down. kick(position, velocity): debris.
  */
-export function createDuel({ scene, hero, effects, audio, music, wounds, door, stand, keys, confine = () => {}, onStep = () => {}, kick: kickDebris = () => {}, rumble = () => {}, screenRight, screenUp }) {
+export function createDuel({ scene, hero, effects, audio, music, wounds, door, stand, keys, confine = () => {}, route = () => null, place = point => point, onStep = () => {}, kick: kickDebris = () => {}, rumble = () => {}, screenRight, screenUp }) {
   function fighter(id, color, parts) {
     return {
       id, color, ...parts, state: createDuelState(), blade: createLivingBlade(), lit: 1,
@@ -602,9 +603,11 @@ export function createDuel({ scene, hero, effects, audio, music, wounds, door, s
   function enter() {
     reset();
     phase = 'entrance';
-    entrance = { stage: 'door', age: 0, steps: 0, shut: false };
     const start = door.inside[2].clone().lerp(door.inside[3], 0.5);
     const out = outward();
+    // Out through the door, then round whatever stands in front of it to where he stops.
+    const threshold = door.centre.clone().addScaledVector(out, 0.9).setY(0);
+    entrance = { stage: 'door', age: 0, steps: 0, shut: false, way: [threshold, ...(route(threshold, stand) ?? [stand.clone()])] };
     placeEnemy(start, Math.atan2(out.x, out.z));
     // His blade out, silently, before he is seen.
     enemy.lit = 0;
@@ -633,16 +636,24 @@ export function createDuel({ scene, hero, effects, audio, music, wounds, door, s
     const out = outward();
     let speed = 0;
     if (e.stage === 'door' && door.openness > 0.55) { e.stage = 'walk'; e.age = 0; }
+    let along = out;
     if (e.stage === 'walk') {
       speed = ENTRANCE.pace;
-      enemy.motion.x += out.x * speed * dt; enemy.motion.z += out.z * speed * dt;
+      // Point after point of his way, turning into each.
+      const next = e.way[0], to = new THREE.Vector3(next.x - enemy.motion.x, 0, next.z - enemy.motion.z), gap = to.length();
+      if (gap <= speed * dt) { enemy.motion.x = next.x; enemy.motion.z = next.z; e.way.shift(); }
+      else {
+        along = to.divideScalar(gap);
+        enemy.motion.x += along.x * speed * dt; enemy.motion.z += along.z * speed * dt;
+        enemy.motion.heading += angleDelta(enemy.motion.heading, Math.atan2(along.x, along.z)) * (1 - Math.exp(-6 * dt));
+      }
       e.stride = (e.stride ?? 0) + speed * dt;
       if (e.stride >= ENTRANCE.stride) { e.stride -= ENTRANCE.stride; music.step(); audio.step(enemy.character.root.position, { pace: 0.3 }); onStep(enemy); }
       // Through the door: it shuts behind him.
       const past = new THREE.Vector3(enemy.motion.x - door.centre.x, 0, enemy.motion.z - door.centre.z).dot(out);
       if (!e.shut && past > 1.6) { e.shut = true; door.close(); audio.door(door.centre); }
-      // He stops before the door — or lights it at once if the hero comes at him.
-      if (past >= new THREE.Vector3().subVectors(stand, door.centre).setY(0).dot(out)) { e.stage = 'turn'; e.age = 0; }
+      // At the end of his way he stops — or lights his blade at once if the hero comes at him.
+      if (!e.way.length) { e.stage = 'turn'; e.age = 0; }
       if (range(enemy, player) < ENTRANCE.near) { e.stage = 'turn'; e.age = ENTRANCE.turn; }
     }
     if (e.stage === 'turn') {
@@ -655,7 +666,7 @@ export function createDuel({ scene, hero, effects, audio, music, wounds, door, s
       if (e.age >= ENTRANCE.held) engage();
     }
     enemy.motion.speed = speed;
-    enemy.motion.vx = out.x * speed; enemy.motion.vz = out.z * speed;
+    enemy.motion.vx = along.x * speed; enemy.motion.vz = along.z * speed;
     enemy.motion.runBlend = 0;
     enemy.combat.update(dt, { guard: false, speed, aim: null, charging: false });
     enemy.combat.takeStart();
@@ -815,7 +826,7 @@ export function createDuel({ scene, hero, effects, audio, music, wounds, door, s
     placeEnemy(stand, Math.atan2(-out.x, -out.z));
     enemy.lit = 1;
     show(enemy, true);
-    const heroAt = stand.clone().addScaledVector(out, 3.6);
+    const heroAt = place(stand.clone().addScaledVector(out, 3.6));
     player.motion.reset();
     player.motion.x = heroAt.x; player.motion.z = heroAt.z; player.motion.face(Math.atan2(-out.x, -out.z));
     player.motion.saber = 1;
