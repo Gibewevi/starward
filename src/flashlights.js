@@ -211,6 +211,9 @@ export function createFlashlights(scene, { lab = null, bounds = { minX: -10, max
     lit.sort((a, b) => a.distance - b.distance);
     pool.forEach(({ light, spill }, index) => {
       const entry = lit[index];
+      // A lamp switched off draws no shadow map (the scene is not drawn again for it); it keeps
+      // casting, so the shaders never change.
+      light.shadow.autoUpdate = !!entry && entry.on > 0;
       if (!entry) { light.intensity = spill.intensity = 0; return; }
       light.position.copy(entry.at);
       light.target.position.copy(entry.at).addScaledVector(entry.forward, 4);

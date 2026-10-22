@@ -5,6 +5,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { BeamPass } from './beam-pass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { createCharacter } from './character.js';
@@ -98,19 +99,21 @@ function init() {
   // light, strongest in the puddles (smooth in the roughness map), and it is
   // stretched towards the viewer as on wet steel — light columns and strips
   // become long red streaks.
-  const deck = deckGeometry(ARENA);
+  // In the jungle: the clearing's floor, its puddles and wet mud mirroring, the dry earth not at all.
+  const deck = jungle ? jungle.mirror : deckGeometry(ARENA);
   const reflection = new Reflector(deck.geometry, {
     textureWidth: 640, textureHeight: 400, multisample: 0, clipBias: 0.001,
     shader: {
       name: 'WetDeckReflection',
       uniforms: {
         color: { value: new THREE.Color(0x8698ad) }, tDiffuse: { value: null }, textureMatrix: { value: null },
-        roughnessMap: { value: stage.roughnessTexture }, texel: { value: new THREE.Vector2(1 / 640, 1 / 400) },
+        roughnessMap: { value: jungle ? jungle.mirror.roughnessTexture : stage.roughnessTexture }, texel: { value: new THREE.Vector2(1 / 640, 1 / 400) },
+        dry: { value: jungle ? 0 : 0.4 },
       },
       vertexShader: `uniform mat4 textureMatrix; varying vec4 mirrorUv; varying vec2 surfaceUv;
         void main(){mirrorUv=textureMatrix*vec4(position,1.);surfaceUv=uv;
         gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; uniform vec2 texel; varying vec4 mirrorUv; varying vec2 surfaceUv;
+      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; uniform vec2 texel; uniform float dry; varying vec4 mirrorUv; varying vec2 surfaceUv;
         void main(){
           float rough=texture2D(roughnessMap,surfaceUv).r;
           float wet=1.-smoothstep(.2,.6,rough);
@@ -120,7 +123,7 @@ function init() {
           for(int i=-4;i<=4;i++){float w=1.-abs(float(i))/5.;sum+=texture2D(tDiffuse,uv+vec2(wobble,float(i)*stretch)).rgb*w;total+=w;}
           // Only what shines is mirrored: the dim room and the fog add no milky veil.
           vec3 bright=max(sum/total-vec3(.012),0.);
-          gl_FragColor=vec4(bright*mix(.4,1.25,wet),1.);
+          gl_FragColor=vec4(bright*mix(dry,1.25,wet),1.);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
@@ -135,8 +138,6 @@ function init() {
   reflection.getRenderTarget().texture.magFilter = THREE.NearestFilter;
   reflection.getRenderTarget().texture.minFilter = THREE.NearestFilter;
   scene.add(reflection);
-  // Nothing to mirror on sand.
-  if (jungle) reflection.visible = false;
 
   const character = createCharacter();
   scene.add(character.root);
@@ -612,7 +613,8 @@ function init() {
   // the only light round the hero.
   let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
   /** In the dark a blade lights more of the room round it. */
-  function nightBlade(blade) { blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * night; light.distance = [3.2, 2.6][index] + 2.2 * night; }); }
+  // In the dark (the room after the blackout, the jungle at night) the blade lights further and brighter.
+  function nightBlade(blade) { const dark = jungle ? 1 : night; blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * dark; light.distance = [3.2, 2.6][index] + 2.2 * dark; }); }
   const flashEl = $('#flash'), promptEl = $('#prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
   function startPlunge() {
     const s = transformer.socket, a = transformer.approach;
@@ -1160,6 +1162,15 @@ function init() {
   }
   const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), 0.45, 0.15, 1.15);
   composer.addPass(bloom);
+  if (jungle) {
+    // The jungle closes in at the edges of the view.
+    composer.addPass(new ShaderPass({
+      name: 'Vignette', uniforms: { tDiffuse: { value: null }, strength: { value: 0.6 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;
+        void main() { vec4 c = texture2D(tDiffuse, vUv); float d = length((vUv - 0.5) * vec2(1.15, 1.0)); gl_FragColor = vec4(c.rgb * (1.0 - strength * smoothstep(0.3, 0.8, d)), c.a); }`,
+    }));
+  }
   composer.addPass(new OutputPass());
   let pixelSize = 4, viewHeight = 8.2, desiredHeight = 8.2;
   function resize() {
@@ -1283,7 +1294,7 @@ function init() {
   }
   $('#pixel-size').addEventListener('change', event => { pixelSize = Number(event.target.value); resize(); });
   $('#camera-zoom').addEventListener('input', event => desiredHeight = Number(event.target.value));
-  $('#reflections').addEventListener('change', event => reflection.visible = event.target.checked && !jungle);
+  $('#reflections').addEventListener('change', event => reflection.visible = event.target.checked);
   $('#resume').addEventListener('click', () => setPause(false));
   $('#return-menu').addEventListener('click', () => {
     setPause(true);
@@ -1771,7 +1782,7 @@ function init() {
       const stirs = [{ at: here.set(motion.x, 1, motion.z).clone(), speed: motion.speed }, { at: bladeTip.clone(), speed: Math.min(12, swing) }];
       if (duel.present) stirs.push({ at: duel.enemy.tip.clone(), speed: Math.min(12, duel.enemy.swing.length()) });
       for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
-      if (jungle) jungle.update(sim, { time, actors: jungleActors(swing), stirs, fog: scene.fog });
+      if (jungle) jungle.update(sim, { time, actors: jungleActors(swing), stirs, fog: scene.fog, lights: duel.present ? [...saber.lights, ...duel.enemy.saber.lights] : saber.lights, focus: playerPosition });
       lightStains(power.level, stainLights);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }

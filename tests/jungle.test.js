@@ -175,3 +175,51 @@ test('a grenade in the clearing flattens the plants round it and heaves the wate
   assert.equal(jungle.bolt(new THREE.Vector3(jungle.start.x, 0, jungle.start.z)), false, 'a bolt into the sand: no splash');
   assert.equal(jungle.bolt(stream), true, 'into the water: one');
 });
+
+test('the floor: puddles and paths of open mud, the banks wet, no puddle in the stream; the plants keep off the open mud', () => {
+  const scene = new THREE.Scene();
+  const jungle = createJungle(scene, { random: seeded(15) });
+  const { layout, waterDepth } = jungle;
+  let puddles = 0, paths = 0, wetBanks = 0, samples = 0;
+  for (let x = -11.5; x < 11.5; x += 0.25) for (let z = -8.5; z < 8.5; z += 0.25) {
+    samples++;
+    if (waterDepth(x, z) > 0) { assert.equal(layout.puddle(x, z), 0, 'no puddle in the stream'); assert.ok(layout.wetness(x, z) > 0.99); continue; }
+    if (layout.puddle(x, z) > 0.5) puddles++;
+    if (layout.path(x, z) > 0.5) paths++;
+    if (layout.wetness(x, z) > 0.5) wetBanks++;
+  }
+  assert.ok(puddles > samples * 0.01 && puddles < samples * 0.15, `puddles here and there (${puddles} of ${samples})`);
+  assert.ok(paths > samples * 0.03, `paths (${paths})`);
+  assert.ok(wetBanks > samples * 0.04, `wet banks (${wetBanks})`);
+  // Plants: few on the paths and in the puddles, compared with the ground they cover.
+  const grass = jungle.vegetation.group.getObjectByName('Jungle grass'), matrix = new THREE.Matrix4(), at = new THREE.Vector3();
+  let open = 0, inside = 0;
+  for (let i = 0; i < grass.count; i++) {
+    grass.getMatrixAt(i, matrix);
+    at.setFromMatrixPosition(matrix);
+    if (Math.abs(at.x) > 12 || Math.abs(at.z) > 9) continue;
+    inside++;
+    if (layout.puddle(at.x, at.z) > 0.5 || layout.path(at.x, at.z) > 0.9) open++;
+  }
+  assert.ok(open < inside * 0.05, `${open} of ${inside} tufts on open mud`);
+});
+
+test('the ruins: a lamp before every lit face, on the faces the camera sees; the blocks stand where the squad finds cover', () => {
+  const scene = new THREE.Scene();
+  const jungle = createJungle(scene, { random: seeded(16) });
+  assert.ok(jungle.lamps.length >= 8, `${jungle.lamps.length} lamps`);
+  for (const lamp of jungle.lamps) {
+    // In front of a block's +x or +z face: just outside its box, on that side.
+    const ruin = jungle.lab.obstacles.find(box => box.kind !== 'wall' && box.kind !== 'rock' && lamp.position.x > box.min.x - 0.6 && lamp.position.x < box.max.x + 0.6 && lamp.position.z > box.min.z - 0.6 && lamp.position.z < box.max.z + 0.6);
+    assert.ok(ruin, 'by a ruin');
+    assert.ok(lamp.position.x > ruin.max.x || lamp.position.z > ruin.max.z, 'on the side the camera sees');
+  }
+  const hero = new THREE.Vector3(jungle.start.x, 0, jungle.start.z);
+  const cover = jungle.lab.coverSpots(hero);
+  assert.ok(cover.length > 3, `cover from the hero behind the blocks (${cover.length} spots)`);
+  // The diodes blink.
+  jungle.ruins.update(0.3);
+  const led = scene.getObjectByName('Ruin diodes').material.color.r;
+  jungle.ruins.update(1.1);
+  assert.notEqual(scene.getObjectByName('Ruin diodes').material.color.r, led);
+});

@@ -42,7 +42,7 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
     rectMin: { value: new THREE.Vector2(rect.minX, rect.minZ) }, rectSize: { value: new THREE.Vector2(width, length) },
     time: { value: 0 }, viewDir: { value: new THREE.Vector3(-8, -8.2, -10).normalize() },
     moonDir: { value: new THREE.Vector3(0.4, 0.8, 0.45).normalize() }, moonColor: { value: new THREE.Color(0.55, 0.7, 0.9) },
-    shallow: { value: new THREE.Color(0.1, 0.62, 0.6) }, deep: { value: new THREE.Color(0.02, 0.2, 0.26) }, sky: { value: new THREE.Color(0.05, 0.12, 0.16) },
+    shallow: { value: new THREE.Color(0.035, 0.22, 0.21) }, deep: { value: new THREE.Color(0.008, 0.06, 0.075) }, sky: { value: new THREE.Color(0.02, 0.05, 0.06) },
     glintPos: { value: glints.map(g => g.position) }, glintColor: { value: glints.map(g => g.color) },
     fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 },
   };
@@ -87,14 +87,16 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
         colour += moonColor * pow(max(dot(r, moonDir), 0.0), 40.0) * 0.9;
         for (int i = 0; i < ${GLINTS}; i++) {
           vec3 toLight = glintPos[i] - vWorld; float far = length(toLight);
-          float s = pow(max(dot(r, toLight / far), 0.0), 22.0) / (1.0 + far * far * 0.08);
-          colour += glintColor[i] * s * 2.2;
+          // Sharp: a lamp makes a bright streak on the ripples, not a sheen over the whole stream.
+          float s = pow(max(dot(r, toLight / far), 0.0), 90.0) / (1.0 + far * far * 0.12);
+          colour += glintColor[i] * s * 3.5;
         }
         // Foam along the edge, and where the water is churned.
         float churn = clamp(abs(dx) * 18.0 + abs(dz) * 18.0, 0.0, 1.0);
         float foam = smoothstep(0.2, 0.04, depth) * (0.55 + 0.45 * sin(vWorld.x * 23.0 + time * 2.0) * sin(vWorld.z * 19.0 - time * 1.7)) + churn * 0.35;
-        colour = mix(colour, vec3(0.6, 0.82, 0.8), clamp(foam, 0.0, 0.6));
-        float alpha = mix(0.5, 0.88, smoothstep(0.05, 0.8, depth)) + fresnel * 0.1 + foam * 0.2;
+        colour = mix(colour, vec3(0.32, 0.46, 0.44), clamp(foam * 0.6, 0.0, 0.45));
+        // Clear: the bed shows through at the edges, and what the floor below mirrors (main.js).
+        float alpha = mix(0.3, 0.72, smoothstep(0.05, 0.8, depth)) + fresnel * 0.15 + foam * 0.12;
         float fog = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
         gl_FragColor = vec4(mix(colour, fogColor, fog), clamp(alpha, 0.0, 1.0));
         #include <colorspace_fragment>
@@ -114,7 +116,7 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
   }
   const padShape = new THREE.CircleGeometry(1, 12, 0.35, Math.PI * 2 - 0.7);
   padShape.rotateX(-Math.PI / 2);
-  const padMesh = new THREE.InstancedMesh(padShape, new THREE.MeshLambertMaterial({ color: 0x2f6b2a, side: THREE.DoubleSide }), Math.max(1, pads.length));
+  const padMesh = new THREE.InstancedMesh(padShape, new THREE.MeshStandardMaterial({ color: 0x1c4520, roughness: 0.35, side: THREE.DoubleSide }), Math.max(1, pads.length));
   padMesh.name = 'Lily pads';
   padMesh.count = pads.length;
   padMesh.receiveShadow = true;

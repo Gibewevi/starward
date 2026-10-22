@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { obstacleQueries } from './lab.js';
+import { hash, valueNoise, fbm, createFloorLayout, paintJungleFloor, scatterStones } from './jungle-ground.js';
+import { buildRuins } from './jungle-ruins.js';
 import { createVegetation } from './vegetation.js';
 import { createWater } from './water.js';
 import { createJungleAir } from './jungle-air.js';
@@ -30,14 +32,6 @@ export const JUNGLE = { minX: -12, maxX: 12, minZ: -9, maxZ: 9, height: 6, drop:
 const B = JUNGLE;
 
 // ---- The lie of the land ---------------------------------------------------------------
-function hash(x, z) { const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453; return s - Math.floor(s); }
-function valueNoise(x, z) {
-  const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
-  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
-  const a = hash(xi, zi), b = hash(xi + 1, zi), c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
-  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
-}
-const fbm = (x, z) => valueNoise(x, z) * 0.6 + valueNoise(x * 2.1 + 5, z * 2.1 - 3) * 0.3 + valueNoise(x * 4.3 - 7, z * 4.3 + 1) * 0.1;
 /** The stream's middle line at x, its half width, and the pools: how deep the water is (0 dry → 1). */
 function waterDepth(x, z) {
   const centre = 3.2 + Math.sin(x * 0.32) * 1.4 + Math.sin(x * 0.81 + 1.3) * 0.5;
@@ -49,70 +43,6 @@ function waterDepth(x, z) {
 /** Old stone slabs where the ruins stood: the back of the clearing. */
 const slabs = (x, z) => (z < -4.6 && x < 6) || (x < -8.4 && z < 2);
 
-// ---- The ground: painted once, wet sand, earth, moss, slabs; darker and teal under the water ----
-function paintGround(width, length, scale = 40) {
-  // Without a page (the tests), no paint.
-  if (typeof document === 'undefined') return null;
-  const W = Math.round(width * scale), H = Math.round(length * scale);
-  const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d'), image = ctx.createImageData(W, H), px = image.data;
-  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-    const x = B.minX + (i + 0.5) / scale, z = B.minZ + (j + 0.5) / scale;
-    const n = fbm(x * 0.6, z * 0.6), grain = hash(i, j), wet = Math.max(0, 1 - waterDepth(x, z) * 0 - Math.min(1, Math.max(0, (dist2water(x, z) - 0.2) / 1.6)));
-    // Sand, darker earth in patches, moss here and there.
-    let r = 0.42 + 0.08 * n, g = 0.34 + 0.07 * n, b = 0.24 + 0.05 * n;
-    const earth = THREE.MathUtils.smoothstep(n, 0.45, 0.7);
-    r = r * (1 - earth) + 0.22 * earth; g = g * (1 - earth) + 0.18 * earth; b = b * (1 - earth) + 0.12 * earth;
-    const moss = THREE.MathUtils.smoothstep(fbm(x * 1.3 + 11, z * 1.3), 0.58, 0.75);
-    r = r * (1 - moss) + 0.16 * moss; g = g * (1 - moss) + 0.26 * moss; b = b * (1 - moss) + 0.1 * moss;
-    if (slabs(x, z)) {
-      // Slabs: grey stone, joints, cracks, moss in the joints.
-      const sx = ((x - B.minX) / 1.2) % 1, sz = ((z - B.minZ + (Math.floor((x - B.minX) / 1.2) % 2) * 0.4) / 0.8) % 1;
-      const joint = sx < 0.05 || sz < 0.07;
-      const stone = 0.3 + 0.08 * hash(Math.floor((x - B.minX) / 1.2), Math.floor((z - B.minZ) / 0.8)) + 0.05 * n;
-      r = joint ? 0.12 : stone * 0.95; g = joint ? 0.17 : stone; b = joint ? 0.09 : stone * 0.98;
-      if (!joint && fbm(x * 3, z * 3) > 0.7) { r *= 0.7; g *= 0.85; b *= 0.6; }
-    }
-    // Pebbles and grit; wet sand darker near the water.
-    const pebble = grain > 0.985 ? 0.12 : grain < 0.02 ? -0.06 : 0;
-    const dark = 1 - wet * 0.45;
-    px.set([Math.min(255, (r + pebble) * dark * 255), Math.min(255, (g + pebble) * dark * 255), Math.min(255, (b + pebble) * dark * 255), 255], (j * W + i) * 4);
-  }
-  ctx.putImageData(image, 0, 0);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.LinearMipmapLinearFilter;
-  texture.flipY = false;
-  return texture;
-}
-/** Roughly how far from the water a point is (m), by stepping out a few rings. */
-function dist2water(x, z) {
-  if (waterDepth(x, z) > 0) return 0;
-  for (const r of [0.3, 0.6, 1, 1.5, 2]) for (let a = 0; a < 8; a++) if (waterDepth(x + Math.cos(a * 0.785) * r, z + Math.sin(a * 0.785) * r) > 0) return r;
-  return 3;
-}
-
-// ---- The ruins: stone blocks, moss, lit strips -------------------------------------------
-// [x, z, width (x), height, depth (z), lit faces ('+z' '-z' '+x' '-x'), kind]
-const RUINS = [
-  // The back wall of the clearing: pillars, lit, along the far sides.
-  ...[-10.4, -7.2, -4, -0.8, 2.4, 5.6, 8.8].map((x, i) => [x, -8.4, 1.3, 3.4 + (i % 3) * 0.5, 1.2, i % 2 ? ['+z'] : [], 'wall']),
-  ...[-5.4, -2.2, 1, 4.2, 7.4].map((z, i) => [-11.4, z, 1.2, 3 + (i % 2) * 0.6, 1.3, i % 2 ? [] : ['+x'], 'wall']),
-  // Blocks in the clearing: cover.
-  [-6.4, -5.2, 1.4, 1.2, 1.4, ['+z'], 'block'],
-  [-2.4, -6.1, 2.4, 0.9, 1, [], 'block'],
-  [3, -5.4, 1.2, 1.7, 1.2, ['+x'], 'block'],
-  [7.2, -4.4, 1.4, 1.1, 1.4, [], 'block'],
-  [-8.4, -2.6, 1.2, 1.4, 1.2, ['+z'], 'block'],
-  [1.6, -2.4, 1, 1, 1, [], 'block'],
-  [5.2, 0.6, 2.4, 0.8, 0.9, [], 'block'],
-  [-4.6, 0.2, 1.3, 1.2, 1.3, ['+x'], 'block'],
-  [-5.4, 7.4, 1.3, 1.25, 1.3, [], 'block'],
-  [9.6, 7.6, 1.2, 1.5, 1.2, ['-x'], 'block'],
-  [10.2, -1.4, 1.3, 1.3, 1.3, ['-x'], 'block'],
-];
 /** The trail out of the clearing, between the back wall's pillars at x 2.4 and 5.6: x, width, how far back it goes. */
 const PASSAGE = { x: 4, width: 1.9, end: -11.8 };
 /**
@@ -144,38 +74,6 @@ function createPassage(obstacles) {
 }
 const ROCKS = [[-3, 2.1, 0.55], [2.1, 4.6, 0.45], [10.2, 2.6, 0.6], [-9.6, 4.2, 0.55], [6.4, 8.2, 0.4], [-1, -3.8, 0.4], [8.3, 4, 0.35]];
 
-function stoneTexture() {
-  if (typeof document === 'undefined') return null;
-  const S = 64, canvas = document.createElement('canvas');
-  canvas.width = canvas.height = S;
-  const ctx = canvas.getContext('2d'), image = ctx.createImageData(S, S);
-  for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) {
-    const course = Math.floor(j / 16), brick = Math.floor((i + (course % 2) * 12) / 24);
-    const joint = j % 16 === 0 || (i + (course % 2) * 12) % 24 === 0;
-    const v = joint ? 0.14 : 0.36 + 0.1 * hash(brick, course) + 0.05 * hash(i, j);
-    const moss = !joint && hash(i * 3, j * 7) > 0.93 ? 0.06 : 0;
-    image.data.set([(v - moss) * 255, (v + moss) * 255, (v * 0.95 - moss) * 255, 255], (j * S + i) * 4);
-  }
-  ctx.putImageData(image, 0, 0);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.magFilter = THREE.NearestFilter;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  return texture;
-}
-/** A box, its UVs in metres (so the stone courses keep their size on any block). */
-function block(w, h, d, x, y, z) {
-  const geometry = new THREE.BoxGeometry(w, h, d);
-  const uv = geometry.attributes.uv, normal = geometry.attributes.normal;
-  for (let i = 0; i < uv.count; i++) {
-    const nx = Math.abs(normal.getX(i)), ny = Math.abs(normal.getY(i));
-    const sx = nx > 0.5 ? d : w, sy = ny > 0.5 ? d : h;
-    uv.setXY(i, uv.getX(i) * sx / 1.2, uv.getY(i) * sy / 1.2);
-  }
-  geometry.translate(x, y, z);
-  return geometry;
-}
-
 export function createJungle(scene, { renderer = null, random = Math.random } = {}) {
   const group = new THREE.Group();
   group.name = 'Jungle';
@@ -184,9 +82,16 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
 
   // ---- Water ---------------------------------------------------------------------
   const water = createWater(scene, { rect: B, depthAt: waterDepth, random });
+  // The water is not mirrored by the floor below it (the game's camera sees layer 1, the mirror does not).
+  water.group.traverse(object => object.layers.set(1));
 
-  // ---- The ground: lower under the water (seen through it), wet near it ------------------
-  const groundMaterial = new THREE.MeshStandardMaterial({ map: paintGround(width, length), roughness: 0.92, metalness: 0, envMapIntensity: 0.25 });
+  // ---- The ground: mud, wet sand, moss, puddles, slabs; what is wet shines -----------------
+  const layout = createFloorLayout({ bounds: B, waterDepth, slabs });
+  const floor = paintJungleFloor({ bounds: B, waterDepth, slabs, layout });
+  const groundMaterial = new THREE.MeshStandardMaterial({
+    name: 'jungle floor', map: floor.map, roughnessMap: floor.roughnessMap, bumpMap: floor.bumpMap, bumpScale: 1.2,
+    roughness: 1, metalness: 0, envMapIntensity: 0.12,
+  });
   groundMaterial.onBeforeCompile = shader => {
     shader.uniforms.tDepth = { value: water.depthTexture };
     shader.uniforms.time = { value: 0 };
@@ -196,15 +101,15 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
       varying vec3 vGround; uniform sampler2D tDepth; uniform float time;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-      {
-        vec2 uvw = (vGround.xz - vec2(${B.minX.toFixed(2)}, ${B.minZ.toFixed(2)})) / vec2(${width.toFixed(2)}, ${length.toFixed(2)});
-        float under = texture2D(tDepth, uvw).r;
-        if (under > 0.01) {
-          // The stream's bed: darker, tinted by the water over it, crossed by the light the ripples gather.
-          float caustic = pow(abs(sin(vGround.x * 3.1 + time * 0.9 + sin(vGround.z * 2.7 + time * 0.7)) * sin(vGround.z * 3.4 - time * 0.8 + sin(vGround.x * 2.2))), 6.0);
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.45, 0.75, 0.72), smoothstep(0.0, 0.6, under)) * (1.0 - 0.35 * under) + vec3(0.18, 0.4, 0.38) * caustic * (1.0 - under * 0.5);
-        }
-      }`);
+      float under = texture2D(tDepth, (vGround.xz - vec2(${B.minX.toFixed(2)}, ${B.minZ.toFixed(2)})) / vec2(${width.toFixed(2)}, ${length.toFixed(2)})).r;
+      if (under > 0.01) {
+        // The stream's bed: dark, tinted by the water over it, crossed by the light the ripples gather.
+        float caustic = pow(abs(sin(vGround.x * 3.1 + time * 0.9 + sin(vGround.z * 2.7 + time * 0.7)) * sin(vGround.z * 3.4 - time * 0.8 + sin(vGround.x * 2.2))), 6.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.35, 0.6, 0.58), smoothstep(0.0, 0.5, under)) * (1.0 - 0.45 * under) + vec3(0.06, 0.16, 0.15) * caustic * (1.0 - under * 0.6);
+      }`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      // Under the water the bed is wet, the surface does the shining.
+      roughnessFactor = mix(roughnessFactor, 0.5, step(0.01, under));`);
   };
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(width, length), groundMaterial);
   ground.name = 'Jungle ground';
@@ -214,56 +119,22 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   ground.position.set(B.minX + width / 2, -0.005, B.minZ + length / 2);
   ground.receiveShadow = true;
   group.add(ground);
+  // What the game mirrors (main.js): the same rectangle, its v along +z, and where it is wet.
+  const mirrorGeometry = new THREE.PlaneGeometry(width, length);
+  const mirrorUv = mirrorGeometry.attributes.uv;
+  for (let i = 0; i < mirrorUv.count; i++) mirrorUv.setY(i, 1 - mirrorUv.getY(i));
+  const mirror = { geometry: mirrorGeometry, centre: new THREE.Vector3(B.minX + width / 2, 0, B.minZ + length / 2), roughnessTexture: floor.roughnessMap, size: [width, length] };
   // Beyond the clearing: dark earth under the jungle, to the horizon.
-  const beyond = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshLambertMaterial({ color: 0x1d2a16 }));
+  const beyond = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshLambertMaterial({ color: 0x10170c }));
   beyond.rotation.x = -Math.PI / 2;
   beyond.position.y = -0.03;
   group.add(beyond);
 
   // ---- Ruins, rocks, and the edges of the clearing (the obstacles) --------------------------
-  const obstacles = [];
-  const stoneMaterial = new THREE.MeshStandardMaterial({ map: stoneTexture(), color: 0xc4ccc0, roughness: 0.95, metalness: 0.05 });
-  const mossMaterial = new THREE.MeshLambertMaterial({ color: 0x40692c });
-  const stripMaterial = new THREE.MeshBasicMaterial({ name: 'ruin light strips', color: new THREE.Color(2.2, 1.9, 1.45), toneMapped: false });
-  const diodeMaterial = new THREE.MeshBasicMaterial({ name: 'red diodes', color: new THREE.Color(2.4, 0.15, 0.1), toneMapped: false });
-  const stone = [], moss = [], strips = [], diodes = [];
-  const lamps = [];
-  for (const [x, z, w, h, d, lit, kind] of RUINS) {
-    stone.push(block(w, h, d, x, h / 2, z));
-    obstacles.push({ kind: kind === 'wall' ? 'pillar' : 'crate', min: new THREE.Vector3(x - w / 2, 0, z - d / 2), max: new THREE.Vector3(x + w / 2, h, z + d / 2), centre: new THREE.Vector3(x, h / 2, z) });
-    // Moss in cushions over the top (the stone showing between), and running down the sides.
-    for (let n = 0; n < 3; n++) {
-      const mw = w * (0.35 + random() * 0.5), md = d * (0.35 + random() * 0.5);
-      moss.push(block(mw, 0.05 + random() * 0.06, md, x + (random() - 0.5) * (w - mw), h + 0.03, z + (random() - 0.5) * (d - md)));
-    }
-    for (let n = 0; n < 3; n++) {
-      const side = random() < 0.5 ? -1 : 1, alongX = random() < 0.5, run = 0.3 + random() * h * 0.6;
-      const offset = (random() - 0.5) * (alongX ? w : d) * 0.8;
-      if (alongX) moss.push(block(0.12 + random() * 0.15, run, 0.03, x + offset, h - run / 2, z + side * (d / 2 + 0.01)));
-      else moss.push(block(0.03, run, 0.12 + random() * 0.15, x + side * (w / 2 + 0.01), h - run / 2, z + offset));
-    }
-    for (const face of lit) {
-      // A vertical strip of light set into the face, a red diode under it, a warm lamp in front.
-      const sign = face[0] === '+' ? 1 : -1, axis = face[1];
-      const fx = axis === 'x' ? x + sign * (w / 2 + 0.012) : x, fz = axis === 'z' ? z + sign * (d / 2 + 0.012) : z;
-      const tall = Math.min(1.1, h * 0.5);
-      strips.push(axis === 'x' ? block(0.03, tall, 0.09, fx, h * 0.55, fz) : block(0.09, tall, 0.03, fx, h * 0.55, fz));
-      diodes.push(axis === 'x' ? block(0.03, 0.05, 0.05, fx, h * 0.55 - tall / 2 - 0.12, fz + 0.15) : block(0.05, 0.05, 0.03, fx + 0.15, h * 0.55 - tall / 2 - 0.12, fz));
-      const lamp = new THREE.PointLight(0xffc48a, 3.2, 5.5, 1.6);
-      lamp.position.set(fx + (axis === 'x' ? sign * 0.5 : 0), h * 0.55, fz + (axis === 'z' ? sign * 0.5 : 0));
-      group.add(lamp);
-      lamps.push(lamp);
-    }
-  }
-  for (const [geometries, material, name, shadows] of [[stone, stoneMaterial, 'Ruins', true], [moss, mossMaterial, 'Moss', true], [strips, stripMaterial, 'Ruin lights', false], [diodes, diodeMaterial, 'Ruin diodes', false]]) {
-    if (!geometries.length) continue;
-    const mesh = new THREE.Mesh(mergeGeometries(geometries), material);
-    mesh.name = name;
-    mesh.castShadow = mesh.receiveShadow = shadows;
-    group.add(mesh);
-  }
-  // Rocks: lumpy, dark, mossy on top.
-  const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x3a3f38, roughness: 0.9, flatShading: true, vertexColors: true });
+  const ruins = buildRuins(group, { random });
+  const obstacles = [...ruins.obstacles], lamps = ruins.lamps;
+  // Rocks: lumpy, dark, wet, mossy on top.
+  const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x2e322d, roughness: 0.5, flatShading: true, vertexColors: true });
   for (const [x, z, r] of ROCKS) {
     const geometry = new THREE.IcosahedronGeometry(r, 1);
     const position = geometry.attributes.position, colors = [];
@@ -273,7 +144,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
       p.y = Math.max(-r * 0.2, p.y * 0.75);
       position.setXYZ(i, p.x, p.y, p.z);
       const top = p.y > r * 0.35;
-      colors.push(...(top ? [0.42, 0.62, 0.32] : [0.75, 0.78, 0.72]));
+      colors.push(...(top ? [0.36, 0.55, 0.24] : [0.75 + 0.2 * hash(i, x), 0.78, 0.72]));
     }
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
@@ -301,15 +172,16 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   // ---- Plants -----------------------------------------------------------------------
   const place = kind => {
     const plants = [];
-    const target = { grass: 2600, reed: 300, fern: 190, broadleaf: 80 }[kind];
+    const target = { grass: 2500, reed: 280, fern: 600, broadleaf: 40 }[kind];
     for (let tries = 0; plants.length < target && tries < target * 30; tries++) {
       const x = B.minX + 0.3 + random() * (width - 0.6), z = B.minZ + 0.3 + random() * (length - 0.6);
       const wet = waterDepth(x, z), edge = Math.min(x - B.minX, B.maxX - x, z - B.minZ, B.maxZ - z);
       if (inside(x, z, kind === 'grass' ? 0.12 : 0.3)) continue;
-      // Clumps, thicker towards the edges of the clearing; sparse on the slabs and kept off the middle of the paths.
-      const clump = fbm(x * 0.45 + 3, z * 0.45 - 2) + (edge < 2.2 ? 0.35 : 0) - (slabs(x, z) ? 0.35 : 0);
+      // Clumps, thicker towards the edges of the clearing; sparse on the slabs, the paths and the puddles left open mud.
+      const open = Math.max(layout.path(x, z), layout.puddle(x, z) * 1.5);
+      const clump = fbm(x * 0.45 + 3, z * 0.45 - 2) + (edge < 2.2 ? 0.35 : 0) - (slabs(x, z) ? 0.35 : 0) - open * 0.9;
       if (kind === 'reed') {
-        if (wet > 0.32 || (wet === 0 && dist2water(x, z) > 0.6)) continue;
+        if (wet > 0.32 || (wet === 0 && layout.toWater(x, z) > 0.6)) continue;
         plants.push({ x, z, height: 0.9 + random() * 0.75, size: 0.9 + random() * 0.4 });
       } else if (wet > 0.04) continue;
       else if (kind === 'grass') {
@@ -318,25 +190,27 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
         plants.push({ x, z, height: 0.18 + random() * 0.35 + clump * 0.6 * random(), size: 0.7 + random() * 0.6 });
       } else {
         if (random() > clump * 1.1 - 0.2 + (edge < 2 ? 0.4 : 0)) continue;
-        plants.push(kind === 'fern' ? { x, z, height: 0.45 + random() * 0.5, size: 0.7 + random() * 0.5 } : { x, z, height: 0.65 + random() * 0.7, size: 0.85 + random() * 0.6 });
+        plants.push(kind === 'fern' ? { x, z, height: 0.4 + random() * 0.55, size: 0.6 + random() * 0.55 } : { x, z, height: 0.45 + random() * 0.4, size: 0.5 + random() * 0.35 });
       }
     }
     // Beyond the edges, the jungle itself: thick and tall at the back, lower on
     // the near sides so as not to hide the clearing; the trail kept clear.
-    const ring = { grass: 1300, fern: 340, broadleaf: 280 }[kind] ?? 0;
+    const ring = { grass: 1300, fern: 420, broadleaf: 220 }[kind] ?? 0;
     for (let n = 0, tries = 0; n < ring && tries < ring * 20; tries++) {
       const x = B.minX - 3 + random() * (width + 8), z = B.minZ - 3 + random() * (length + 8);
       if (x > B.minX - 0.1 && x < B.maxX + 0.1 && z > B.minZ - 0.1 && z < B.maxZ + 0.1) continue;
       if (Math.abs(x - PASSAGE.x) < PASSAGE.width / 2 + 0.3 && z < B.minZ) continue;
       const grow = x > B.maxX || z > B.maxZ ? 0.75 : 1.5;
-      if (kind === 'grass') plants.push({ x, z, height: 0.5 + random() * 0.6, size: 1 + random() * 0.6 });
-      else if (kind === 'fern') plants.push({ x, z, height: (0.6 + random() * 0.6) * grow, size: (1 + random() * 0.7) * grow });
-      else plants.push({ x, z, height: (0.9 + random() * 0.9) * grow, size: (1 + random() * 0.8) * grow });
+      const shade = 0.45 + random() * 0.25;
+      if (kind === 'grass') plants.push({ x, z, height: 0.5 + random() * 0.6, size: 1 + random() * 0.6, shade });
+      else if (kind === 'fern') plants.push({ x, z, height: (0.6 + random() * 0.6) * grow, size: (1 + random() * 0.7) * grow, shade });
+      else plants.push({ x, z, height: (0.9 + random() * 0.9) * grow, size: (1 + random() * 0.8) * grow, shade });
       n++;
     }
     return plants;
   };
   const vegetation = createVegetation(scene, { place, random });
+  scatterStones(group, { bounds: B, layout, waterDepth, slabs, avoid: (x, z) => inside(x, z, 0.1), random });
 
   // ---- Trees: trunks rising out of the jungle behind the far sides, vines hanging --------------
   const trunks = [], vines = [];
@@ -377,7 +251,6 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   });
   const air = createJungleAir(scene, { bounds: B, shafts, lamps, random });
   const prints = createFootprints(scene, { max: 900, tint: new THREE.Color(0.1, 0.075, 0.05), linger: [240, 300], name: 'Sand footprints' });
-  water.setGlints(lamps.map(lamp => ({ position: lamp.position, color: new THREE.Color(1, 0.75, 0.5), intensity: 0.9 })));
 
   // ---- The squad's posts: sentries by the ruins, two on rounds ------------------------------------
   const posts = [
@@ -412,7 +285,15 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   function bolt(at) { if (!inWater(at)) return false; water.splash(at, 0.45); return true; }
   /** A body landing at `at`: in the water, a big splash. */
   function landing(at, speed) { if (inWater(at)) water.splash(at, THREE.MathUtils.clamp(speed / 5, 0.4, 1.6)); }
-  function update(dt, { time = 0, actors = [], stirs = [], fog = null } = {}) {
+  /** What glints on the water: the lights burning now (the blade, a blast), then the lamps nearest the view. */
+  function glints(lights, focus) {
+    const near = focus ? [...lamps].sort((a, b) => a.position.distanceToSquared(focus) - b.position.distanceToSquared(focus)) : lamps;
+    water.setGlints([...lights.filter(light => light.intensity > 0.05), ...near].slice(0, 6).map(light => ({ position: light.position, color: light.color, intensity: Math.min(2.5, light.intensity / 5) })));
+  }
+  glints([], null);
+  function update(dt, { time = 0, actors = [], stirs = [], fog = null, lights = [], focus = null } = {}) {
+    ruins.update(time);
+    glints(lights, focus);
     if (groundMaterial.userData.shader) groundMaterial.userData.shader.uniforms.time.value = time;
     vegetation.update(dt, { time, pushers: actors });
     water.update(dt, { time, fog, waders: actors.filter(actor => actor.wades !== false) });
@@ -430,24 +311,28 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   const stage = { floor: ground, material: groundMaterial, roughnessTexture: null, bounds: B, update() {} };
   // The hero comes in from the near side of the stream, the ruins and the squad across it.
   const start = { x: 2, z: 7.6, heading: -2.47 };
-  return { bounds: B, start, lab, arena, stage, posts, vegetation, water, air, prints, lamps, step, cut, blast, bolt, landing, update, reset, inWater, waterDepth, slabs };
+  return { bounds: B, start, lab, arena, stage, mirror, layout, posts, vegetation, water, air, prints, lamps, ruins, step, cut, blast, bolt, landing, update, reset, inWater, waterDepth, slabs };
 }
 
 /**
- * Night under the canopy, from the lab's lighting: a low cold moon (the key
- * light, casting the shadows), a green-blue sky, earth below; the studio
- * strips over the hero dimmed to a soft glow; the air dark and green-blue.
+ * Night under the canopy, from the lab's lighting: dark, the light where it
+ * burns — a low cold moon (the key light, casting the shadows) barely there,
+ * a dim blue-green sky, earth below; the ruins' lamps, the blade, the blasts
+ * do the lighting. The studio strip over the hero is a faint cold fill.
  */
 export function jungleLighting(scene, lighting) {
-  scene.background = new THREE.Color(0x09130f);
-  scene.fog = new THREE.FogExp2(0x0c1a17, 0.026);
-  scene.environmentIntensity = 0.18;
-  scene.traverse(object => { if (object.isHemisphereLight) { object.color.set(0x35596a); object.groundColor.set(0x1c150b); object.intensity = 1.05; } });
-  lighting.keyLight.color.set(0xa9c6ea);
-  lighting.keyLight.intensity = 2.3;
-  lighting.rimLight.color.set(0x6f9a8f);
-  lighting.rimLight.intensity = 0.8;
-  lighting.whiteStrip.intensity = 2.6;
-  lighting.whiteStrip.color.set(0xbfd8d0);
+  scene.background = new THREE.Color(0x040807);
+  scene.fog = new THREE.FogExp2(0x060c0b, 0.03);
+  scene.environmentIntensity = 0.1;
+  scene.traverse(object => { if (object.isHemisphereLight) { object.color.set(0x2c4d5c); object.groundColor.set(0x120d07); object.intensity = 0.55; } });
+  lighting.keyLight.color.set(0x87a8dc);
+  lighting.keyLight.intensity = 1.9;
+  lighting.keyLight.shadow.mapSize.set(2048, 2048);
+  Object.assign(lighting.keyLight.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8 });
+  lighting.keyLight.shadow.camera.updateProjectionMatrix();
+  lighting.rimLight.color.set(0x3f6c66);
+  lighting.rimLight.intensity = 0.45;
+  lighting.whiteStrip.intensity = 2;
+  lighting.whiteStrip.color.set(0x9fc2c8);
   lighting.redStrip.intensity = 0;
 }

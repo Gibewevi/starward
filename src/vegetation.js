@@ -64,21 +64,31 @@ function tuftGeometry({ blades = 6, width = 0.05, lean = [0.12, 0.55], heights =
   }
   return s.build();
 }
-/** Fronds arching out from the root and drooping, their edges toothed with leaflets. */
-function fernGeometry({ fronds = 8, seed = 5 } = {}) {
-  const random = seeded(seed), s = shape(), SEG = 9;
+/** Fronds arching out from the root and drooping, leaflets in pairs along them: dark at the heart, bright at the ends. */
+function fernGeometry({ fronds = 7, seed = 5 } = {}) {
+  const random = seeded(seed), s = shape(), SEG = 8;
   for (let f = 0; f < fronds; f++) {
-    const yaw = (f / fronds) * Math.PI * 2 + random() * 0.5, reach = 0.75 + random() * 0.35, rise = 0.55 + random() * 0.35;
+    const yaw = (f / fronds) * Math.PI * 2 + random() * 0.6, reach = 0.7 + random() * 0.35, rise = 0.5 + random() * 0.4;
     const dir = [Math.sin(yaw), Math.cos(yaw)], side = [Math.cos(yaw), -Math.sin(yaw)];
-    const dark = [0.04, 0.16, 0.05], light = mix([0.16, 0.42, 0.1], [0.3, 0.5, 0.14], random());
+    const dark = [0.025, 0.09, 0.03], light = mix([0.14, 0.36, 0.08], [0.34, 0.5, 0.12], random() * random());
+    const at = t => [dir[0] * reach * t, rise * Math.sin(Math.PI * t * 0.82) + 0.02, dir[1] * reach * t];
+    // The stalk: a thin ribbon.
     let previous = null;
     for (let i = 0; i <= SEG; i++) {
-      const t = i / SEG, out = reach * t, y = rise * Math.sin(Math.PI * t * 0.85) + 0.02, tooth = i % 2 ? 1 : 0.45, half = 0.11 * Math.sin(Math.PI * Math.min(1, t * 1.1)) * tooth + 0.008;
-      const color = mix(dark, light, Math.min(1, t * 1.4));
-      const left = s.vertex(dir[0] * out + side[0] * half, y + half * 0.2, dir[1] * out + side[1] * half, color, t);
-      const right = s.vertex(dir[0] * out - side[0] * half, y + half * 0.2, dir[1] * out - side[1] * half, color, t);
+      const t = i / SEG, p = at(t), half = 0.012 * (1 - t);
+      const left = s.vertex(p[0] + side[0] * half, p[1], p[2] + side[1] * half, dark, t), right = s.vertex(p[0] - side[0] * half, p[1], p[2] - side[1] * half, dark, t);
       if (previous) s.quad(previous[0], previous[1], right, left);
       previous = [left, right];
+    }
+    // The leaflets: a pair at each step, swept towards the tip, longest mid-frond, drooping.
+    for (let i = 1; i < SEG; i++) {
+      const t = i / SEG, length = 0.17 * Math.sin(Math.PI * Math.min(1, t * 1.05)) ** 0.6 + 0.02, step = 0.5 / SEG;
+      const a = at(t - step), b = at(t + step), base = at(t);
+      const colour = mix(dark, light, Math.min(1, 0.35 + t * 0.8)), tipColour = mix(colour, light, 0.6);
+      for (const sign of [-1, 1]) {
+        const tip = [base[0] + (side[0] * sign * 0.85 + dir[0] * 0.5) * length, base[1] - length * (0.25 + t * 0.35), base[2] + (side[1] * sign * 0.85 + dir[1] * 0.5) * length];
+        s.indices.push(s.vertex(...a, colour, t), s.vertex(...tip, tipColour, t + 0.05), s.vertex(...b, colour, t));
+      }
     }
   }
   return s.build();
@@ -97,58 +107,68 @@ function broadleafGeometry({ leaves = 6, seed = 7 } = {}) {
     s.quad(a, b, c, d);
     // The leaf: an oval fanned round its midrib, from the stem's top outward and down.
     const length = 0.5 + random() * 0.25, width = 0.2 + random() * 0.08, droop = 0.18 + random() * 0.2;
-    const leaf = mix([0.05, 0.22, 0.08], [0.13, 0.38, 0.14], random());
+    const leaf = mix([0.03, 0.13, 0.05], [0.09, 0.27, 0.1], random());
     const centre = s.vertex(cx + dir[0] * length * 0.5, stemHeight - droop * 0.35, cz + dir[1] * length * 0.5, leaf, 0.85);
     const rim = [];
     for (let i = 0; i < RIM; i++) {
       const angle = (i / RIM) * Math.PI * 2, along = (Math.cos(angle) * 0.5 + 0.5) * length, across = Math.sin(angle) * width * Math.sin(Math.PI * along / length + 0.15);
-      rim.push(s.vertex(cx + dir[0] * along + side[0] * across, stemHeight - droop * (along / length) ** 2, cz + dir[1] * along + side[1] * across, mix(leaf, [0.2, 0.45, 0.18], along / length * 0.5), 0.7 + 0.3 * along / length));
+      // Folded along the midrib: the edges lower than the middle.
+      rim.push(s.vertex(cx + dir[0] * along + side[0] * across, stemHeight - droop * (along / length) ** 2 - Math.abs(across) * 0.45, cz + dir[1] * along + side[1] * across, mix(leaf, [0.16, 0.36, 0.12], along / length * 0.6), 0.7 + 0.3 * along / length));
     }
     for (let i = 0; i < RIM; i++) s.indices.push(centre, rim[i], rim[(i + 1) % RIM]);
   }
   return s.build();
 }
 
-/** Plant material: lit like the rest (lambert, shadows, fog), swayed and bent in the vertex shader. */
+/**
+ * Plant material: lit like the rest — a little glossy, so the lamps and the
+ * blade glint on the leaves — each plant its own shade; swayed and bent in
+ * the vertex shader. Its shadow (`depth`) sways with it.
+ */
 function plantMaterial(uniforms) {
-  const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  material.onBeforeCompile = shader => {
-    Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', /* glsl */`#include <common>
-        uniform float uTime; uniform vec2 uWind; uniform vec4 uPush[${PUSHERS}]; uniform vec4 uBlast[${BLASTS}];
-        attribute float aBend; attribute float aPhase; attribute float aCut;`)
-      .replace('#include <begin_vertex>', /* glsl */`
-        vec3 transformed = vec3(position);
-        // Cut: what was above the blade is gone, a stub stays.
-        transformed.y = min(transformed.y, aCut);
-        float bend = aBend * clamp(aCut * 1.4, 0.0, 1.0);
-        vec3 root = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-        float height = length(instanceMatrix[1].xyz);
-        // The wind: slow waves across the ground, each plant its own phase, a quicker flutter on top.
-        float wave = sin(uTime * 1.25 + aPhase + root.x * 0.33 + root.z * 0.21) * 0.6 + sin(uTime * 2.9 + aPhase * 2.3 + root.z * 0.5) * 0.25;
-        vec2 offset = uWind * (0.45 + wave) + vec2(sin(uTime * 4.7 + aPhase * 5.1), cos(uTime * 4.1 + aPhase * 3.7)) * 0.025;
-        // Whoever goes through bends it away.
-        for (int i = 0; i < ${PUSHERS}; i++) {
-          vec2 d = root.xz - uPush[i].xy; float l = length(d);
-          if (uPush[i].z > 0.0 && l < uPush[i].z) offset += d / max(l, 0.05) * (1.0 - l / uPush[i].z) * uPush[i].w;
-        }
-        // An explosion: the front runs out, everything thrown with it, then rocking back.
-        for (int i = 0; i < ${BLASTS}; i++) {
-          float age = uTime - uBlast[i].z;
-          if (uBlast[i].w <= 0.0 || age < 0.0 || age > 3.5) continue;
-          vec2 d = root.xz - uBlast[i].xy; float l = max(length(d), 0.05), front = age * 11.0;
-          float hit = exp(-pow((l - front) / 1.4, 2.0)) * uBlast[i].w / (1.0 + l * 0.18);
-          float rock = step(l, front) * exp(-age * 1.6) * sin(age * 9.0 - l * 0.6) * 0.45 * uBlast[i].w / (1.0 + l * 0.3);
-          offset += d / l * (hit + rock);
-        }
-        // Metres at the tip, as far as the plant is tall; kept to a sane lean, and the plant shortened as it leans.
-        offset = offset * bend * height;
-        float lean = length(offset); if (lean > height * 0.9) offset *= height * 0.9 / lean;
-        vec3 world = vec3(offset.x, -dot(offset, offset) / max(height, 0.1) * 0.5 * bend, offset.y);
-        transformed += inverse(mat3(instanceMatrix)) * world;`);
-  };
-  return material;
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.62, metalness: 0, envMapIntensity: 0.3 });
+  const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
+  material.onBeforeCompile = shader => sway(shader, uniforms);
+  depth.onBeforeCompile = shader => sway(shader, uniforms);
+  return { material, depth };
+}
+function sway(shader, uniforms) {
+  Object.assign(shader.uniforms, uniforms);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', /* glsl */`#include <common>
+      uniform float uTime; uniform vec2 uWind; uniform vec4 uPush[${PUSHERS}]; uniform vec4 uBlast[${BLASTS}];
+      attribute float aBend; attribute float aPhase; attribute float aCut;`)
+    .replace('#include <begin_vertex>', /* glsl */`
+      vec3 transformed = vec3(position);
+      // Cut: what was above the blade is gone, a stub stays.
+      transformed.y = min(transformed.y, aCut);
+      float bend = aBend * clamp(aCut * 1.4, 0.0, 1.0);
+      vec3 root = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+      float height = length(instanceMatrix[1].xyz);
+      // The wind: slow waves across the ground, each plant its own phase, a quicker flutter on top.
+      float wave = sin(uTime * 1.25 + aPhase + root.x * 0.33 + root.z * 0.21) * 0.6 + sin(uTime * 2.9 + aPhase * 2.3 + root.z * 0.5) * 0.25;
+      vec2 offset = uWind * (0.45 + wave) + vec2(sin(uTime * 4.7 + aPhase * 5.1), cos(uTime * 4.1 + aPhase * 3.7)) * 0.025;
+      // Whoever goes through bends it away.
+      for (int i = 0; i < ${PUSHERS}; i++) {
+        vec2 d = root.xz - uPush[i].xy; float l = length(d);
+        if (uPush[i].z > 0.0 && l < uPush[i].z) offset += d / max(l, 0.05) * (1.0 - l / uPush[i].z) * uPush[i].w;
+      }
+      // An explosion: the front runs out, everything thrown with it, then rocking back.
+      for (int i = 0; i < ${BLASTS}; i++) {
+        float age = uTime - uBlast[i].z;
+        if (uBlast[i].w <= 0.0 || age < 0.0 || age > 3.5) continue;
+        vec2 d = root.xz - uBlast[i].xy; float l = max(length(d), 0.05), front = age * 11.0;
+        float hit = exp(-pow((l - front) / 1.4, 2.0)) * uBlast[i].w / (1.0 + l * 0.18);
+        float rock = step(l, front) * exp(-age * 1.6) * sin(age * 9.0 - l * 0.6) * 0.45 * uBlast[i].w / (1.0 + l * 0.3);
+        offset += d / l * (hit + rock);
+      }
+      // Metres at the tip, as far as the plant is tall; kept to a sane lean, and the plant shortened as it leans.
+      offset = offset * bend * height;
+      float lean = length(offset); if (lean > height * 0.9) offset *= height * 0.9 / lean;
+      vec3 world = vec3(offset.x, -dot(offset, offset) / max(height, 0.1) * 0.5 * bend, offset.y);
+      // Back into the plant's own space: its matrix is a turn and a scale, so a dot with each axis over its length squared.
+      mat3 turn = mat3(instanceMatrix);
+      transformed += vec3(dot(turn[0], world) / dot(turn[0], turn[0]), dot(turn[1], world) / dot(turn[1], turn[1]), dot(turn[2], world) / dot(turn[2], turn[2]));`);
 }
 
 export function createVegetation(scene, { place, random = Math.random } = {}) {
@@ -160,10 +180,10 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     uPush: { value: Array.from({ length: PUSHERS }, () => new THREE.Vector4()) },
     uBlast: { value: Array.from({ length: BLASTS }, () => new THREE.Vector4(0, 0, -99, 0)) },
   };
-  const material = plantMaterial(uniforms);
+  const { material, depth } = plantMaterial(uniforms);
   const shapes = {
-    grass: tuftGeometry({ blades: 6, seed: 3, tints: [[0.08, 0.17, 0.06], [0.3, 0.52, 0.16]] }),
-    reed: tuftGeometry({ blades: 4, width: 0.06, lean: [0.03, 0.2], heights: [0.75, 1], tints: [[0.12, 0.2, 0.08], [0.42, 0.52, 0.22]], seed: 9 }),
+    grass: tuftGeometry({ blades: 9, width: 0.036, lean: [0.08, 0.6], heights: [0.45, 1], tints: [[0.025, 0.07, 0.025], [0.26, 0.46, 0.12]], seed: 3 }),
+    reed: tuftGeometry({ blades: 5, width: 0.045, lean: [0.03, 0.22], heights: [0.7, 1], tints: [[0.05, 0.1, 0.04], [0.36, 0.46, 0.16]], seed: 9 }),
     fern: fernGeometry(),
     broadleaf: broadleafGeometry(),
   };
@@ -175,13 +195,19 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     const mesh = new THREE.InstancedMesh(geometry, material, plants.length);
     mesh.name = `Jungle ${kind}`;
     mesh.receiveShadow = true;
+    // The big plants cast their shadows (swaying with them); the grass only takes them.
+    mesh.castShadow = kind !== 'grass';
+    mesh.customDepthMaterial = depth;
     mesh.frustumCulled = false;
     const phase = new Float32Array(plants.length), cut = new Float32Array(plants.length).fill(1);
-    const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), colour = new THREE.Color();
     plants.forEach((plant, i) => {
       phase[i] = random() * Math.PI * 2;
       rotation.setFromAxisAngle(up, random() * Math.PI * 2);
       mesh.setMatrixAt(i, matrix.compose(new THREE.Vector3(plant.x, 0, plant.z), rotation, new THREE.Vector3(plant.size, plant.height, plant.size)));
+      // Each its own green: lighter or darker, yellower or bluer; darker still in the thick of the jungle.
+      const shade = (0.7 + random() * 0.55) * (plant.shade ?? 1), warm = random() - 0.5;
+      mesh.setColorAt(i, colour.setRGB(shade * (1 + warm * 0.35), shade, shade * (1 - warm * 0.3)));
     });
     geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phase, 1));
     const cutAttribute = new THREE.InstancedBufferAttribute(cut, 1).setUsage(THREE.DynamicDrawUsage);
