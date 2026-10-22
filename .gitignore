@@ -17,3 +17,4 @@ artifacts/radio-qwen-clone-staging/
 *.log
 # Mantaflow noise cache written by scripts/explosion-blender.py
 waveletNoiseTile.bin
+__pycache__/

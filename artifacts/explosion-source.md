@@ -14,8 +14,14 @@ Mantaflow. Le moteur utilisé pour les textures livrées est Eevee Next.
 
 Sept poches de feu se propagent au sol, tandis qu'une poche centrale conserve
 le volume bombé du brasier. La suie apparaît dans ces mêmes poches après un
-court retard, roule vers l'extérieur, puis monte lentement. Sa disparition se
-fait par érosion de la densité plutôt que par transparence uniforme. Les
+court retard, roule vers l'extérieur, puis monte lentement. Chaque poche se
+déforme et dérive différemment, s'allège progressivement, puis s'ouvre en
+fragments irréguliers. Leurs durées de dissipation sont décalées. L'érosion
+agit sur de grandes ouvertures dans le volume, sans seuil commun qui ferait
+disparaître toutes les masses noires en même temps. Les
+rotations des poches sont amorties après 0,30 seconde et la turbulence interne
+ralentit après 0,45 seconde : la fumée froide dérive sans tourner sur place.
+Le départ et le pic incandescent conservent leur animation initiale. Les
 matériaux sont séparés : `Soot_*`, `Flame_*`, `Tongue_*` et `Core_*`.
 Les valeurs `Density`, `Heat` et `Erosion` de chaque matériau, ainsi
 que les coordonnées temporelles des textures Noise, sont modifiables.
@@ -34,7 +40,7 @@ blender -b --factory-startup --python scripts/explosion-volumetric.py -- artifac
 Les réglages facultatifs sont `SIZE` (256), `SAMPLES` (64), `ENGINE`
 (`BLENDER_EEVEE`), `PREVIEW=1`, `TIME` (0,24 seconde) ou `PREVIEW_TIMES`
 (`0.06,0.12,0.24,0.5`). Les images HDR finales restent disponibles dans
-`artifacts/explosion-final-v6/frames`.
+`artifacts/explosion-final-v8/frames`.
 
 L'atlas de jeu contient 8 × 8 cases de 256 pixels, soit 2048 × 2048 pixels.
 Le masque de chaleur est linéaire : il ne faut pas lui appliquer une conversion

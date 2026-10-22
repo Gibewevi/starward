@@ -82,11 +82,29 @@ def volume_material(name, kind, seed):
     mask=n.new('ShaderNodeMapRange');mask.clamp=True;mask.interpolation_type='SMOOTHERSTEP'
     mask.inputs['From Min'].default_value=1.88;mask.inputs['From Max'].default_value=1.73
     erosion=n.new('ShaderNodeValue');erosion.name='Erosion';erosion.outputs[0].default_value=0
-    l.new(mathn(n,l,'ADD',radius,mathn(n,l,'MULTIPLY',erosion.outputs[0],.5)),mask.inputs['Value'])
-    threshold=mathn(n,l,'ADD',.65,mathn(n,l,'MULTIPLY',erosion.outputs[0],2.7))
+    l.new(mathn(n,l,'ADD',radius,mathn(n,l,'MULTIPLY',erosion.outputs[0],.12 if kind=='smoke' else .5)),mask.inputs['Value'])
+    # Smoke must not cross one shared threshold on the narrow fine-noise
+    # distribution: that used to switch every opaque cloud off together.
+    threshold=.65 if kind=='smoke' else mathn(n,l,'ADD',.65,mathn(n,l,'MULTIPLY',erosion.outputs[0],2.7))
     detail=mathn(n,l,'MAXIMUM',mathn(n,l,'SUBTRACT',mathn(n,l,'MULTIPLY',fine.outputs['Fac'],2.4),threshold),0)
     density=n.new('ShaderNodeValue');density.name='Density';density.outputs[0].default_value=10 if kind=='smoke' else 3
     field=mathn(n,l,'MULTIPLY',mask.outputs['Result'],detail)
+    if kind=='smoke':
+        # Open broad, irregular channels through the cloud. Surviving ribbons
+        # thin gradually while distinct parts detach; the outside sphere is
+        # no longer the last silhouette left on screen.
+        breakup=n.new('ShaderNodeTexNoise');breakup.noise_dimensions='4D'
+        breakup.inputs['Scale'].default_value=3.6
+        breakup.inputs['Detail'].default_value=2.5
+        breakup.inputs['Roughness'].default_value=.7
+        breakup.inputs['W'].default_value=seed+71
+        l.new(scale.outputs['Vector'],breakup.inputs['Vector'])
+        holes=n.new('ShaderNodeMapRange');holes.clamp=True;holes.interpolation_type='SMOOTHERSTEP'
+        cut=mathn(n,l,'ADD',-.35,mathn(n,l,'MULTIPLY',erosion.outputs[0],1.35))
+        l.new(mathn(n,l,'SUBTRACT',cut,.20),holes.inputs['From Min'])
+        l.new(mathn(n,l,'ADD',cut,.20),holes.inputs['From Max'])
+        l.new(breakup.outputs['Fac'],holes.inputs['Value'])
+        field=mathn(n,l,'MULTIPLY',field,holes.outputs['Result'])
     # A hemispherical pressure burst has a physical floor, not a floating ball.
     geo=n.new('ShaderNodeNewGeometry');xyz=n.new('ShaderNodeSeparateXYZ')
     l.new(geo.outputs['Position'],xyz.inputs[0])
@@ -161,9 +179,15 @@ def set_time(t):
         if smoke:
             birth=1-math.exp(-age*20)
             r=q['radius']*(.08+.92*birth)*(1+.10*(1-math.exp(-age*2)))
-            # Erode individual cavities late; keep surviving curls opaque.
-            erosion=max(0,min(1,(age-1.1)/1.65))**1.35
-            q['density'].outputs[0].default_value=24*birth
+            # Each parcel has its own mixing/cooling clock. Dilution begins
+            # while the cloud still has volume, not after a frozen black hold.
+            variation=.5+.5*math.sin(q['seed']*2.17)
+            start=.45+.18*variation
+            end=2.05+.86*(.5+.5*math.sin(q['seed']*3.71+1.3))
+            decay=max(0,min(1,(age-start)/(end-start)))
+            erosion=decay*decay*(3-2*decay)
+            dilution=math.exp(-3.4*decay)*(1-decay)**1.1
+            q['density'].outputs[0].default_value=24*birth*dilution
             q['erosion'].outputs[0].default_value=erosion
             q['heat'].outputs[0].default_value=0
         else:
@@ -174,6 +198,16 @@ def set_time(t):
             q['heat'].outputs[0].default_value=strength*min(1,t*90)*burn**1.25
             q['erosion'].outputs[0].default_value=max(0,1-burn)*.28
         ob.scale=tuple(q['stretch']*r)
+        if smoke:
+            # Stretch in different directions without restoring any rigid
+            # spinning. Volume expansion also spreads the last wisps apart.
+            spread=1-math.exp(-max(0,age-.45)*1.4)
+            ob.scale.x*=1+(.12+.32*variation)*spread
+            ob.scale.y*=1+(.40-.22*variation)*spread
+            ob.scale.z*=1+(.25+.65*(1-variation))*spread
+            drift=max(0,age-.45)**1.25
+            ob.location.x+=.12*math.cos(q['seed'])*drift
+            ob.location.y+=.14*math.sin(q['seed'])*drift
         # Only the hot pressure impulse rolls whole parcels. Let that angular
         # velocity die away smoothly, otherwise the cold soot looks like solid
         # balls spinning on the spot. Translation and cavity erosion continue.
