@@ -30,31 +30,30 @@ test('the great door slides open onto the corridor and shuts again; shut, it is 
   assert.ok(door.isClosed && lab.segmentHit(inside.clone().setY(1), outside.clone().setY(1)), 'shut again');
 });
 
-test('reinforcements: the alarm, the door, three or four men out one by one, the door shut — again and again, sooner when few are left', () => {
+test('the escort: summoned, the alarm, the door, the men out one by one, the door shut; nothing comes uncalled', () => {
   const door = { openness: 0, target: 0, alarm: false, open() { this.target = 1; }, close() { this.target = 0; }, get isOpen() { return this.openness >= 1; }, get isClosed() { return this.openness <= 0; } };
-  const waves = createReinforcements({ door, random: seeded(3) });
+  const escort = createReinforcements({ door });
   const step = dt => { door.openness = THREE.MathUtils.clamp(door.openness + Math.sign(door.target - door.openness) * dt / 1.3, 0, 1); };
-  let time = 0, living = 5;
+  let time = 0;
   const log = [];
-  for (let i = 0; i < 60 * 90; i++) {
-    time += 1 / 60;
-    step(1 / 60);
-    for (const event of waves.update(1 / 60, { living, entering: 0 })) {
-      log.push({ time, event: event.type ?? event });
-      if (event.type === 'spawn') living++;
+  const run = seconds => {
+    for (let i = 0; i < 60 * seconds; i++) {
+      time += 1 / 60;
+      step(1 / 60);
+      for (const event of escort.update(1 / 60, { entering: 0 })) log.push({ time, event: event.type ?? event });
     }
-    if (living > 7) living = 3; // the hero cuts them down
-  }
-  const alarms = log.filter(entry => entry.event === 'alarm');
-  assert.ok(alarms.length >= 2, `regularly (${alarms.length} waves in 90 s)`);
-  assert.ok(Math.abs(alarms[0].time - FEEL.reinforce.first) < 0.1, 'the first after a while');
-  // Each wave: alarm → open → 3 or 4 spawns → close, in that order.
-  const first = log.slice(0, log.findIndex(entry => entry.event === 'close') + 1).map(entry => entry.event);
-  assert.equal(first[0], 'alarm');
-  assert.equal(first[1], 'open');
-  const spawns = first.filter(event => event === 'spawn').length;
-  assert.ok(spawns >= 2 && spawns <= 4, `${spawns} men (never past the head count)`);
-  assert.equal(first.at(-1), 'close');
+  };
+  run(60);
+  assert.equal(log.length, 0, 'uncalled, the door stays shut');
+  assert.ok(escort.summon(FEEL.course.escort));
+  assert.equal(escort.summon(3), false, 'one at a time');
+  run(20);
+  const events = log.map(entry => entry.event);
+  assert.deepEqual([events[0], events[1], events.at(-1)], ['alarm', 'open', 'close']);
+  assert.equal(events.filter(event => event === 'spawn').length, FEEL.course.escort);
+  assert.equal(escort.phase, 'idle');
+  assert.ok(door.isClosed && !door.alarm);
+  assert.equal(escort.waves, 1);
 });
 
 test('a newcomer marches through the door into the room and joins the fight', () => {

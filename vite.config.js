@@ -7,7 +7,7 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 800,
     rollupOptions: {
-      input: { game: 'index.html', duel: 'duel.html', stormtrooper: 'stormtrooper.html', explosion: 'explosion.html' },
+      input: { game: 'index.html', stormtrooper: 'stormtrooper.html', explosion: 'explosion.html' },
       output: {
         manualChunks(id) {
           if (id.includes('/node_modules/three/')) return 'three';

@@ -37,6 +37,8 @@ import { createWounds } from './wounds.js';
 import { createPixelPrompt } from './pixel-prompt.js';
 import { createAudio } from './audio.js';
 import { createRadioComms, RADIO_LINES } from './radio-comms.js';
+import { createDuel } from './duel.js';
+import { createMusic } from './music.js';
 import { createShake } from './shake.js';
 import { createTelegraph } from './telegraph.js';
 import { createFootprints } from './footprints.js';
@@ -189,15 +191,16 @@ function init() {
   }
   /** One foot after the other: the next foot to come down. */
   const nextFoot = walker => ((soles.get(walker)?.last ?? 'R') === 'R' ? 'L' : 'R');
-  /** The hero's foot coming down: where its sole is, and heel to toe. */
-  function heroFootfall() {
-    const bones = character.rig.bones, side = nextFoot(character);
+  /** A Jedi's foot coming down (the hero's, his enemy's): where its sole is, and heel to toe. */
+  function bodyFootfall(body, heading) {
+    const bones = body.rig.bones, side = nextFoot(body);
     bones[side === 'L' ? 'LeftFoot' : 'RightFoot'].getWorldPosition(footAt);
     bones[side === 'L' ? 'LeftToeBase' : 'RightToeBase'].getWorldPosition(toeAt);
     const along = toeAt.clone().sub(footAt).setY(0);
-    if (along.lengthSq() < 1e-6) along.set(Math.sin(motion.heading), 0, Math.cos(motion.heading));
-    footfall(character, footAt.clone().lerp(toeAt, 0.4).setY(0), along.normalize(), side, FEEL.prints.hero);
+    if (along.lengthSq() < 1e-6) along.set(Math.sin(heading), 0, Math.cos(heading));
+    footfall(body, footAt.clone().lerp(toeAt, 0.4).setY(0), along.normalize(), side, FEEL.prints.hero);
   }
+  const heroFootfall = () => bodyFootfall(character, motion.heading);
   /** A trooper's foot coming down: its sole from heel to toe. */
   function trooperFootfall(trooper) {
     const side = nextFoot(trooper);
@@ -238,6 +241,22 @@ function init() {
     const post = nav.nearest(wanted) ?? threshold.clone().addScaledVector(door.out, 1.5);
     squad.add(trooper, { position: post, heading }, { entering: [threshold, ...(nav.path(threshold, post) ?? [post])] });
     clearBodies();
+  }
+  // The fight's course: the squad at its posts; all of them down, an escort
+  // marches in through the great door; all of those down too, the Jedi comes alone.
+  const course = { stage: 'squad', clock: 0 };
+  function courseStep(sim) {
+    if (course.stage === 'squad' || course.stage === 'escort') {
+      // Nobody standing, and nobody still to come through the door.
+      const cleared = !troopers.some(trooper => !trooper.dead) && reinforcements.phase === 'idle';
+      course.clock = cleared ? course.clock + sim : 0;
+      if (course.stage === 'squad' && course.clock > FEEL.course.escortAfter) { reinforcements.summon(FEEL.course.escort); course.stage = 'escort'; course.clock = 0; }
+      else if (course.stage === 'escort' && course.clock > FEEL.course.jediAfter) { duel.enter(); course.stage = 'jedi'; course.clock = 0; }
+    } else if (course.stage === 'jedi' && duel.outcome === 'victory') { course.stage = 'won'; course.clock = 0; }
+    else if (course.stage === 'won') {
+      course.clock += sim;
+      $('#victory').classList.toggle('on', course.clock > 2.4);
+    }
   }
   /** Too many men in the room, dead ones included: the oldest bodies are cleared away. */
   function clearBodies() {
@@ -313,6 +332,13 @@ function init() {
   /** L3 / T: everything as it was — the squad at its posts, the hero at the start, the room clean. */
   function restart() {
     radio.reset();
+    // First: a hero cut down in the duel gets his body back.
+    duel.reset();
+    duelView = null;
+    wasDueling = false;
+    course.stage = 'squad';
+    course.clock = 0;
+    $('#victory').classList.remove('on');
     resetTrooper();
     reset();
     // The power back on, the transformer as new.
@@ -542,6 +568,8 @@ function init() {
   // dark: the troopers' rifle lamps clicking on one by one, the blade's glow
   // the only light round the hero.
   let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
+  /** In the dark a blade lights more of the room round it. */
+  function nightBlade(blade) { blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * night; light.distance = [3.2, 2.6][index] + 2.2 * night; }); }
   const flashEl = $('#flash'), promptEl = $('#prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
   function startPlunge() {
     const s = transformer.socket, a = transformer.approach;
@@ -998,6 +1026,7 @@ function init() {
     if (death) return;
     const D = FEEL.death, bones = character.rig.bones, flat = direction.clone().setY(0).normalize();
     death = { cause, age: 0, lying: 0, radioed: false, pooled: false };
+    $('#death-hint').textContent = '';
     breakStreak();
     unskewer();
     combat.reset();
@@ -1170,6 +1199,35 @@ function init() {
   audio.volume = Number($('#audio-volume').value);
   const radio = createRadioComms({ element: $('#radio-comms'), marker: $('#radio-speaker-marker'), camera, audio });
   const radioCall = (kind, speaker) => radio.offer(kind, speaker, Math.max(0, troopers.indexOf(speaker)));
+  // The score, and the Jedi who comes last (duel.js): while they fight, the duel has the hero's body.
+  const music = createMusic(audio);
+  const duelStand = (nav.nearest(arena.door.centre.clone().addScaledVector(arena.door.out, 3.2)) ?? arena.door.centre.clone().addScaledVector(arena.door.out, 3.2)).clone().setY(0);
+  const duel = createDuel({
+    scene, effects, audio, music, wounds, keys, screenRight, screenUp, rumble,
+    hero: { character, coat: cape, saber, trail, motion, combat, base: bladeBase, tip: bladeTip },
+    door: arena.door, stand: duelStand,
+    confine: body => { here.set(body.x, 0, body.z); lab.pushOut(here, 0.3); body.x = here.x; body.z = here.z; },
+    onStep: f => bodyFootfall(f.character, f.motion.heading),
+    kick: (at, moving) => debris.kick(at, moving),
+  });
+  stainLights.push(...duel.enemy.saber.lights);
+  let duelView = null, wasDueling = false;
+  /** Dead in the duel: back on his feet before the Jedi, who waits for him. */
+  function retryDuel() {
+    death = null;
+    $('#death').classList.remove('on');
+    wounds.clear();
+    duel.retry();
+  }
+  // The duel's gauges: wounds left, breath, balance, for both.
+  const duelHud = $('#duel-hud');
+  const gauges = Object.fromEntries(['player', 'enemy'].map(id => {
+    const side = duelHud.querySelector(`[data-side=${id}]`);
+    const track = kind => { const element = side.querySelector(`.${kind}-track`); element.innerHTML = '<i></i>'.repeat(12); return element; };
+    const wounds = side.querySelector('.duel-wounds');
+    wounds.innerHTML = '<i></i>'.repeat(3);
+    return [id, { energy: track('energy'), posture: track('posture'), wounds }];
+  }));
   // A focused visual/audio preview for checking this same HUD in the real scene.
   const radioPreview = new URLSearchParams(location.search).get('radioPreview');
   if (RADIO_LINES[radioPreview]) $('#game').addEventListener('pointerdown', () => radioCall(radioPreview, troopers[0]), { once: true });
@@ -1184,12 +1242,9 @@ function init() {
   });
   rumbleOn = $('#rumble').checked;
   $('#rumble').addEventListener('change', event => { rumbleOn = event.target.checked; });
-  document.body.classList.toggle('tech-info', $('#tech-info').checked);
-  $('#tech-info').addEventListener('change', event => document.body.classList.toggle('tech-info', event.target.checked));
   window.addEventListener('keydown', () => { if (audio.enabled) audio.start(); });
-  let lastFrame = performance.now(), fps = 60, hudTimer = 0, frameCount = 0;
-  const stateEl = $('#motion-state'), speedEl = $('#speed'), saberEl = $('#saber-state'), squadEl = $('#squad-state'), precisionEl = $('#precision');
-  const killsEl = $('#kills'), waveEl = $('#wave'), reinforceEl = $('#reinforce-state'), streakEl = $('#streak'), streakCountEl = $('#streak-count'), streakNoteEl = $('#streak-note');
+  let lastFrame = performance.now(), fps = 60, frameCount = 0;
+  const streakEl = $('#streak'), streakCountEl = $('#streak-count'), streakNoteEl = $('#streak-note');
   const targetFocus = new THREE.Vector3(), shakenFocus = new THREE.Vector3();
   // The camera's own axes (for the shake), and the lean of the view towards the fight.
   camera.updateMatrixWorld();
@@ -1206,7 +1261,7 @@ function init() {
     audio.listen(character.root.position, screenRight);
     if (!paused) {
       // A clean cut freezes the action for a beat, then eases back to speed.
-      const sim = dt * (hitStop ? hitStopScale(hitStop.age, hitStop) : 1);
+      const sim = dt * (hitStop ? hitStopScale(hitStop.age, hitStop) : 1) * (duel.present ? duel.scale(dt) : 1);
       if (hitStop && (hitStop.age += dt) > hitStop.hold + hitStop.recover) hitStop = null;
       time += sim;
       if (death) {
@@ -1227,7 +1282,7 @@ function init() {
         }
         wounds.update(sim);
         $('#death').classList.toggle('on', death.age > FEEL.death.show);
-        if (retryPressed && death.age > FEEL.death.retry) restart();
+        if (retryPressed && death.age > FEEL.death.retry) { if (death.cause === 'duel') retryDuel(); else restart(); }
       }
       retryPressed = false;
       let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft')) + joystick.x;
@@ -1277,134 +1332,153 @@ function init() {
       }
       const inputLength = Math.max(1, Math.hypot(x, y)); x /= inputLength; y /= inputLength;
       const worldX = inputRight.x * x + inputForward.x * y, worldZ = inputRight.y * x + inputForward.y * y;
-      // Thrown by a blast: no control until he is back on his feet.
-      const down = knockdown.active;
+      // Thrown by a blast: no control until he is back on his feet. In the duel, the duel has his body.
+      const dueling = duel.fighting;
+      const down = !dueling && knockdown.active;
       inputClock += dt;
-      if (down) {
-        attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0;
+      let action = combat.output;
+      if (dueling) {
+        attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null;
         pending.attack = pending.dash = pending.power = -Infinity;
-      }
-      // The dash: along the stick, or straight ahead with the stick at rest.
-      dashCooldown = Math.max(0, dashCooldown - sim);
-      dodge = Math.max(0, dodge - sim);
-      dashAfter = Math.max(0, dashAfter - sim);
-      if (dashPressed) pending.dash = inputClock;
-      if (waiting(pending.dash) && !dash && dashCooldown <= 0 && !skewered && !plunge && !combat.impaling) {
-        pending.dash = -Infinity;
-        const along = Math.hypot(worldX, worldZ) > 0.2 ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
-        startDash(along);
-      }
-      if (twirlPressed) combat.twirl();
-      dashPressed = twirlPressed = false;
-      // Powers cut any strike short; a parry too; B strikes and chains.
-      keepHold();
-      const attackHeld = padAttack || keys.has('KeyJ');
-      impaleInput(dt, attackHeld, down);
-      // The guard: held, or just pressed (a parry, the window of a perfect one).
-      if (parryPressed) parryPress();
-      autoParry(guard || time - parryTry < 0.3);
-      if (powerPressed) { pending.power = inputClock; pending.powerName = powerPressed; }
-      if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
-      if (parryPressed) combat.parry();
-      plungeInput(dt, attackHeld, down);
-      if (attackPressed) pending.attack = inputClock;
-      // Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
-      if (intent && (intent.dead || intent.impaled)) intent = null;
-      const mark = intent ? markOf(intent) : findMark(worldX, worldZ, Boolean(dash) || dashAfter > 0 || strikeFromDash);
-      const aim = mark && { angle: mark.angle, distance: mark.distance };
-      if (waiting(pending.attack)) {
-        // During the dash or just after it, the strike lunges from it.
-        const rushing = Boolean(dash) || dashAfter > 0;
-        // Pressed towards someone else than the one the current blow goes for: he is the next one.
-        const pressed = findMark(worldX, worldZ, rushing);
-        if (combat.attack({ speed: rushing ? Math.max(motion.speed, 5) : motion.speed, aim: pressed && { angle: pressed.angle, distance: pressed.distance } })) {
-          intent = pressed?.trooper ?? null;
-          pending.attack = -Infinity;
-          strikeFromDash = rushing;
-          endDash();
-          dashAfter = 0;
-        }
-      }
-      attackPressed = parryPressed = false;
-      powerPressed = null;
-      // B kept down through a strike calls the finisher (not while running a trooper through).
-      const action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held), charging: attackHeld && !thrust && !skewered, aim, lead });
-      // A strike finds its mark (lockOn); other moves re-aim towards the stick;
-      // a power with the stick at rest turns towards the trooper the hero is facing most.
-      const started = combat.takeStart();
-      if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
-      const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
-      if (strike) { lockOn(started, worldX, worldZ, intent ? markOf(intent) : mark); intent = null; audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
-      else if (started) { turn = null; lead = 0; }
-      else if (started && !/^(parry|impale|plunge)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
-      else if (started === 'forcePull' || started === 'forcePush') {
-        const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
-        if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
-      }
-      const released = combat.takeForce();
-      if (released) unleash(released);
-      if (down) {
-        const at = knockdown.position, moving = knockdown.velocity;
-        motion.x = at.x; motion.z = at.z; motion.vx = moving.x; motion.vz = moving.z; motion.speed = 0;
-      } else if (dash) dashStep(sim);
-      else {
-        motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
-        lungeStep(sim);
-        turnStep();
-      }
-      for (const trooper of troopers) {
-        const blocker = trooper.blocker();
-        if (!blocker || down) continue;
-        const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
-        if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
-      }
-      // Crates and barrels stop him.
-      if (!down) {
-        lab.pushOut(here.set(motion.x, 0, motion.z), 0.3);
-        motion.x = here.x; motion.z = here.z;
-      }
-      if (!moved && (motion.speed > 0.1 || action.engaged)) { moved = true; document.body.classList.add('playing'); }
-      velocity.set(motion.vx, 0, motion.vz);
-      if (down) {
-        // The ragdoll lays his skeleton out; once up, the motion capture takes over again.
-        const up = knockdown.update(sim, time);
-        if (up) { motion.x = up.x; motion.z = up.z; motion.heading = up.heading; motion.vx = motion.vz = motion.speed = 0; bladeReady = false; }
+        duel.step(sim, { immortal: godMode });
+        nightBlade(saber);
+        velocity.set(motion.vx, 0, motion.vz);
+        duelView = duel.camera(dt);
       } else {
-        character.root.position.set(motion.x, 0, motion.z);
-        character.root.rotation.y = motion.heading + action.spin;
-        character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
-        debris.kick(character.root.position, velocity);
+        if (down) {
+          attackPressed = parryPressed = dashPressed = twirlPressed = false; powerPressed = null; guard = false; pullHeld = false; x = y = 0;
+          pending.attack = pending.dash = pending.power = -Infinity;
+        }
+        // The dash: along the stick, or straight ahead with the stick at rest.
+        dashCooldown = Math.max(0, dashCooldown - sim);
+        dodge = Math.max(0, dodge - sim);
+        dashAfter = Math.max(0, dashAfter - sim);
+        if (dashPressed) pending.dash = inputClock;
+        if (waiting(pending.dash) && !dash && dashCooldown <= 0 && !skewered && !plunge && !combat.impaling) {
+          pending.dash = -Infinity;
+          const along = Math.hypot(worldX, worldZ) > 0.2 ? new THREE.Vector3(worldX, 0, worldZ).normalize() : new THREE.Vector3(Math.sin(motion.heading), 0, Math.cos(motion.heading));
+          startDash(along);
+        }
+        if (twirlPressed) combat.twirl();
+        dashPressed = twirlPressed = false;
+        // Powers cut any strike short; a parry too; B strikes and chains.
+        keepHold();
+        const attackHeld = padAttack || keys.has('KeyJ');
+        impaleInput(dt, attackHeld, down);
+        // The guard: held, or just pressed (a parry, the window of a perfect one).
+        if (parryPressed) parryPress();
+        autoParry(guard || time - parryTry < 0.3);
+        if (powerPressed) { pending.power = inputClock; pending.powerName = powerPressed; }
+        if (waiting(pending.power) && combat.power(pending.powerName)) pending.power = -Infinity;
+        if (parryPressed) combat.parry();
+        plungeInput(dt, attackHeld, down);
+        if (attackPressed) pending.attack = inputClock;
+        // Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
+        if (intent && (intent.dead || intent.impaled)) intent = null;
+        const mark = intent ? markOf(intent) : findMark(worldX, worldZ, Boolean(dash) || dashAfter > 0 || strikeFromDash);
+        const aim = mark && { angle: mark.angle, distance: mark.distance };
+        if (waiting(pending.attack)) {
+          // During the dash or just after it, the strike lunges from it.
+          const rushing = Boolean(dash) || dashAfter > 0;
+          // Pressed towards someone else than the one the current blow goes for: he is the next one.
+          const pressed = findMark(worldX, worldZ, rushing);
+          if (combat.attack({ speed: rushing ? Math.max(motion.speed, 5) : motion.speed, aim: pressed && { angle: pressed.angle, distance: pressed.distance } })) {
+            intent = pressed?.trooper ?? null;
+            pending.attack = -Infinity;
+            strikeFromDash = rushing;
+            endDash();
+            dashAfter = 0;
+          }
+        }
+        attackPressed = parryPressed = false;
+        powerPressed = null;
+        // B kept down through a strike calls the finisher (not while running a trooper through).
+        action = combat.update(sim, { guard, speed: motion.speed, hold: Boolean(held), charging: attackHeld && !thrust && !skewered, aim, lead });
+        // A strike finds its mark (lockOn); other moves re-aim towards the stick;
+        // a power with the stick at rest turns towards the trooper the hero is facing most.
+        const started = combat.takeStart();
+        if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
+        const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
+        if (strike) { lockOn(started, worldX, worldZ, intent ? markOf(intent) : mark); intent = null; audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
+        else if (started) { turn = null; lead = 0; }
+        else if (started && !/^(parry|impale|plunge)/.test(started) && Math.hypot(worldX, worldZ) > 0.2) motion.face(Math.atan2(worldX, worldZ));
+        else if (started === 'forcePull' || started === 'forcePush') {
+          const aimed = target(started === 'forcePull' ? FEEL.pull.range : FEEL.push.range, 1.2);
+          if (aimed) { const at = whereIs(aimed); motion.face(Math.atan2(at.x - motion.x, at.z - motion.z)); }
+        }
+        const released = combat.takeForce();
+        if (released) unleash(released);
+        if (down) {
+          const at = knockdown.position, moving = knockdown.velocity;
+          motion.x = at.x; motion.z = at.z; motion.vx = moving.x; motion.vz = moving.z; motion.speed = 0;
+        } else if (dash) dashStep(sim);
+        else {
+          motion.update(sim, worldX, worldZ, { sprint: sprint && !action.engaged, analog, maxSpeed: action.maxSpeed, inputScale: action.inputScale, drive: action.drive, turnScale: action.turnScale, engaged: action.engaged });
+          lungeStep(sim);
+          turnStep();
+        }
+        for (const trooper of troopers) {
+          const blocker = trooper.blocker();
+          if (!blocker || down) continue;
+          const dx = motion.x - blocker.x, dz = motion.z - blocker.z, distance = Math.hypot(dx, dz), reach = blocker.radius + 0.24;
+          if (distance < reach && distance > 1e-4) { motion.x = blocker.x + dx / distance * reach; motion.z = blocker.z + dz / distance * reach; }
+        }
+        // Crates and barrels stop him.
+        if (!down) {
+          lab.pushOut(here.set(motion.x, 0, motion.z), 0.3);
+          motion.x = here.x; motion.z = here.z;
+        }
+        if (!moved && (motion.speed > 0.1 || action.engaged)) { moved = true; document.body.classList.add('playing'); }
+        velocity.set(motion.vx, 0, motion.vz);
+        if (down) {
+          // The ragdoll lays his skeleton out; once up, the motion capture takes over again.
+          const up = knockdown.update(sim, time);
+          if (up) { motion.x = up.x; motion.z = up.z; motion.heading = up.heading; motion.vx = motion.vz = motion.speed = 0; bladeReady = false; }
+        } else {
+          character.root.position.set(motion.x, 0, motion.z);
+          character.root.rotation.y = motion.heading + action.spin;
+          character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
+          debris.kick(character.root.position, velocity);
+        }
+        cape.update({ dt: sim, time, velocity });
+        // Igniting the blade, moving or not, comes with a quick draw twirl.
+        const saberEvent = saber.update(motion.saber, time, action.flare);
+        // In the dark the blade lights more of the room round him.
+        nightBlade(saber);
+        if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); audio.ignite(); }
+        else if (saberEvent === 'retract') audio.retract();
+        // His steps on the deck.
+        if (!down && !dash && motion.speed > 0.35) {
+          heroStep += motion.speed * sim / (motion.runBlend > 0.5 ? 1.25 : 0.7);
+          if (heroStep >= 1) { heroStep %= 1; audio.step(character.root.position, { pace: Math.min(1, motion.speed / SPRINT_PACE) }); heroFootfall(); }
+        } else heroStep = 0.6;
+        // Running feet and the blade's hum carry.
+        stepClock -= sim; humClock -= sim;
+        if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 7 : 4.5, { from: character.root.position }); }
+        if (motion.saber > 0.5 && humClock <= 0) { humClock = 0.6; noise(character.root.position, 2.6, { from: character.root.position, strength: 0.6 }); }
+        saber.segment(bladeBase, bladeTip);
+        trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
+        // The Jedi coming in through the door (framed with the hero), or lying where he fell.
+        if (duel.present) duel.step(sim);
+        duelView = duel.phase === 'entrance' ? duel.camera(dt) : null;
       }
-      cape.update({ dt: sim, time, velocity });
-      // Igniting the blade, moving or not, comes with a quick draw twirl.
-      const saberEvent = saber.update(motion.saber, time, action.flare);
-      // In the dark the blade lights more of the room round him.
-      saber.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * night; light.distance = [3.2, 2.6][index] + 2.2 * night; });
-      if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); audio.ignite(); }
-      else if (saberEvent === 'retract') audio.retract();
-      // His steps on the deck.
-      if (!down && !dash && motion.speed > 0.35) {
-        heroStep += motion.speed * sim / (motion.runBlend > 0.5 ? 1.25 : 0.7);
-        if (heroStep >= 1) { heroStep %= 1; audio.step(character.root.position, { pace: Math.min(1, motion.speed / SPRINT_PACE) }); heroFootfall(); }
-      } else heroStep = 0.6;
-      // Running feet and the blade's hum carry.
-      stepClock -= sim; humClock -= sim;
-      if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 7 : 4.5, { from: character.root.position }); }
-      if (motion.saber > 0.5 && humClock <= 0) { humClock = 0.6; noise(character.root.position, 2.6, { from: character.root.position, strength: 0.6 }); }
-      saber.segment(bladeBase, bladeTip);
-      trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
+      if (duel.present) nightBlade(duel.enemy.saber);
+      if (wasDueling && !dueling) { combat.reset(); trail.clear(); dash = lunge = turn = intent = null; bladeReady = false; }
+      wasDueling = dueling;
+      if (duel.outcome === 'death' && !death) { death = { cause: 'duel', age: 0, lying: 0, radioed: true, pooled: true }; breakStreak(); $('#death-hint').textContent = duel.cause; }
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
       // The squad: senses, decisions, orders; then the shots leave the muzzles.
       const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises, darkness: night });
       noises.length = 0;
       if (death) thoughts.shots.length = 0;
-      // Reinforcements: the alarm, the door, the men coming out one by one.
-      const living = troopers.filter(trooper => !trooper.dead).length, entering = squad.minds.filter(mind => mind.entering).length;
-      for (const event of reinforcements.update(sim, { living, entering })) {
+      // The escort: the alarm, the door, the men coming out one by one. Then the Jedi.
+      const entering = squad.minds.filter(mind => mind.entering).length;
+      for (const event of reinforcements.update(sim, { entering })) {
         if (event === 'alarm') { audio.alarm(arena.door.centre); const caller = troopers.find(trooper => !trooper.dead); if (caller) radioCall('reinforce', caller); }
         else if (event === 'open' || event === 'close') audio.door(arena.door.centre);
         else if (event.type === 'spawn') bringIn(event.index);
       }
+      courseStep(sim);
       for (const shot of thoughts.shots) {
         blasters.fire(shot.from, shot.direction, { owner: shot.trooper, speed: FEEL.blaster.speed });
         audio.shot(shot.from);
@@ -1423,7 +1497,7 @@ function init() {
       const strikeKey = `${combat.sequence}:${combat.hits}`;
       if (strikeKey !== stoppedSequence) { stopped.clear(); stoppedSequence = strikeKey; }
       troopers.forEach((trooper, index) => {
-        const struck = saber.extension > 0.6 && bladeReady && !down && skewered?.trooper !== trooper ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
+        const struck = !dueling && saber.extension > 0.6 && bladeReady && !down && skewered?.trooper !== trooper ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
         if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
         if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {
@@ -1511,9 +1585,10 @@ function init() {
       explosions.update(sim, camera);
       debris.update(sim);
       alerts.update(dt, trooper => (trooper.dead || trooper.impaled ? null : trooper.particle('HT').position), screenRight);
-      effects.update(sim);
+      // Through a duel's freeze the sparks still bloom.
+      effects.update(duel.frozen ? Math.max(sim, dt * 0.3) : sim);
       prints.update(sim);
-      playerPosition.copy(character.root.position);
+      playerPosition.copy(duelView ? duelView.focus : character.root.position);
       lighting.follow(playerPosition);
       // In a fight, the view leans a little towards the squad, so the shooters stay in frame.
       leanTarget.set(0, 0, 0);
@@ -1527,8 +1602,10 @@ function init() {
       }
       if (weight > 0) leanTarget.multiplyScalar(0.32 / weight).clampLength(0, 2.2);
       lean.lerp(leanTarget, 1 - Math.exp(-1.6 * sim));
-      targetFocus.set(motion.x + motion.vx * 0.16 + lean.x, 0.6, motion.z + motion.vz * 0.16 + lean.z);
-      cameraFocus.lerp(targetFocus, 1 - Math.exp(-7 * sim));
+      // In the duel the view frames both fighters.
+      if (duelView) targetFocus.copy(duelView.focus);
+      else targetFocus.set(motion.x + motion.vx * 0.16 + lean.x, 0.6, motion.z + motion.vz * 0.16 + lean.z);
+      cameraFocus.lerp(targetFocus, 1 - Math.exp(-(duelView ? 5 : 7) * sim));
       stage.update({ time, playerPosition });
       lab.update(time);
       arena.update(time);
@@ -1544,6 +1621,7 @@ function init() {
       power.apply();
       // What stirs the dust in the beams: the hero going through, and his blade's tip.
       const stirs = [{ at: here.set(motion.x, 1, motion.z).clone(), speed: motion.speed }, { at: bladeTip.clone(), speed: Math.min(12, swing) }];
+      if (duel.present) stirs.push({ at: duel.enemy.tip.clone(), speed: Math.min(12, duel.enemy.swing.length()) });
       for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
       lightStains(power.level, stainLights);
       // A finisher landing jolts the view.
@@ -1561,13 +1639,14 @@ function init() {
       audio.swing = Math.min(1, swing / 12) * action.weight;
     }
     updateStreak(dt);
-    viewHeight = damp(viewHeight, desiredHeight + motion.runBlend * 0.24, 6, dt);
+    viewHeight = damp(viewHeight, duelView ? desiredHeight * duelView.zoom : desiredHeight + motion.runBlend * 0.24, duelView ? 3 : 6, dt);
     // Zoom punch: in fast, out slowly.
     const punched = zoomPunch.age < 0.05 ? ease.outQuad(zoomPunch.age / 0.05) : 1 - ease.inOutSine(Math.min(1, (zoomPunch.age - 0.05) / 0.3));
-    updateProjection(viewHeight * (1 - zoomPunch.amount * punched));
+    updateProjection(viewHeight * (1 - zoomPunch.amount * punched) * (1 - (duelView?.punch ?? 0)));
+    if (duelView) shake.add(duelView.offset);
     camera.position.copy(cameraFocus).add(cameraOffset).add(shake);
     camera.lookAt(shakenFocus.copy(cameraFocus).add(shake));
-    if (roll) camera.rotateZ(roll);
+    if (roll || duelView?.roll) camera.rotateZ(roll + (duelView?.roll ?? 0));
     camera.updateMatrixWorld();
     // Warnings: glints at the muzzles about to fire, chevrons for threats out of view.
     const aiming = [], threats = [];
@@ -1581,7 +1660,8 @@ function init() {
     telegraph.update(paused ? 0 : dt, aiming);
     telegraph.edges(camera, paused ? [] : threats, window.innerWidth, window.innerHeight);
     const burning = skewered?.entered ? (skewered.trooper.dead ? 0.3 : 0.75) : 0;
-    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning, plunge?.entered ? 0.9 : 0), hold: paused || !held ? 0 : 1, fight: paused ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt, surge: paused ? 0 : surgeLevel, power: power.level, dark: night });
+    audio.update(paused ? 0 : motion.saber, motion.speed, motion.turnRate, { burn: paused ? 0 : Math.max(scrape * 0.8, burning, plunge?.entered ? 0.9 : 0), hold: paused || !held ? 0 : 1, fight: paused || duel.present ? 0 : { alerte: 1, suspicion: 0.35 }[squad.mood()] ?? 0, dt, surge: paused ? 0 : surgeLevel, power: power.level, dark: duel.present ? 0 : night });
+    if (!paused) music.update();
     radio.update(paused ? 0 : dt);
     document.body.classList.toggle('night', night > 0.5);
     // The burst's flash over everything, gone in a quarter of a second.
@@ -1589,36 +1669,22 @@ function init() {
     flashEl.style.opacity = flashAge < 0.3 ? String((1 - flashAge / 0.3) ** 1.6 * 0.9) : '0';
     // The prompt by the transformer, in pixels: B (or J) to hold, DÉTRUIRE, the gauge filling as it is held.
     const cocking = plunge?.phase === 'cocking';
-    const canPlunge = !paused && !death && (cocking || (!plunge && transformer.reachable(character.root.position) && !knockdown.active));
-    promptEl.classList.toggle('on', canPlunge);
-    if (canPlunge) {
-      const scale = Math.max(3, pixelSize), size = prompt.draw({ device: lastDevice, label: 'DÉTRUIRE', progress: cocking ? Math.min(1, plunge.hold / FEEL.sabotage.hold) : 0, time: performance.now() / 1000 });
+    const canPlunge = !paused && !death && !duel.fighting && (cocking || (!plunge && transformer.reachable(character.root.position) && !knockdown.active));
+    const asked = paused || !duel.fighting ? null : duel.ask();
+    promptEl.classList.toggle('on', canPlunge || Boolean(asked));
+    if (canPlunge || asked) {
+      const scale = Math.max(3, pixelSize), size = prompt.draw({ device: lastDevice, label: asked ? asked.label : 'DÉTRUIRE', progress: asked ? asked.progress : cocking ? Math.min(1, plunge.hold / FEEL.sabotage.hold) : 0, time: performance.now() / 1000 });
       const canvas = promptEl.firstElementChild;
       canvas.style.width = `${size.width * scale}px`;
       canvas.style.height = `${size.height * scale}px`;
-      const p = transformer.socket.clone().setY(1.7).project(camera);
+      const p = (asked ? asked.anchor : transformer.socket.clone().setY(1.7)).project(camera);
       promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth - size.width * scale / 2).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight - size.height * scale).toFixed(0)}px)`;
     }
     if (death) $('#death').dataset.device = lastDevice;
+    duelHud.hidden = !duel.fighting;
+    if (duel.fighting) duel.hud(gauges);
     composer.render(dt);
     fps = damp(fps, 1 / Math.max(rawDt, 0.001), 1, dt);
-    hudTimer += dt;
-    if (hudTimer > 0.15) {
-      hudTimer = 0;
-      const move = combat.output.name ?? '';
-      stateEl.textContent = paused ? 'EN PAUSE' : death ? 'MORT' : knockdown.active ? 'À TERRE' : plunge ? 'SABOTAGE' : skewered ? 'EMPALEMENT' : held ? 'EMPRISE' : move.startsWith('force') ? 'FORCE' : move.startsWith('parry') ? 'PARADE' : combat.busy ? 'ATTAQUE' : combat.guarding ? 'GARDE' : motion.speed < 0.05 ? 'IMMOBILE' : motion.sprint > 0.5 ? 'SPRINT' : motion.runBlend > 0.5 ? 'COURSE' : 'MARCHE';
-      speedEl.textContent = motion.speed.toFixed(1);
-      saberEl.textContent = motion.saber > 0.05 ? 'SABRE ACTIF' : 'SABRE EN VEILLE';
-      $('#performance').textContent = `${Math.round(fps)} FPS · PIXELS ${pixelSize}×`;
-      const mood = squad.mood();
-      squadEl.textContent = mood.toUpperCase();
-      squadEl.dataset.mood = mood;
-      precisionEl.textContent = `${Math.round(precision * 100)} %`;
-      killsEl.textContent = String(eliminated).padStart(2, '0');
-      waveEl.textContent = String(reinforcements.waves).padStart(2, '0');
-      const phase = reinforcements.phase;
-      reinforceEl.textContent = phase === 'wait' ? `${Math.max(0, Math.ceil(reinforcements.countdown))} S` : phase === 'alarm' ? 'ALERTE' : phase === 'closing' ? 'FERMETURE' : 'ENTRÉE';
-    }
     // The streak shows while it lives (a few seconds after the last point); a broken one flashes red.
     streakAge += dt; streakNoteAge += dt; streakBroken += dt;
     const showing = (streak >= 2 && streakAge < 3.5) || streakBroken < 0.9;
@@ -1644,6 +1710,9 @@ function init() {
     /** For checks: where the hero is put, and the squad, lab and bolts. */
     place(x, z, heading = motion.heading) { motion.x = x; motion.z = z; motion.heading = heading; bladeReady = false; },
     squad, lab, arena, reinforcements, blasters, troopers, grenades, explosions, debris, knockdown, marks, scars, audio, telegraph, effects,
+    duel, music, course,
+    /** For checks: every man standing falls (the course moves on). */
+    clearRoom() { for (const trooper of troopers) if (!trooper.dead) trooper.die('slash', new THREE.Vector3(0, 0, 1)); },
     renderer, composer, reflection, prints, transformer, power, flashlights, wounds, knockdown,
     get death() { return death; },
     get plunge() { return plunge; },

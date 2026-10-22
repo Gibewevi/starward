@@ -1,55 +1,52 @@
 import * as THREE from 'three';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 import { createCharacter } from './character.js';
 import { createCoat } from './coat.js';
 import { createSaber } from './saber.js';
 import { createBladeTrail } from './blade-trail.js';
-import { createStage, deckGeometry } from './stage.js';
-import { createLighting } from './lighting.js';
 import { MotionController, damp, angleDelta } from './motion.js';
 import { CombatController } from './combat.js';
 import { closestSegments } from './blasters.js';
-import { createImpactEffects } from './impact-effects.js';
-import { createAudio } from './audio.js';
 import { createShake } from './shake.js';
 import { hitStopScale } from './tween.js';
 import { FEEL } from './feel.js';
-import { DUEL, createDuelState, advanceDuelState, spend, parry, resolveStrike, bindStrength, resolveBind, forceHit, dash, breakGuard } from './duel-rules.js';
+import { DUEL, createDuelState, advanceDuelState, spend, parry, resolveStrike, bindStrength, resolveBind, forceHit, dash } from './duel-rules.js';
 import { createDuelMind } from './duel-ai.js';
 import { createLivingBlade } from './duel-blades.js';
 import { createFinisher } from './duel-finisher.js';
-import { createWounds } from './wounds.js';
-import { createPixelPrompt } from './pixel-prompt.js';
 
 /**
- * The duel: the hero against a Jedi with a red blade, one on one, die and
- * retry. Most strikes meet a blade — blocked, parried, or locked in a bind —
- * and every meeting is an event: two-coloured sparks, a flash, the blades
- * thrown back on their springs, a short eased freeze, the pad kicking. A
- * fight is won by breaking the other's balance (posture) and finishing him,
- * or by two clean wounds: by parrying at the right instant, out-pushing him
- * in a bind, slipping round his guard with a dash, crushing his guard with
- * the Force, or simply outlasting him. Rules in duel-rules.js, the enemy's
- * mind in duel-ai.js, the blades' life in duel-blades.js.
+ * The last fight of the room: a Jedi with a red blade, alone, one on one.
  *
- * Strikes are the hero's choreography (combat.js), time-warped: the wind-up
- * slower (readable, more so for the enemy), the cut faster. Each strike
- * resolves once, at its impact, against what the other is doing then.
- * window.__DUEL__ steps the fight without the display (checks).
+ * enter(): the great door opens on the score's drone; he walks out of the
+ * corridor, every step a timpani stroke, stops before the door, turns to the
+ * hero and lights his blade (the brass stab). Then the duel: the hero leaves
+ * the game's own controls for the duel's (while `fighting`, the game hands
+ * over his body: the same character, cape, blade, motion and combat).
+ *
+ * Most strikes meet a blade — blocked, parried, or locked in a bind — and
+ * every meeting is an event: two-coloured sparks, a flash, the blades thrown
+ * back on their springs, a freeze (the camera held still through it, the
+ * struck body shuddering), the pad kicking. A fight is won by breaking the
+ * other's balance and finishing him, or by three clean wounds. Rules in
+ * duel-rules.js, the enemy's mind in duel-ai.js, the blades' life in
+ * duel-blades.js, the finishing cut in duel-finisher.js.
+ *
+ * Strikes are the choreography of combat.js, time-warped: the wind-up slower
+ * (readable, more so for the enemy), the cut faster. Each strike resolves
+ * once, at its impact, against what the other is doing then.
+ *
+ * Each frame, while `present`: scale(dt) (the duel's freezes and slow
+ * motion: the world runs at dt × that), then step(sim) — the entrance, or
+ * the fight — then view(dt) for the camera, hud() and ask() for the screen.
  */
-const $ = query => document.querySelector(query);
 const clamp = THREE.MathUtils.clamp;
 const forward = heading => new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
 const angleTo = (a, b) => Math.atan2(b.motion.x - a.motion.x, b.motion.z - a.motion.z);
 const range = (a, b) => Math.hypot(a.motion.x - b.motion.x, a.motion.z - b.motion.z);
 const faces = (a, b, limit) => Math.abs(angleDelta(a.motion.heading, angleTo(a, b))) < limit;
 const UP = new THREE.Vector3(0, 1, 0);
-const DUEL_BOUNDS = Object.freeze({ minX: -8, maxX: 8, minZ: -8, maxZ: 8 });
-const FLOOR_BOUNDS = Object.freeze({ minX: -16, maxX: 16, minZ: -16, maxZ: 16 });
-const screenRight = new THREE.Vector3(10, 0, -8).normalize();
-const screenUp = new THREE.Vector3(-8, 0, -10).normalize();
 const HEAVY = ['slam', 'spinSlam', 'risingLeap'];
-// The feel of the duel, per event. stop: [hold, recover] s — the action freezes on the impact (the struck body
+// The feel, per event. stop: [hold, recover] s — the action freezes on the impact (the struck body
 // shudders, the sparks still bloom), then eases back to speed; slow: [scale, hold, recover]. The camera snaps
 // with the blow — kick: m along it, punch: a share of zoom — and holds still through the freeze; the shake
 // (trauma) rings out once it ends. A moving camera would hide the freeze.
@@ -62,123 +59,66 @@ const FX = {
   bind: { stop: [0.09, 0.1], trauma: 0.3, kick: 0.045, punch: 0.03, sparks: 130, flash: 1.5, rumble: [0.6, 0.8, 0.12] },
   shove: { stop: [0.09, 0.1], trauma: 0.34, kick: 0.07, punch: 0.03, sparks: 120, flash: 1.6, rumble: [0.8, 0.9, 0.16] },
 };
-const keys = new Set();
-window.addEventListener('keydown', event => { keys.add(event.code); if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault(); });
-window.addEventListener('keyup', event => keys.delete(event.code));
-window.addEventListener('blur', () => keys.clear());
+// The entrance: his pace (each step a stroke of the score), where he stops, the beats before the fight.
+const ENTRANCE = { pace: 0.85, stride: 0.78, turn: 0.7, held: 1.5, near: 3.2 };
+// Why the hero died: one line on the death card.
+const CAUSES = {
+  broken: 'Garde brisée : parez au bon moment, ou reculez pour reprendre l’équilibre.',
+  wounds: 'Troisième blessure : il retient certains coups et feinte avant de frapper.',
+  unblockable: 'Reflet rouge : coup imparable. Esquivez (Y), ou parez à l’instant exact.',
+  parried: 'Vos coups ont été parés jusqu’à vous déséquilibrer. Variez le rythme.',
+  bind: 'Lames croisées : martelez B plus vite que lui.',
+  force: 'La Force a brisé votre garde : ne restez pas figé derrière elle.',
+};
+const ENEMY_PALETTE = {
+  coat: '#29232d', coatShade: '#1b1821', coatEdge: '#3b303d', collar: '#44313e',
+  tunic: '#776b76', tunicShade: '#574b59', trousers: '#211d26', boot: '#19171e',
+  bootCuff: '#302934', sole: '#111117', lining: '#1b1620',
+};
+const ENEMY_COAT = { base: '#24202a', fold: '#15121c', hem: '#372a39' };
 
-try { init(); } catch (error) { console.error(error); $('#error').hidden = false; $('#error-text').textContent = `Le duel n'a pas pu démarrer : ${error.message || error}`; }
-
-function init() {
-  const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.24;
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.domElement.setAttribute('aria-label', 'Duel Jedi 3D. B ou J pour frapper, RB ou K pour parer, Y ou Espace pour esquiver.');
-  $('#duel').appendChild(renderer.domElement);
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0d1420);
-  scene.fog = new THREE.FogExp2(0x111927, 0.022);
-  const camera = new THREE.OrthographicCamera(-7, 7, 4.2, -4.2, 0.1, 100);
-  const cameraOffset = new THREE.Vector3(8, 8.2, 10);
-  const focus = new THREE.Vector3(0, 0.85, 0);
-  const shake = createShake({ maxOffset: 0.16, decay: 2.4 });
-  const lighting = createLighting(scene, renderer);
-  lighting.whiteStrip.intensity *= 0.65;
-  createStage(scene, { bounds: FLOOR_BOUNDS });
-  const deck = deckGeometry(FLOOR_BOUNDS);
-  const reflection = new Reflector(deck.geometry, { textureWidth: 512, textureHeight: 384, multisample: 0, clipBias: 0.001, color: 0x667789 });
-  reflection.rotation.x = -Math.PI / 2;
-  reflection.position.copy(deck.centre).setY(0.002);
-  reflection.material.transparent = true;
-  reflection.material.opacity = 0.18;
-  reflection.material.blending = THREE.AdditiveBlending;
-  reflection.material.depthWrite = false;
-  reflection.renderOrder = 1;
-  reflection.getRenderTarget().texture.magFilter = THREE.NearestFilter;
-  reflection.getRenderTarget().texture.minFilter = THREE.NearestFilter;
-  scene.add(reflection);
-  const effects = createImpactEffects(scene);
-  const wounds = createWounds();
-  wounds.scene = scene;
-  const audio = createAudio();
-  audio.enabled = true;
-  audio.volume = Number($('#audio-volume').value);
-  let pixelSize = Number($('#pixel-size').value), cameraHeight = Number($('#camera-zoom').value), rumbleEnabled = $('#rumble').checked;
-  const helpPanel = $('#help-panel'), settingsPanel = $('#settings-panel');
-  function syncSound() { $('#sound').textContent = `SON : ${audio.enabled ? 'OUI' : 'NON'}`; $('#audio-enabled').checked = audio.enabled; if (audio.enabled) audio.start(); }
-  $('#sound').addEventListener('click', () => { audio.enabled = !audio.enabled; syncSound(); });
-  $('#audio-enabled').addEventListener('change', event => { audio.enabled = event.target.checked; syncSound(); });
-  $('#audio-volume').addEventListener('input', event => { audio.volume = Number(event.target.value); });
-  $('#pixel-size').addEventListener('change', event => { pixelSize = Number(event.target.value); resize(); });
-  $('#camera-zoom').addEventListener('input', event => { cameraHeight = Number(event.target.value); resize(); });
-  $('#reflections').addEventListener('change', event => { reflection.visible = event.target.checked; });
-  $('#rumble').addEventListener('change', event => { rumbleEnabled = event.target.checked; });
-  function setPanel(which) {
-    helpPanel.hidden = which !== 'help'; settingsPanel.hidden = which !== 'settings';
-    $('#help-toggle').setAttribute('aria-expanded', String(!helpPanel.hidden));
-    $('#settings-toggle').setAttribute('aria-expanded', String(!settingsPanel.hidden));
-  }
-  $('#help-toggle').addEventListener('click', () => setPanel(helpPanel.hidden ? 'help' : null));
-  $('#settings-toggle').addEventListener('click', () => setPanel(settingsPanel.hidden ? 'settings' : null));
-  document.querySelectorAll('.close-panel').forEach(button => button.addEventListener('click', () => setPanel(null)));
-  function toggleFullscreen() { if (document.fullscreenElement) document.exitFullscreen?.(); else document.documentElement.requestFullscreen?.(); }
-  $('#fullscreen').addEventListener('click', toggleFullscreen);
-  let lastDevice = 'pad';
-  window.addEventListener('keydown', event => {
-    lastDevice = 'keyboard';
-    if (event.repeat || ['INPUT', 'SELECT'].includes(document.activeElement?.tagName)) return;
-    if (event.code === 'Escape') setPanel(null);
-    if (event.code === 'KeyH') setPanel(helpPanel.hidden ? 'help' : null);
-    if (event.code === 'KeyF') toggleFullscreen();
-  });
-  window.addEventListener('keydown', () => { if (audio.enabled) audio.start(); }, { once: true });
-  $('#duel').addEventListener('pointerdown', () => { if (audio.enabled) audio.start(); });
-
-  const enemyPalette = {
-    coat: '#29232d', coatShade: '#1b1821', coatEdge: '#3b303d', collar: '#44313e',
-    tunic: '#776b76', tunicShade: '#574b59', trousers: '#211d26', boot: '#19171e',
-    bootCuff: '#302934', sole: '#111117', lining: '#1b1620',
-  };
-  function fighter(id, color, palette, coatPalette) {
-    const character = createCharacter({ palette });
-    scene.add(character.root);
-    const coat = createCoat({ scene, character, palette: coatPalette });
-    const saber = createSaber({ socket: character.saberSocket, scene, color });
-    const trail = createBladeTrail(scene, { color, lifetime: 0.14 });
+/**
+ * hero: { character, coat, saber, trail, motion, combat, base, tip } — the game's own.
+ * door: the arena's great door; stand: where he stops before it. keys: the keys held (the game's set).
+ * confine(motion): crates and walls push a body out. onStep(fighter): a foot comes down. kick(position, velocity): debris.
+ */
+export function createDuel({ scene, hero, effects, audio, music, wounds, door, stand, keys, confine = () => {}, onStep = () => {}, kick: kickDebris = () => {}, rumble = () => {}, screenRight, screenUp }) {
+  function fighter(id, color, parts) {
     return {
-      id, color, character, coat, saber, trail, motion: new MotionController(), combat: new CombatController(),
-      state: createDuelState(), blade: createLivingBlade(),
-      base: new THREE.Vector3(), tip: new THREE.Vector3(), lastTip: new THREE.Vector3(), swing: new THREE.Vector3(),
-      strike: null, pending: null, feint: null, dash: null, forcing: null, push: new THREE.Vector3(), guardTime: 0, idleTime: 0,
-      cause: '',
+      id, color, ...parts, state: createDuelState(), blade: createLivingBlade(), lit: 1,
+      lastTip: new THREE.Vector3(), swing: new THREE.Vector3(), push: new THREE.Vector3(),
+      strike: null, pending: null, feint: null, dash: null, forcing: null, guardTime: 0, idleTime: 0, stride: 0.6, cause: '',
     };
   }
-  const player = fighter('player', 'blue', null, null);
-  const enemy = fighter('enemy', 'red', enemyPalette, { base: '#24202a', fold: '#15121c', hem: '#372a39' });
+  const player = fighter('player', 'blue', hero);
+  const enemyCharacter = createCharacter({ palette: ENEMY_PALETTE });
+  scene.add(enemyCharacter.root);
+  const enemy = fighter('enemy', 'red', {
+    character: enemyCharacter, coat: createCoat({ scene, character: enemyCharacter, palette: ENEMY_COAT }),
+    saber: createSaber({ socket: enemyCharacter.saberSocket, scene, color: 'red' }), trail: createBladeTrail(scene, { color: 'red', lifetime: 0.14 }),
+    motion: new MotionController(), combat: new CombatController(), base: new THREE.Vector3(), tip: new THREE.Vector3(),
+  });
   const fighters = [player, enemy];
   const opponent = f => f === player ? enemy : player;
-  const playerStart = new THREE.Vector3(-1.6, 0, 0.45);
-  const enemyStart = new THREE.Vector3(1.6, 0, -0.45);
-  let mind = createDuelMind();
-  const fragments = [];
-  let time = 0, lastFrame = performance.now(), outcome = null, outcomeAge = 0, messageAge = 0, engaged = false, readyAge = 0;
-  let strikeIds = 0, hitStop = null, slowMo = null, bind = null, intent = null, lastBind = -Infinity, attackBuffered = -Infinity, pendingTrauma = 0;
-  const kick = { offset: new THREE.Vector3(), velocity: new THREE.Vector3() }, punch = { value: 0, velocity: 0 };
-  const controls = { attack: false, guard: false, pull: false, push: false, dash: false, retry: false };
-  const virtual = {};
-  const promptEl = $('#duel-prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
 
-  const padButton = (pad, index) => pad?.buttons[index]?.pressed || (pad?.buttons[index]?.value ?? 0) > 0.65;
-  function rumble(strong = 0.4, weak = 0.5, duration = 0.09) {
-    if (!rumbleEnabled) return;
-    const pad = navigator.getGamepads?.().find(Boolean);
-    const actuator = pad?.vibrationActuator || pad?.hapticActuators?.[0];
-    actuator?.playEffect?.('dual-rumble', { duration: duration * 1000, strongMagnitude: Math.min(1, strong), weakMagnitude: Math.min(1, weak) })?.catch?.(() => {});
+  let phase = 'idle', entrance = null, mind = createDuelMind(), time = 0, outcome = null, outcomeAge = 0;
+  let strikeIds = 0, hitStop = null, slowMo = null, bind = null, intent = null, lastBind = -Infinity, attackBuffered = -Infinity, pendingTrauma = 0;
+  const fragments = [];
+  const shake = createShake({ maxOffset: 0.16, decay: 2.4 });
+  const cameraKick = { offset: new THREE.Vector3(), velocity: new THREE.Vector3() }, punch = { value: 0, velocity: 0 };
+  const focus = new THREE.Vector3();
+  const controls = { attack: false, guard: false, pull: false, push: false, dash: false };
+  const virtual = {};
+  let frameDt = 0;
+
+  function show(f, visible) {
+    f.character.root.visible = visible;
+    f.coat.mesh.visible = visible;
+    f.saber.group.visible = visible;
+    if (!visible) for (const light of f.saber.lights) light.intensity = 0;
   }
-  function announce(text, duration = 0.7) { $('#duel-message').textContent = text; $('#duel-message').classList.add('visible'); messageAge = duration; }
+  show(enemy, false);
+
   function stop(hold, recover, victim = null) { if (!hitStop || hold + recover > hitStop.hold + hitStop.recover - hitStop.age) hitStop = { age: 0, hold, recover, floor: 0.02, victim }; }
   const frozen = () => Boolean(hitStop && hitStop.age < hitStop.hold);
   function slow(scale, hold, recover) { if (!slowMo || scale < slowMo.scale) slowMo = { age: 0, scale, hold, recover }; }
@@ -189,7 +129,7 @@ function init() {
     // The camera snaps with the blow and holds there through the freeze; the shake comes after.
     pendingTrauma = Math.max(pendingTrauma, fx.trauma);
     const along = direction?.clone().setY(0);
-    if (along?.lengthSq() > 1e-6) { kick.offset.copy(along.normalize()).multiplyScalar(fx.kick); kick.velocity.set(0, 0, 0); }
+    if (along?.lengthSq() > 1e-6) { cameraKick.offset.copy(along.normalize()).multiplyScalar(fx.kick); cameraKick.velocity.set(0, 0, 0); }
     if (fx.punch) { punch.value = Math.max(punch.value, fx.punch); punch.velocity = 0; }
     rumble(...fx.rumble);
   }
@@ -206,28 +146,10 @@ function init() {
   }
   const local = (f, vector) => vector.clone().applyAxisAngle(UP, -f.motion.heading);
 
-  function reset() {
-    for (const fragment of fragments) fragment.dispose(); fragments.length = 0;
-    effects.clear(); shake.clear(); wounds.clear();
-    for (const f of fighters) {
-      f.motion.reset(); f.combat.reset(); f.state = createDuelState(); f.blade.reset();
-      f.strike = f.pending = f.feint = f.dash = f.forcing = null; f.push.set(0, 0, 0); f.guardTime = f.idleTime = 0; f.cause = '';
-      f.trail.clear(); f.character.root.visible = true; f.character.body.visible = true; f.coat.mesh.visible = true;
-    }
-    mind = createDuelMind();
-    player.motion.x = playerStart.x; player.motion.z = playerStart.z; player.motion.face(Math.atan2(enemyStart.x - playerStart.x, enemyStart.z - playerStart.z));
-    enemy.motion.x = enemyStart.x; enemy.motion.z = enemyStart.z; enemy.motion.face(Math.atan2(playerStart.x - enemyStart.x, playerStart.z - enemyStart.z));
-    for (const f of fighters) { f.character.root.position.set(f.motion.x, 0, f.motion.z); f.character.root.rotation.y = f.motion.heading; f.character.update({ dt: 0, time, speed: 0 }); f.coat.reset(); f.saber.update(1, time); }
-    focus.set(0, 0.85, 0);
-    outcome = null; outcomeAge = 0; engaged = false; readyAge = 0; hitStop = slowMo = bind = null; lastBind = attackBuffered = -Infinity; pendingTrauma = 0;
-    kick.offset.set(0, 0, 0); kick.velocity.set(0, 0, 0); punch.value = punch.velocity = 0;
-    $('#outcome').hidden = true;
-    announce('EN GARDE', 0.8);
-  }
-  $('#retry').addEventListener('click', () => reset());
-
+  // ---- Input: the duel reads the pad and the keys itself --------------------------
+  const padButton = (pad, index) => pad?.buttons[index]?.pressed || (pad?.buttons[index]?.value ?? 0) > 0.65;
   function readInput() {
-    const pad = navigator.getGamepads?.().find(Boolean);
+    const pad = navigator.getGamepads?.()?.find(Boolean);
     const dead = value => Math.abs(value || 0) < 0.15 ? 0 : value;
     const horizontal = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('KeyQ') || keys.has('ArrowLeft') ? 1 : 0) + dead(pad?.axes[0]) + (virtual.x ?? 0);
     const vertical = (keys.has('KeyW') || keys.has('KeyZ') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0) - dead(pad?.axes[1]) + (virtual.y ?? 0);
@@ -235,14 +157,12 @@ function init() {
     const norm = Math.max(1e-6, Math.hypot(horizontal, vertical));
     const x = length ? (screenRight.x * horizontal + screenUp.x * vertical) / norm * length : 0;
     const z = length ? (screenRight.z * horizontal + screenUp.z * vertical) / norm * length : 0;
-    if (pad && pad.buttons.some(button => button?.pressed)) lastDevice = 'pad';
     const current = {
-      attack: keys.has('KeyJ') || keys.has('KeyB') || padButton(pad, 1) || Boolean(virtual.attack),
+      attack: keys.has('KeyJ') || padButton(pad, 1) || Boolean(virtual.attack),
       guard: keys.has('KeyK') || padButton(pad, 5) || padButton(pad, 4) || Boolean(virtual.guard),
       pull: keys.has('KeyU') || padButton(pad, 6) || Boolean(virtual.pull),
       push: keys.has('KeyI') || padButton(pad, 7) || Boolean(virtual.push),
       dash: keys.has('Space') || padButton(pad, 3) || Boolean(virtual.dash),
-      retry: keys.has('Enter') || padButton(pad, 0) || padButton(pad, 1) || Boolean(virtual.retry),
     };
     const pressed = {};
     for (const key of Object.keys(current)) { pressed[key] = current[key] && !controls[key]; controls[key] = current[key]; }
@@ -316,7 +236,6 @@ function init() {
       effects.burst(at, { power: 0.9, tint: 'red' });
       effects.flash(at, 1.2, { color: new THREE.Color(1, 0.12, 0.08) });
       audio.alert('!', at);
-      if (f === enemy) announce('IMPARABLE · ESQUIVEZ OU PAREZ PARFAITEMENT', 0.8);
     }
   }
   function interruptStrike(f) {
@@ -339,15 +258,12 @@ function init() {
     if (f.swing.lengthSq() < 1e-4) f.swing.copy(forward(f.motion.heading));
     return f.swing.clone().normalize();
   }
-  function resolve(attacker) {
+  function resolve(attacker, immortal) {
     const defender = opponent(attacker), s = attacker.strike;
     s.resolved = true;
     const distance = range(attacker, defender);
     const reach = s.deathblow ? 2.6 : s.heavy ? 2.3 : 2.05;
-    if (!defender.state.alive || distance > reach || !faces(attacker, defender, 1.2)) {
-      if (attacker === player) announce('TROP LOIN', 0.35);
-      return;
-    }
+    if (!defender.state.alive || distance > reach || !faces(attacker, defender, 1.2)) return;
     // Both blades coming at once: they lock.
     const theirs = defender.strike;
     if (theirs && !theirs.resolved && !s.deathblow && !theirs.deathblow && impactIn(defender) < 0.14 && faces(defender, attacker, 1.1)) {
@@ -359,14 +275,19 @@ function init() {
     const facing = faces(defender, attacker, 1.25);
     const { body, blades, apart } = contactPoint(attacker, defender);
     const swing = swingOf(attacker);
-    const result = s.deathblow && defender.state.broken > 0
+    let result = s.deathblow && defender.state.broken > 0
       ? (defender.state.alive = false, 'kill')
       : resolveStrike(attacker.state, defender.state, { facing, heavy: s.heavy, unblockable: s.unblockable });
+    // God mode: the blow that would kill him only wounds.
+    if (result === 'kill' && defender === player && immortal) {
+      Object.assign(defender.state, { alive: true, wounds: DUEL.wounds - 1, broken: 0, posture: DUEL.posture * 0.5 });
+      result = 'wound';
+    }
     const at = ['block', 'smashed', 'parry', 'parryBreak', 'guardBreak'].includes(result) ? (apart < 0.8 ? blades : body) : body;
     const away = forward(angleTo(attacker, defender));
     if (result === 'miss') {
-      // Dodged: shown. Through a wound's grace: the blade grazes, burns, shoves — but no new wound.
-      if (defender.dash) { announce(defender === player ? 'ESQUIVÉ' : 'IL ESQUIVE', 0.35); audio.whoosh(0.6); return; }
+      // Dodged. Through a wound's grace: the blade grazes, burns, shoves — but no new wound.
+      if (defender.dash) { audio.whoosh(0.6); return; }
       effects.sparks(body, swing, away, { count: 26, speed: 4, ...(attacker.color === 'red' ? { red: 0.7 } : { saber: 0.7 }) });
       effects.flash(body, 0.6, { color: new THREE.Color(1, 0.4, 0.3) });
       audio.burn(body);
@@ -386,13 +307,12 @@ function init() {
       effects.flash(at, fx.flash, { color: new THREE.Color(0.85, 0.8, 1) });
       audio.deflect(false, at); audio.impact(result === 'block' ? 0.45 : 1.25, at);
       feel(result === 'smashed' ? 'guardBreak' : result, at, swing, defender);
-      if (result === 'smashed') { interruptStrike(defender); announce(defender === player ? 'GARDE ENFONCÉE !' : 'SA GARDE EST ENFONCÉE', 0.6); }
+      if (result === 'smashed') interruptStrike(defender);
       if (result === 'guardBreak') {
         audio.zap(at, 1);
         interruptStrike(defender);
         defender.cause = s.unblockable ? 'unblockable' : 'broken';
-        announce(defender === enemy ? 'GARDE BRISÉE · ACHEVEZ-LE !' : 'VOTRE GARDE CÈDE !', 0.9);
-      } else if (result === 'block') announce(defender === player ? 'BLOQUÉ' : 'IL BLOQUE', 0.3);
+      }
       if (defender === enemy) mind.notify(result === 'block' ? 'blocked' : 'wounded');
       else mind.notify('wasBlocked');
       return;
@@ -408,8 +328,7 @@ function init() {
       effects.burst(at, { power: 0.8, tint: defender.color === 'red' ? 'red' : 'blue' });
       audio.deflect(true, at); audio.impact(0.8, at);
       feel(result === 'parryBreak' ? 'guardBreak' : 'parry', at, swing, attacker);
-      if (result === 'parryBreak') { attacker.cause = 'parried'; announce(attacker === enemy ? 'SA GARDE CÈDE · ACHEVEZ-LE !' : 'VOTRE GARDE CÈDE !', 0.9); }
-      else announce(defender === player ? 'PARADE PARFAITE · RIPOSTEZ !' : 'IL PARE !', defender === player ? 0.75 : 0.45);
+      if (result === 'parryBreak') attacker.cause = 'parried';
       if (defender === enemy) mind.notify('parried'); else mind.notify('wasParried');
       return;
     }
@@ -428,21 +347,20 @@ function init() {
     if (result === 'wound') {
       defender.push.addScaledVector(away, 3.8);
       defender.blade.knock(local(defender, swing.clone().multiplyScalar(2)), null, -2.6, 0.8);
-      const left = DUEL.wounds - defender.state.wounds;
-      announce(defender === enemy ? 'TOUCHÉ !' : left <= 1 ? 'BLESSÉ · ENCORE UN ET C\'EST FINI' : 'BLESSÉ !', 0.8);
       if (defender === enemy) mind.notify('wounded'); else mind.notify('hit');
       return;
     }
-    // Death: the finisher, the slow beat, the verdict.
+    // Death: the head comes off (an arm on a rising cut), thrown with the blade's own sweep.
     if (!defender.cause) defender.cause = s.deathblow ? 'broken' : 'wounds';
     const move = attacker.combat.action?.name || '';
     const kind = !s.deathblow && ['lowSweep', 'rising', 'risingLeap'].includes(move) ? 'arm' : 'head';
     const sweep = attacker.swing.clone();
     if (sweep.length() < 4) sweep.copy(swing).multiplyScalar(8);
+    defender.trail.clear();
     fragments.push(createFinisher(scene, defender, kind, sweep, effects));
-    if (defender === player) audio.death();
     outcome = attacker === player ? 'victory' : 'death'; outcomeAge = 0;
-    announce(attacker === player ? 'COUP DE GRÂCE' : 'VOUS ÊTES MORT', 0.9);
+    phase = 'over';
+    if (outcome === 'victory') music.victory(); else { audio.death(); music.defeat(); }
   }
 
   // ---- The bind ----------------------------------------------------------------
@@ -461,7 +379,6 @@ function init() {
     effects.flash(mid, 1.4, { color: new THREE.Color(0.95, 0.8, 1) });
     audio.deflect(false, mid); audio.impact(0.8, mid);
     feel('block', mid, axis);
-    announce('CHOC DE LAMES', 0.35);
   }
   function startBind(a, b) {
     interruptStrike(a); interruptStrike(b);
@@ -477,7 +394,6 @@ function init() {
     feel('bind', mid, axis);
     slow(0.4, 0.12, 0.3);
     mind.notify('bind');
-    announce('LAMES CROISÉES · MARTELEZ B !', 0.9);
   }
   function stepBind(dt, input) {
     bind.age += dt;
@@ -521,8 +437,7 @@ function init() {
     audio.deflect(true, bind.mid); audio.impact(1.1, bind.mid);
     feel(result === 'break' ? 'guardBreak' : 'shove', bind.mid, away, loser);
     loser.state.open = Math.max(loser.state.open, 0.35);
-    if (result === 'break') { loser.cause = 'bind'; announce(loser === enemy ? 'IL CÈDE · ACHEVEZ-LE !' : 'VOUS CÉDEZ !', 0.9); }
-    else announce(winner === player ? 'REPOUSSÉ !' : 'IL VOUS REPOUSSE', 0.5);
+    if (result === 'break') loser.cause = 'bind';
     bind = null;
   }
 
@@ -558,8 +473,7 @@ function init() {
     target.push.addScaledVector(dir, kind === 'pull' ? -6 : 6.5);
     target.blade.knock(local(target, dir.clone().multiplyScalar(kind === 'pull' ? -1.5 : 2)).setY(1), new THREE.Vector3(0, 0, kind === 'pull' ? -5 : 7), kind === 'pull' ? 1.6 : -2.2, 0.5);
     feel(result === 'guardBreak' ? 'guardBreak' : 'block', target.character.root.position.clone().setY(1.1), dir, target);
-    if (result === 'guardBreak') { target.cause = 'force'; announce(target === enemy ? 'GARDE BRISÉE · ACHEVEZ-LE !' : 'LA FORCE BRISE VOTRE GARDE !', 0.9); }
-    else announce(kind === 'pull' ? (target === enemy ? 'ATTIRÉ · FRAPPEZ !' : 'IL VOUS ATTIRE') : (target === enemy ? 'PROJETÉ' : 'IL VOUS PROJETTE'), 0.5);
+    if (result === 'guardBreak') target.cause = 'force';
   }
 
   // ---- One fighter, one step ---------------------------------------------------
@@ -586,7 +500,7 @@ function init() {
     if (f.forcing && !f.combat.action) f.forcing = null;
 
     // Moving: the stick (or the mind), the drive of the strike, a lunge to reach, the pushes, a dash.
-    let maxSpeed = state.guard ? 1.7 : state.tired ? 2.3 : 3.1;
+    const maxSpeed = state.guard ? 1.7 : state.tired ? 2.3 : 3.1;
     if (state.broken > 0 || state.stagger > 0) { x *= 0.2; z *= 0.2; }
     f.motion.update(dt, x, z, { analog: true, maxSpeed, inputScale: base.inputScale ?? 1, turnScale: 0, drive: state.stagger > 0 ? 0 : base.drive || 0, engaged: true });
     const distance = range(f, other);
@@ -606,11 +520,12 @@ function init() {
     }
     f.motion.x += f.push.x * dt; f.motion.z += f.push.z * dt;
     f.push.multiplyScalar(Math.exp(-6.5 * dt));
-    f.motion.x = clamp(f.motion.x, DUEL_BOUNDS.minX + 0.45, DUEL_BOUNDS.maxX - 0.45);
-    f.motion.z = clamp(f.motion.z, DUEL_BOUNDS.minZ + 0.45, DUEL_BOUNDS.maxZ - 0.45);
+    // The crates and the walls of the room stop him.
+    confine(f.motion);
     // Always facing him: the duel's lock.
     const turnRate = state.broken > 0 ? 2 : committed ? 0 : f.strike ? 12 : 9;
     f.motion.heading += angleDelta(f.motion.heading, angleTo(f, other)) * (1 - Math.exp(-turnRate * dt));
+    kickDebris(f.character.root.position, new THREE.Vector3(f.motion.vx + f.push.x, 0, f.motion.vz + f.push.z));
   }
   /** Pose and body: the living blade on the choreography, then the skeleton, the coat, the blade. */
   function animate(f, dt) {
@@ -620,7 +535,7 @@ function init() {
     f.character.root.updateMatrixWorld(true);
     let meet = null;
     // His guard goes to meet a strike on its way, as soon as he sees it coming.
-    const incoming = impactIn(other);
+    const incoming = phase === 'idle' || phase === 'entrance' ? Infinity : impactIn(other);
     if (state.guard && incoming < 0.5 && faces(f, other, 1.25)) {
       const { blades } = contactPoint(other, f);
       meet = {
@@ -635,12 +550,22 @@ function init() {
     const pose = f.blade.update(dt, f.combat.output, { meet, bind: bound, broken: state.broken > 0, fatigue, time });
     f.character.update({ dt, time, speed: f.motion.speed, runBlend: f.motion.runBlend, sprintIntent: 0, turnRate: f.motion.turnRate, forwardAccel: f.motion.forwardAccel, action: pose });
     f.coat.update({ dt, time, velocity: { x: f.motion.vx + f.push.x, z: f.motion.vz + f.push.z }, turnRate: f.motion.turnRate });
-    f.saber.update(1, time, (f.combat.output.flare || 0) + fatigue * 0.06);
+    if (f.saber.update(f.lit, time, (f.combat.output.flare || 0) + fatigue * 0.06) === 'ignite') audio.ignite();
     f.lastTip.copy(f.tip);
     f.saber.segment(f.base, f.tip);
     if (dt > 0) f.swing.lerp(new THREE.Vector3().subVectors(f.tip, f.lastTip).divideScalar(dt), 0.5);
     // The trail: the strikes' own, and a faint one on a very fast blade (a rebound), never a fan on every move.
-    f.trail.update(dt, f.base, f.tip, Math.max((f.combat.output.trail || 0) * 0.85, clamp((f.swing.length() - 9) / 14, 0, 0.35)));
+    f.trail.update(dt, f.base, f.tip, f.lit * Math.max((f.combat.output.trail || 0) * 0.85, clamp((f.swing.length() - 9) / 14, 0, 0.35)));
+  }
+  /** His feet on the deck: a step heard, and printed red if he trod in it. */
+  function stride(f, dt) {
+    const speed = Math.hypot(f.motion.vx + f.push.x, f.motion.vz + f.push.z);
+    if (speed < 0.35 || f.dash) { f.stride = 0.6; return; }
+    f.stride += speed * dt / (f.motion.runBlend > 0.5 ? 1.25 : 0.7);
+    if (f.stride < 1) return;
+    f.stride %= 1;
+    audio.step(f.character.root.position, { pace: Math.min(1, speed / 4.5) });
+    onStep(f);
   }
 
   /** What the enemy's mind is told of the fight. */
@@ -664,16 +589,120 @@ function init() {
     };
   }
 
-  function step(dt, input) {
+  // ---- The entrance ------------------------------------------------------------
+  /** Where he walks from (the corridor, deep), and the way out of it. */
+  const outward = () => door.out.clone().setY(0).normalize();
+  function placeEnemy(at, heading) {
+    enemy.motion.reset();
+    enemy.motion.x = at.x; enemy.motion.z = at.z; enemy.motion.face(heading);
+    enemy.combat.reset(); enemy.blade.reset(); enemy.state = createDuelState();
+    enemy.strike = enemy.pending = enemy.feint = enemy.dash = enemy.forcing = null;
+    enemy.push.set(0, 0, 0); enemy.cause = ''; enemy.stride = 0.6; enemy.trail.clear();
+  }
+  function enter() {
+    reset();
+    phase = 'entrance';
+    entrance = { stage: 'door', age: 0, steps: 0, shut: false };
+    const start = door.inside[2].clone().lerp(door.inside[3], 0.5);
+    const out = outward();
+    placeEnemy(start, Math.atan2(out.x, out.z));
+    // His blade out, silently, before he is seen.
+    enemy.lit = 0;
+    for (let i = 0; i < 4; i++) enemy.saber.update(0, time + i * 0.1);
+    time += 0.4;
+    show(enemy, true);
+    for (const light of enemy.saber.lights) light.intensity = 0;
+    door.alarm = false;
+    door.open();
+    audio.door(door.centre);
+    music.entrance();
+  }
+  function ignite() {
+    entrance.stage = 'lit'; entrance.age = 0;
+    enemy.lit = 1;
+    enemy.combat.flourish();
+    music.ignite();
+    const at = enemy.character.root.position.clone().setY(1.2);
+    effects.flash(at, 2.2, { color: new THREE.Color(1, 0.16, 0.12) });
+    effects.burst(at, { power: 1.1, tint: 'red' });
+    rumble(0.6, 0.5, 0.3);
+  }
+  function stepEntrance(dt) {
+    const e = entrance;
+    e.age += dt;
+    const out = outward();
+    let speed = 0;
+    if (e.stage === 'door' && door.openness > 0.55) { e.stage = 'walk'; e.age = 0; }
+    if (e.stage === 'walk') {
+      speed = ENTRANCE.pace;
+      enemy.motion.x += out.x * speed * dt; enemy.motion.z += out.z * speed * dt;
+      e.stride = (e.stride ?? 0) + speed * dt;
+      if (e.stride >= ENTRANCE.stride) { e.stride -= ENTRANCE.stride; music.step(); audio.step(enemy.character.root.position, { pace: 0.3 }); onStep(enemy); }
+      // Through the door: it shuts behind him.
+      const past = new THREE.Vector3(enemy.motion.x - door.centre.x, 0, enemy.motion.z - door.centre.z).dot(out);
+      if (!e.shut && past > 1.6) { e.shut = true; door.close(); audio.door(door.centre); }
+      // He stops before the door — or lights it at once if the hero comes at him.
+      if (past >= new THREE.Vector3().subVectors(stand, door.centre).setY(0).dot(out)) { e.stage = 'turn'; e.age = 0; }
+      if (range(enemy, player) < ENTRANCE.near) { e.stage = 'turn'; e.age = ENTRANCE.turn; }
+    }
+    if (e.stage === 'turn') {
+      enemy.motion.heading += angleDelta(enemy.motion.heading, angleTo(enemy, player)) * (1 - Math.exp(-5 * dt));
+      if (e.age >= ENTRANCE.turn) ignite();
+    }
+    if (e.stage === 'lit') {
+      enemy.motion.heading += angleDelta(enemy.motion.heading, angleTo(enemy, player)) * (1 - Math.exp(-6 * dt));
+      if (!e.shut && door.openness > 0) { e.shut = true; door.close(); audio.door(door.centre); }
+      if (e.age >= ENTRANCE.held) engage();
+    }
+    enemy.motion.speed = speed;
+    enemy.motion.vx = out.x * speed; enemy.motion.vz = out.z * speed;
+    enemy.motion.runBlend = 0;
+    enemy.combat.update(dt, { guard: false, speed, aim: null, charging: false });
+    enemy.combat.takeStart();
+    animate(enemy, dt);
+  }
+  /** The fight begins: the hero's body is the duel's now. */
+  function engage() {
+    phase = 'fight';
+    entrance = null;
+    mind = createDuelMind();
+    for (const f of fighters) {
+      f.state = createDuelState(); f.blade.reset(); f.lit = 1;
+      f.strike = f.pending = f.feint = f.dash = f.forcing = null; f.push.set(0, 0, 0); f.cause = ''; f.guardTime = f.idleTime = 0;
+    }
+    player.combat.reset();
+    player.motion.saber = 1;
+    hitStop = slowMo = bind = null; lastBind = attackBuffered = -Infinity;
+    readInput();
+    music.fight();
+  }
+
+  // ---- Each frame ------------------------------------------------------------------
+  /** The duel's clock: freezes ease back to speed, slow motion holds then eases. Returns the world's time scale. */
+  function scale(dt) {
+    frameDt = dt;
+    let value = 1;
+    if (hitStop) { value = Math.min(value, hitStopScale(hitStop.age, hitStop)); if ((hitStop.age += dt) > hitStop.hold + hitStop.recover) hitStop = null; }
+    if (slowMo) {
+      const { age, hold, recover } = slowMo;
+      value = Math.min(value, age < hold ? slowMo.scale : slowMo.scale + (1 - slowMo.scale) * Math.min(1, (age - hold) / recover) ** 2);
+      if ((slowMo.age += dt) > hold + recover) slowMo = null;
+    }
+    return value;
+  }
+  function step(dt, { immortal = false } = {}) {
+    if (phase === 'idle') return;
     time += dt;
     for (const fragment of fragments) fragment.update(dt, frameDt);
-    if (outcome) {
+    if (phase === 'entrance') { if (entrance.stage === 'ready') readyStep(dt); else stepEntrance(dt); return; }
+    if (phase === 'over') {
+      outcomeAge += frameDt;
       // The winner's blade plays on to rest.
       for (const f of fighters) if (f.state.alive) { stepFighter(f, dt, { x: 0, z: 0, guard: false }); animate(f, dt); }
+      shudder();
       return;
     }
-    readyAge += dt;
-    if (!engaged && (readyAge > 1 || input.magnitude > 0.08 || Object.values(input.current).some(Boolean))) engaged = true;
+    const input = readInput();
     // The hero.
     player.idleTime = input.magnitude > 0.1 || player.combat.busy ? 0 : player.idleTime + dt;
     if (bind) stepBind(dt, input);
@@ -685,15 +714,12 @@ function init() {
         if (player.strike && !player.strike.resolved && player.strike.age > 0.12 && phaseOf(player) < player.strike.impact) interruptStrike(player);
         parry(player.state);
       }
-      if (input.pressed.dash) {
-        const away = forward(angleTo(enemy, player));
-        startDash(player, input.magnitude > 0.2 ? new THREE.Vector3(input.x, 0, input.z) : away);
-      }
+      if (input.pressed.dash) startDash(player, input.magnitude > 0.2 ? new THREE.Vector3(input.x, 0, input.z) : forward(angleTo(enemy, player)));
       if (input.pressed.pull) startForce(player, 'pull');
       if (input.pressed.push) startForce(player, 'push');
     }
     // The enemy.
-    intent = engaged ? mind.think(dt, view()) : null;
+    intent = mind.think(dt, view());
     let enemyMove = { x: 0, z: 0 };
     if (intent && !bind) {
       const to = forward(angleTo(enemy, player)), side = new THREE.Vector3(to.z, 0, -to.x);
@@ -709,138 +735,126 @@ function init() {
     const dx = enemy.motion.x - player.motion.x, dz = enemy.motion.z - player.motion.z, d = Math.hypot(dx, dz);
     const min = bind ? 0.95 : 0.82;
     if (d < min && d > 1e-4) { const o = (min - d) / 2; player.motion.x -= dx / d * o; player.motion.z -= dz / d * o; enemy.motion.x += dx / d * o; enemy.motion.z += dz / d * o; }
-    for (const f of fighters) animate(f, dt);
+    for (const f of fighters) { animate(f, dt); stride(f, dt); }
     // Strikes land, in the order they come.
-    for (const f of fighters) if (!outcome && f.strike && !f.strike.resolved && phaseOf(f) >= f.strike.impact) resolve(f);
+    for (const f of fighters) if (phase === 'fight' && f.strike && !f.strike.resolved && phaseOf(f) >= f.strike.impact) resolve(f, immortal);
+    // The score follows the fight: blades locked, a guard broken, a wound.
+    music.intensity(bind || enemy.state.broken > 0 || player.state.broken > 0 ? 1 : 0.55 + 0.12 * (player.state.wounds + enemy.state.wounds));
+    shudder();
+  }
+  /** Through a freeze the struck body shudders. */
+  function shudder() {
+    if (!frozen() || !hitStop.victim) return;
+    const root = hitStop.victim.character.root, fade = 1 - hitStop.age / hitStop.hold;
+    root.position.addScaledVector(screenRight, (Math.floor(hitStop.age * 60) % 2 ? 1 : -1) * 0.028 * fade);
+  }
+  /** After a death, before the fight starts again: both stand a beat, blades lit. */
+  function readyStep(dt) {
+    entrance.age += dt;
+    for (const f of fighters) {
+      f.motion.update(dt, 0, 0, { analog: true, maxSpeed: 1, engaged: true });
+      f.motion.heading += angleDelta(f.motion.heading, angleTo(f, opponent(f))) * (1 - Math.exp(-8 * dt));
+      f.combat.update(dt, { guard: false, speed: 0, aim: null, charging: false });
+      f.combat.takeStart();
+      animate(f, dt);
+    }
+    if (entrance.age > 1.1) engage();
   }
 
-  // ---- Screen ------------------------------------------------------------------
-  function hud() {
-    for (const f of fighters) {
-      const cells = (track, value, max, low) => {
-        const filled = Math.ceil(12 * value / max);
-        for (let index = 0; index < track.children.length; index++) track.children[index].classList.toggle('filled', index < filled);
-        track.classList.toggle('low', low);
-      };
-      cells($(`#${f.id}-energy`), f.state.energy, f.state.maxEnergy, f.state.tired);
-      cells($(`#${f.id}-posture`), f.state.posture, DUEL.posture, f.state.posture > DUEL.posture * 0.7);
-      const readout = $(`#${f.id}-readout`);
-      readout.textContent = !f.state.alive ? 'ÉLIMINÉ' : f.state.broken > 0 ? 'GARDE BRISÉE' : bind ? 'LAMES CROISÉES' : f.state.stagger > 0.05 ? 'DÉSÉQUILIBRÉ' : f.state.tired ? 'ÉPUISÉ' : f.state.guard ? 'EN GARDE' : f.combat.busy ? 'ATTAQUE' : f.state.wounds ? 'BLESSÉ' : 'PRÊT';
-      $(`#${f.id}-wounds`).textContent = '✚'.repeat(DUEL.wounds - f.state.wounds).padEnd(DUEL.wounds, '·');
-    }
-    // The pixel prompt: finish him (his guard broken), or hammer B (blades locked).
-    const finish = !outcome && enemy.state.broken > 0 && enemy.state.alive;
-    const show = finish || Boolean(bind);
-    promptEl.classList.toggle('on', show);
-    if (show) {
-      const scale = Math.max(3, pixelSize);
-      const size = prompt.draw({ device: lastDevice, label: finish ? 'ACHEVER' : 'MARTELER', progress: bind ? clamp((bind.balance + 1) / 2, 0.02, 1) : enemy.state.broken / DUEL.broken, time });
-      const canvas = promptEl.firstElementChild;
-      canvas.style.width = `${size.width * scale}px`; canvas.style.height = `${size.height * scale}px`;
-      const anchor = finish ? enemy.character.root.position.clone().setY(2.05) : bind.mid.clone().setY(bind.mid.y + 0.75);
-      const p = anchor.project(camera);
-      promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth - size.width * scale / 2).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight - size.height * scale).toFixed(0)}px)`;
-    }
-  }
-  function resize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(Math.max(1, Math.ceil(w / pixelSize)), Math.max(1, Math.ceil(h / pixelSize)), false);
-    renderer.domElement.style.width = `${w}px`; renderer.domElement.style.height = `${h}px`;
-  }
-  let zoom = cameraHeight;
-  function frameCamera(dt) {
-    const mid = new THREE.Vector3((player.motion.x + enemy.motion.x) * 0.5, 0.9, (player.motion.z + enemy.motion.z) * 0.5);
-    focus.lerp(mid, 1 - Math.exp(-5 * dt));
-    lighting.follow(focus);
-    // The camera's kick and zoom punch: springs, so they snap and settle.
+  /** The camera, from his entrance on: both framed, the snap of a blow held through the freeze. */
+  const viewOffset = new THREE.Vector3();
+  function camera(dt) {
+    focus.set((player.motion.x + enemy.motion.x) * 0.5, 0.75, (player.motion.z + enemy.motion.z) * 0.5);
     const still = frozen();
     if (!still) {
       if (pendingTrauma) { shake.add(pendingTrauma); pendingTrauma = 0; }
-      kick.velocity.addScaledVector(kick.offset, -260 * dt).multiplyScalar(Math.max(0, 1 - 18 * dt));
-      kick.offset.addScaledVector(kick.velocity, dt);
+      cameraKick.velocity.addScaledVector(cameraKick.offset, -260 * dt).multiplyScalar(Math.max(0, 1 - 18 * dt));
+      cameraKick.offset.addScaledVector(cameraKick.velocity, dt);
       punch.velocity += (-220 * punch.value - 20 * punch.velocity) * dt;
       punch.value += punch.velocity * dt;
     }
     const d = range(player, enemy);
-    const want = cameraHeight * (d < 1.6 ? 0.92 : d > 4 ? 1.08 : 1) * (bind ? 0.84 - Math.min(0.1, bind.age * 0.08) : 1) * (outcome ? 0.82 : 1);
-    zoom = damp(zoom, want, 3, dt);
-    const height = zoom * (1 - clamp(punch.value, -0.2, 0.25));
-    const w = window.innerWidth || 1, h = window.innerHeight || 1;
-    camera.left = -height * w / h; camera.right = height * w / h; camera.top = height; camera.bottom = -height;
-    camera.updateProjectionMatrix();
-    const shakePose = shake.update(still ? 0 : dt);
-    camera.position.copy(focus).add(cameraOffset).add(kick.offset).addScaledVector(screenRight, shakePose.offset.x).add(new THREE.Vector3(0, shakePose.offset.y, 0));
-    camera.lookAt(focus.clone().add(kick.offset));
-    camera.rotateZ(shakePose.roll);
+    // Coming in, he may be across the room: the view widens to keep both.
+    const spread = phase === 'entrance' && entrance?.stage !== 'ready' ? clamp(0.7 + d * 0.075, 0.9, 1.65) : clamp(0.75 + d * 0.08, 0.9, 1.35);
+    const zoom = (d < 1.6 ? 0.9 : 1) * spread * (bind ? 0.84 - Math.min(0.1, bind.age * 0.08) : 1) * (outcome ? 0.84 : 1);
+    const pose = shake.update(still ? 0 : dt);
+    viewOffset.copy(cameraKick.offset).addScaledVector(screenRight, pose.offset.x).add(new THREE.Vector3(0, pose.offset.y, 0));
+    return { focus, offset: viewOffset, roll: pose.roll, zoom, punch: clamp(punch.value, -0.2, 0.25) };
   }
-  const CAUSES = {
-    broken: 'Votre garde a cédé : trop de coups encaissés. Parez au bon moment, ou reculez pour reprendre votre équilibre.',
-    wounds: 'Troisième blessure. Lisez son rythme : il retient certains coups et feinte avant de frapper.',
-    unblockable: 'Coup imparable (reflet rouge) : esquivez avec Y / Espace, ou parez à l’instant exact.',
-    parried: 'Vos coups ont été parés jusqu’à vous déséquilibrer. Variez le rythme, feintez avec RB.',
-    bind: 'Il vous a repoussé dans le corps-à-corps des lames. Martelez B plus vite que lui.',
-    force: 'La Force a brisé votre garde. Ne restez pas trop longtemps derrière elle.',
-  };
-  function frame(now) {
-    requestAnimationFrame(frame);
-    const dt = Math.min(0.033, Math.max(0, (now - lastFrame) / 1000)); lastFrame = now;
-    tick(dt);
+  /** The pixel prompt: finish him (his guard broken), or hammer B (blades locked). */
+  function ask() {
+    if (phase !== 'fight') return null;
+    if (bind) return { label: 'MARTELER', progress: clamp((bind.balance + 1) / 2, 0.02, 1), anchor: bind.mid.clone().setY(bind.mid.y + 0.75) };
+    if (enemy.state.broken > 0 && enemy.state.alive) return { label: 'ACHEVER', progress: enemy.state.broken / DUEL.broken, anchor: enemy.character.root.position.clone().setY(2.05) };
+    return null;
   }
-  let frameDt = 0;
-  function tick(dt, draw = true) {
-    frameDt = dt;
-    const input = readInput();
-    if (outcome && outcomeAge > 0.6 && (input.pressed.retry || input.pressed.attack)) reset();
-    messageAge = Math.max(0, messageAge - dt); if (!messageAge) $('#duel-message').classList.remove('visible');
-    // Freezes ease back to speed; slow motion holds, then eases back.
-    let scale = 1;
-    if (hitStop) { scale = Math.min(scale, hitStopScale(hitStop.age, hitStop)); if ((hitStop.age += dt) > hitStop.hold + hitStop.recover) hitStop = null; }
-    if (slowMo) {
-      const { age, hold, recover } = slowMo;
-      scale = Math.min(scale, age < hold ? slowMo.scale : slowMo.scale + (1 - slowMo.scale) * Math.min(1, (age - hold) / recover) ** 2);
-      if ((slowMo.age += dt) > hold + recover) slowMo = null;
+  /** The gauges, both sides: wounds left, breath (energy), balance (posture). */
+  function hud(elements) {
+    for (const f of fighters) {
+      const side = elements[f.id];
+      if (!side) continue;
+      const cells = (track, value, max, low) => {
+        const filled = Math.ceil(track.children.length * value / max);
+        for (let index = 0; index < track.children.length; index++) track.children[index].classList.toggle('filled', index < filled);
+        track.classList.toggle('low', low);
+      };
+      cells(side.energy, f.state.energy, f.state.maxEnergy, f.state.tired);
+      cells(side.posture, f.state.posture, DUEL.posture, f.state.posture > DUEL.posture * 0.7);
+      for (let index = 0; index < side.wounds.children.length; index++) side.wounds.children[index].classList.toggle('lost', index >= DUEL.wounds - f.state.wounds);
     }
-    const paused = !helpPanel.hidden || !settingsPanel.hidden;
-    if (!paused) step(dt * scale, input);
-    effects.update(dt * (frozen() ? Math.max(scale, 0.3) : scale));
-    if (frozen() && hitStop.victim && !paused) {
-      const root = hitStop.victim.character.root, fade = 1 - hitStop.age / hitStop.hold;
-      root.position.addScaledVector(screenRight, (Math.floor(hitStop.age * 60) % 2 ? 1 : -1) * 0.028 * fade);
-    }
-    wounds.update(dt * scale);
-    frameCamera(dt);
-    audio.update(1, player.motion.speed, player.motion.turnRate, { dt, fight: outcome || !engaged ? 0 : 1 });
-    if (outcome) {
-      outcomeAge += dt;
-      if (outcomeAge > 1.3 && $('#outcome').hidden) {
-        $('#outcome').hidden = false;
-        $('#outcome-tag').textContent = outcome === 'victory' ? 'ADVERSAIRE ÉLIMINÉ' : 'DUEL PERDU';
-        $('#outcome-title').textContent = outcome === 'victory' ? 'VICTOIRE' : 'MORT';
-        $('#outcome-title').style.color = outcome === 'victory' ? '#e7f3ff' : '#ff7779';
-        $('#outcome-detail').textContent = outcome === 'victory'
-          ? (enemy.cause === 'wounds' ? 'Trois blessures nettes : il n’a pas tenu.' : 'Sa garde a cédé, et vous avez frappé.')
-          : CAUSES[player.cause] ?? CAUSES.wounds;
-      }
-    }
-    if (!draw) return;
-    hud();
-    renderer.render(scene, camera);
   }
-  for (const id of ['player', 'enemy']) for (const kind of ['energy', 'posture']) {
-    const track = $(`#${id}-${kind}`);
-    track.innerHTML = Array.from({ length: 12 }, () => `<span class="${kind}-cell"></span>`).join('');
+
+  /** After his death: the hero back on his feet before the Jedi, who waits, blade lit. */
+  function retry() {
+    for (const fragment of fragments) fragment.dispose();
+    fragments.length = 0;
+    outcome = null; outcomeAge = 0;
+    hitStop = slowMo = bind = null; pendingTrauma = 0;
+    cameraKick.offset.set(0, 0, 0); cameraKick.velocity.set(0, 0, 0); punch.value = punch.velocity = 0; shake.clear();
+    const out = outward();
+    placeEnemy(stand, Math.atan2(-out.x, -out.z));
+    enemy.lit = 1;
+    show(enemy, true);
+    const heroAt = stand.clone().addScaledVector(out, 3.6);
+    player.motion.reset();
+    player.motion.x = heroAt.x; player.motion.z = heroAt.z; player.motion.face(Math.atan2(-out.x, -out.z));
+    player.motion.saber = 1;
+    player.combat.reset(); player.blade.reset(); player.trail.clear();
+    player.state = createDuelState(); player.cause = '';
+    for (const f of fighters) { f.character.root.position.set(f.motion.x, 0, f.motion.z); f.character.root.rotation.y = f.motion.heading; f.character.update({ dt: 0, time, speed: 0 }); f.coat.reset(); }
+    phase = 'entrance';
+    entrance = { stage: 'ready', age: 0 };
+    music.stop();
   }
-  window.addEventListener('resize', resize); resize();
-  reset();
-  requestAnimationFrame(frame);
-  // For checks: step the fight without the display, hold virtual buttons.
-  window.__DUEL__ = {
-    advance(seconds, dt = 1 / 60, draw = true) { for (let t = 0; t < seconds - 1e-9; t += dt) tick(dt, draw); },
+  /** The game starts again: he is gone, the corridor empty. */
+  function reset() {
+    for (const fragment of fragments) fragment.dispose();
+    fragments.length = 0;
+    phase = 'idle'; entrance = null; outcome = null; outcomeAge = 0;
+    hitStop = slowMo = bind = null; pendingTrauma = 0; lastBind = attackBuffered = -Infinity;
+    cameraKick.offset.set(0, 0, 0); cameraKick.velocity.set(0, 0, 0); punch.value = punch.velocity = 0; shake.clear();
+    player.state = createDuelState(); player.blade.reset(); player.lit = 1;
+    show(enemy, false);
+    enemy.trail.clear();
+    music.stop();
+  }
+
+  return {
+    enter, step, scale, camera, ask, hud, retry, reset,
+    /** He is in the room (or coming into it). */
+    get present() { return phase !== 'idle'; },
+    /** The hero's body is the duel's: from the moment the blades are lit until a while after the victory. */
+    get fighting() { return phase === 'fight' || (phase === 'entrance' && entrance?.stage === 'ready') || (phase === 'over' && !(outcome === 'victory' && outcomeAge > 1.8)); },
+    get phase() { return phase; },
+    get stage() { return entrance?.stage ?? null; },
+    get outcome() { return outcome; },
+    get frozen() { return frozen(); },
+    /** Why the hero died (a line for the death card). */
+    get cause() { return CAUSES[player.cause] ?? CAUSES.wounds; },
+    player, enemy,
+    get mind() { return mind; }, get bind() { return bind; },
+    /** For checks: virtual buttons and stick. */
     hold(name, value = true) { virtual[name] = value; },
     stick(x = 0, y = 0) { virtual.x = x; virtual.y = y; },
-    reset,
-    get player() { return player; }, get enemy() { return enemy; }, get mind() { return mind; },
-    get bind() { return bind; }, get outcome() { return outcome; },
-    renderer, camera, scene, effects,
   };
 }

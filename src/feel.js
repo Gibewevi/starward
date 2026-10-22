@@ -135,13 +135,15 @@ export const FEEL = {
     // Held (LT kept down): he hangs in the air before the hero, following him.
     hold: { distance: 1.25, height: 0.5, follow: 9, bob: 0.05 },
   },
-  // Reinforcements through the great door.
+  // The fight's course: the squad at its posts; all of them down, an escort
+  // marches in through the great door; all of those down too, the Jedi comes alone.
+  course: {
+    escort: 5, // men in the escort
+    escortAfter: 2.5, // s after the squad's last man falls
+    jediAfter: 3.5, // s after the escort's last man falls
+  },
+  // Men through the great door.
   reinforce: {
-    first: 22, // s before the first wave
-    interval: [26, 36], // s between waves
-    wave: [3, 4], // troopers a wave
-    cap: 9, // never more than this many standing
-    few: 2, soon: 5, // this few left standing: the next wave within this many seconds
     alarm: 1.6, // s of blinking lamp and alarm before the door opens
     spacing: 0.85, // s between men coming out
     linger: 1.6, // s the door stays open after the last one

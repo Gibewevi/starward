@@ -33,7 +33,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 export function createAudio({ context = null } = {}) {
   let ctx = null, ready = false;
   let master, muffle, dry, send, white, crackle, pink;
-  let hum, humFilter, humGain, swingGain, swingFilter, burnGain, burnFilter, holdGain, holdOsc, tensionGain, roomGain;
+  let hum, humFilter, humGain, swingGain, swingFilter, burnGain, burnFilter, holdGain, holdOsc, tensionGain, roomGain, musicGain;
   let surgeGain, surgeOsc, surgeFilter, surgeCrackle;
   let volume = 0.8;
   const listener = { x: 0, z: 0, rx: 1, rz: 0 };
@@ -56,6 +56,10 @@ export function createAudio({ context = null } = {}) {
     muffle.connect(glue); glue.connect(limiter); limiter.connect(master); master.connect(ctx.destination);
     dry = ctx.createGain();
     dry.connect(muffle);
+    // The score (music.js) has its own way in, muffled by a blast like the rest.
+    musicGain = ctx.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(muffle);
     const reverb = ctx.createConvolver();
     reverb.buffer = roomImpulse();
     const back = ctx.createGain();
@@ -263,6 +267,8 @@ export function createAudio({ context = null } = {}) {
       ctx.resume?.().catch(() => {});
     },
     get context() { return ctx; },
+    /** Where the score plays into the mix (null before the first start()). */
+    get music() { return musicGain ?? null; },
     set volume(value) { volume = value; if (master) master.gain.setTargetAtTime(value, ctx.currentTime, 0.05); },
     get volume() { return volume; },
     /** Where the hero stands and which way is screen-right on the floor: sounds are placed from there. */
@@ -286,6 +292,7 @@ export function createAudio({ context = null } = {}) {
       holdOsc.frequency.setTargetAtTime(44 + hold * 6, now, 0.2);
       // The room's hum dies with its power (a trace of wind left in the vents).
       roomGain.gain.setTargetAtTime(on * (0.25 + 0.75 * power), now, power < 0.5 ? 0.12 : 0.5);
+      musicGain.gain.setTargetAtTime(on, now, 0.1);
       surgeGain.gain.setTargetAtTime(on * surge ** 1.5 * 0.09, now, surge > 0 ? 0.03 : 0.06);
       for (const osc of surgeOsc) osc.frequency.setTargetAtTime(90 + surge * surge * 820, now, 0.05);
       surgeFilter.frequency.setTargetAtTime(220 + surge * 2600, now, 0.05);
