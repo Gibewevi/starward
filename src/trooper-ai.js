@@ -73,6 +73,44 @@ const MOVING = new Set(['move', 'advance', 'pursue']);
 // Busy with something that should not be cut short by a new plan.
 const COMMITTED = new Set(['throw', 'fire', 'blindUp', 'evade', 'spread']);
 
+/**
+ * Rounds through a room for men without a post of their own (the escort): the
+ * free spots of a coarse grid (clear of the crates), split into `count`
+ * sectors round the room's middle; each round is a loop through a few spots of
+ * its sector, near and far apart, in order round it.
+ */
+export function patrolRounds({ lab, nav = null, bounds, count = 5, spacing = 2.5, margin = 1.6 }) {
+  const points = [];
+  for (let x = bounds.minX + margin; x <= bounds.maxX - margin; x += spacing) {
+    for (let z = bounds.minZ + margin; z <= bounds.maxZ - margin; z += spacing) {
+      const spot = new THREE.Vector3(x, 0, z);
+      if ((!nav || nav.walkable(spot)) && lab.pushOut(spot.clone(), 0.6).distanceTo(spot) < 1e-3) points.push(spot);
+    }
+  }
+  if (!points.length) return [];
+  const centre = points.reduce((sum, point) => sum.add(point), new THREE.Vector3()).divideScalar(points.length);
+  const sectors = Array.from({ length: count }, () => []);
+  for (const point of points) {
+    const angle = Math.atan2(point.x - centre.x, point.z - centre.z);
+    sectors[Math.min(count - 1, Math.floor((angle + Math.PI) / (2 * Math.PI) * count))].push(point);
+  }
+  return sectors.filter(sector => sector.length >= 2).map(sector => {
+    // The spot furthest out, then each time the one furthest from those already chosen.
+    const chosen = [sector.reduce((a, b) => (a.distanceTo(centre) > b.distanceTo(centre) ? a : b))];
+    while (chosen.length < Math.min(4, sector.length)) {
+      let best = null, bestGap = -1;
+      for (const point of sector) {
+        if (chosen.includes(point)) continue;
+        const gap = Math.min(...chosen.map(other => other.distanceTo(point)));
+        if (gap > bestGap) { bestGap = gap; best = point; }
+      }
+      chosen.push(best);
+    }
+    const middle = chosen.reduce((sum, point) => sum.add(point), new THREE.Vector3()).divideScalar(chosen.length);
+    return chosen.map(point => point.clone()).sort((a, b) => Math.atan2(a.x - middle.x, a.z - middle.z) - Math.atan2(b.x - middle.x, b.z - middle.z));
+  });
+}
+
 export function createSquadMind({ troopers, lab, nav = null, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
   // Who is going to whom: a man down and hurt → his rescuer's mind.

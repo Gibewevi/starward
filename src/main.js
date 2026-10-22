@@ -25,7 +25,7 @@ import { createLab, onScreen } from './lab.js';
 import { glowTexture } from './kit.js';
 import { createBlasters, closestSegments } from './blasters.js';
 import { createAlerts } from './alerts.js';
-import { createSquadMind } from './trooper-ai.js';
+import { createSquadMind, patrolRounds } from './trooper-ai.js';
 import { returnDirection } from './deflect.js';
 import { createExplosions, loadExplosionAssets } from './explosions.js';
 import { createScorchMarks } from './scorch-marks.js';
@@ -230,7 +230,9 @@ function init() {
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
   const reinforcements = createReinforcements({ door: arena.door });
-  /** One of a wave: made in the corridor, marched through the door to a post in the room. */
+  // Rounds through the room for the men who come in: each his own part of it, on the move.
+  const rounds = patrolRounds({ lab, nav, bounds: ARENA });
+  /** One of a wave: made in the corridor, marched through the door into the room, then off on his round. */
   function bringIn(index) {
     const door = arena.door, heading = Math.atan2(door.out.x, door.out.z);
     const trooper = createStormtrooper({ scene, effects, lab, position: door.inside[index % door.inside.length], heading });
@@ -239,7 +241,13 @@ function init() {
     const threshold = door.centre.clone().addScaledVector(door.out, 0.7);
     const wanted = door.centre.clone().addScaledVector(door.out, 2.3 + (index % 2) * 0.9).addScaledVector(door.along, ((index % 4) - 1.5) * 0.9);
     const post = nav.nearest(wanted) ?? threshold.clone().addScaledVector(door.out, 1.5);
-    squad.add(trooper, { position: post, heading }, { entering: [threshold, ...(nav.path(threshold, post) ?? [post])] });
+    // His round, from its spot nearest the door.
+    let route = rounds.length ? rounds[(index + reinforcements.waves) % rounds.length] : null;
+    if (route) {
+      const first = route.reduce((best, point, at) => (point.distanceTo(post) < route[best].distanceTo(post) ? at : best), 0);
+      route = [...route.slice(first), ...route.slice(0, first)];
+    }
+    squad.add(trooper, { position: post, heading, route }, { entering: [threshold, ...(nav.path(threshold, post) ?? [post])] });
     clearBodies();
   }
   // The fight's course: the squad at its posts; all of them down, an escort
