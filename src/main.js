@@ -1,4 +1,5 @@
 import './style.css';
+import { createStageMenu } from './stage-menu.js';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1138,7 +1139,24 @@ function init() {
   resize();
 
   const keys = new Set();
-  let paused = false, time = 0, moved = false, forcedGuard = false;
+  let paused = true, time = 0, moved = false, forcedGuard = false;
+  let stageStarted = false;
+  const stageMenu = createStageMenu({
+    onStart() {
+      if (stageStarted) restart();
+      stageStarted = true;
+      document.title = 'STARWARD — Stage 1 : Intérieur';
+      $('#game').inert = false;
+      setPause(false);
+      if (audio.enabled) audio.start();
+    },
+    onHelp: () => togglePanel('help'),
+    onSettings: () => togglePanel('settings'),
+    onFullscreen: fullscreen,
+    isPanelOpen: () => !$('#help-panel').hidden || !$('#settings-panel').hidden,
+    closePanels,
+  });
+  $('#game').inert = true;
   const velocity = new THREE.Vector3();
   const playerPosition = new THREE.Vector3();
   const inputRight = new THREE.Vector2(10, -8).normalize();
@@ -1156,6 +1174,10 @@ function init() {
   let lastDevice = 'pad';
   window.addEventListener('keydown', () => { lastDevice = 'keyboard'; });
   window.addEventListener('keydown', event => {
+    if (stageMenu.open) {
+      if (event.code === 'Escape') closePanels();
+      return;
+    }
     if (['INPUT', 'SELECT'].includes(event.target.tagName)) return;
     if (actionCodes.includes(event.code)) event.preventDefault();
     if (!event.repeat) {
@@ -1183,7 +1205,7 @@ function init() {
     event.preventDefault(); desiredHeight = THREE.MathUtils.clamp(desiredHeight + event.deltaY * 0.005, 5, 12);
     $('#camera-zoom').value = desiredHeight;
   }, { passive: false });
-  function setPause(value) { paused = value; clearInput(); radio.setPaused(value); $('#pause-overlay').hidden = !paused; if (!paused) renderer.domElement.focus(); }
+  function setPause(value) { paused = stageMenu.open || value; clearInput(); radio.setPaused(paused); $('#pause-overlay').hidden = stageMenu.open || !paused; if (!paused) renderer.domElement.focus(); }
   function reset() {
     knockdown.stop();
     death = null;
@@ -1199,6 +1221,12 @@ function init() {
     $(`#${name}-panel`).hidden = !willOpen;
     $(`#${name}-toggle`).setAttribute('aria-expanded', String(willOpen));
   }
+  function closePanels() {
+    for (const name of ['help', 'settings']) {
+      $(`#${name}-panel`).hidden = true;
+      $(`#${name}-toggle`).setAttribute('aria-expanded', 'false');
+    }
+  }
   for (const name of ['help', 'settings']) {
     $(`#${name}-toggle`).addEventListener('click', () => togglePanel(name));
     $(`#${name}-panel .close-panel`).addEventListener('click', () => togglePanel(name));
@@ -1207,6 +1235,15 @@ function init() {
   $('#camera-zoom').addEventListener('input', event => desiredHeight = Number(event.target.value));
   $('#reflections').addEventListener('change', event => reflection.visible = event.target.checked);
   $('#resume').addEventListener('click', () => setPause(false));
+  $('#return-menu').addEventListener('click', () => {
+    setPause(true);
+    closePanels();
+    stageMenu.show();
+    $('#game').inert = true;
+    $('#pause-overlay').hidden = true;
+    audio.update(0, 0, 0, { burn: 0, hold: 0, fight: 0, surge: 0, dt: 0 });
+    music.stop();
+  });
   async function fullscreen() {
     try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }
     catch { $('#fullscreen').title = 'Le plein écran est indisponible dans cette fenêtre.'; }
@@ -1288,7 +1325,7 @@ function init() {
   });
   rumbleOn = $('#rumble').checked;
   $('#rumble').addEventListener('change', event => { rumbleOn = event.target.checked; });
-  window.addEventListener('keydown', () => { if (audio.enabled) audio.start(); });
+  window.addEventListener('keydown', () => { if (!stageMenu.open && audio.enabled) audio.start(); });
   let lastFrame = performance.now(), fps = 60, frameCount = 0;
   const streakEl = $('#streak'), streakCountEl = $('#streak-count'), streakNoteEl = $('#streak-note');
   const targetFocus = new THREE.Vector3(), shakenFocus = new THREE.Vector3();
@@ -1304,6 +1341,13 @@ function init() {
     const rawDt = Math.max(0, (now - lastFrame) / 1000);
     const dt = Math.min(rawDt, 0.05);
     lastFrame = now;
+    stageMenu.update(now);
+    // Warm up the renderer, then let the DOM menu animate without a hidden 3D
+    // fight or continuous GPU work behind it. The simulation starts on confirm.
+    if (stageMenu.open && frameCount >= 3) {
+      if (!manual) requestAnimationFrame(frame);
+      return;
+    }
     audio.listen(character.root.position, screenRight);
     if (!paused) {
       // A clean cut freezes the action for a beat, then eases back to speed.
@@ -1748,6 +1792,7 @@ function init() {
     streakNoteEl.textContent = streakNote;
     streakNoteEl.classList.toggle('on', streakNoteAge < 1.1);
     if (++frameCount === 3) {
+      stageMenu.ready();
       $('#loading').style.opacity = '0';
       setTimeout(() => $('#loading').hidden = true, 550);
     }

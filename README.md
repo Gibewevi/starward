@@ -6,7 +6,9 @@ Prototype jouable d’action 3D isométrique, consacré au plaisir du déplaceme
 
 Sous Windows, double-cliquer sur **Jouer.bat**. Le prototype compilé est fourni dans `dist/` et se lance avec Node.js, sans téléchargement supplémentaire. Garder la fenêtre du serveur ouverte pendant la partie. Adresse : **http://127.0.0.1:5173/**.
 
-Cliquer une fois dans le jeu pour donner le focus au clavier.
+Le menu principal propose deux stages : **Stage 1 — Intérieur** lance la salle actuelle ; **Stage 2 — Jungle** est un aperçu du prochain environnement, encore indisponible. Survoler une carte pour la sélectionner : l’illustration zoome par paliers et se déplace avec la souris, avec des particules et un balayage lumineux. Cliquer sur le stage 1, ou sélectionner avec les flèches puis confirmer avec Entrée. À la manette : stick gauche / croix directionnelle, puis A. Au toucher, appuyer sur la carte du stage 1.
+
+**Échap → Retour aux stages** permet de revenir au menu ; sélectionner de nouveau le stage 1 recommence la partie. La scène reste en attente dans le menu. Les effets respectent la préférence système de réduction des animations.
 
 Pour observer le stormtrooper de face, de profil et de dos : **http://127.0.0.1:5173/stormtrooper.html**. Cette vue utilise le même modèle et les mêmes animations que le jeu.
 
