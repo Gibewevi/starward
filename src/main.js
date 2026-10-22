@@ -1435,7 +1435,7 @@ function init() {
         // A strike finds its mark (lockOn); other moves re-aim towards the stick;
         // a power with the stick at rest turns towards the trooper the hero is facing most.
         const started = combat.takeStart();
-        if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 5, { from: here });
+        if (started && !/^(force|parry)/.test(started)) noise(here.set(motion.x, 0, motion.z), 3.5, { from: here });
         const strike = started && MOVES[started] && !MOVES[started].utility && !MOVES[started].free;
         if (strike) { lockOn(started, worldX, worldZ, intent ? markOf(intent) : mark); intent = null; audio.whoosh(MOVES[started].role.includes('finisher') ? 1.4 : 1); }
         else if (started) { turn = null; lead = 0; }
@@ -1483,7 +1483,7 @@ function init() {
         const saberEvent = saber.update(motion.saber, time, action.flare);
         // In the dark the blade lights more of the room round him.
         nightBlade(saber);
-        if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 6.5, { from: character.root.position }); audio.ignite(); }
+        if (saberEvent === 'ignite') { combat.flourish(); noise(character.root.position, 3.5, { from: character.root.position }); audio.ignite(); }
         else if (saberEvent === 'retract') audio.retract();
         // His steps on the deck.
         if (!down && !dash && motion.speed > 0.35) {
@@ -1492,8 +1492,9 @@ function init() {
         } else heroStep = 0.6;
         // Running feet and the blade's hum carry.
         stepClock -= sim; humClock -= sim;
-        if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 7 : 4.5, { from: character.root.position }); }
-        if (motion.saber > 0.5 && humClock <= 0) { humClock = 0.6; noise(character.root.position, 2.6, { from: character.root.position, strength: 0.6 }); }
+        // Footsteps: a run heard close by, a sprint further; the blade's hum only right next to him.
+        if (motion.speed > 2.4 && stepClock <= 0) { stepClock = 0.3; noise(character.root.position, motion.sprint > 0.5 ? 5.5 : 3.2, { from: character.root.position }); }
+        if (motion.saber > 0.5 && humClock <= 0) { humClock = 0.6; noise(character.root.position, 1.4, { from: character.root.position, strength: 0.6 }); }
         saber.segment(bladeBase, bladeTip);
         trail.update(sim, bladeBase, bladeTip, action.trail * motion.saber);
         // The Jedi coming in through the door (framed with the hero), or lying where he fell.
@@ -1540,7 +1541,9 @@ function init() {
       troopers.forEach((trooper, index) => {
         const struck = !dueling && saber.extension > 0.6 && bladeReady && !down && skewered?.trooper !== trooper ? trooper.strike(lastBase, lastTip, bladeBase, bladeTip, sim, time, strikeKey) : [];
         if (!trooper.fallen) debris.kick(trooper.root.position, trooper.velocity);
-        if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, 9, { alarm: true, from: character.root.position, source: trooper });
+        // A man cut down before he knew it makes little noise; a fight, a lot.
+        const silent = struck.some(event => event.lethal) && trooper.unaware;
+        if (struck.some(event => event.type !== 'fall')) noise(trooper.root.position, silent ? 3 : 9, { alarm: true, from: character.root.position, source: trooper });
         for (const event of struck) {
           // Falls are reported alongside the blow that caused them.
           if (event.type === 'fall' || (event.type === 'graze' && event.speed < 1)) continue;
@@ -1562,7 +1565,7 @@ function init() {
         }
         // Landings, armour coming off: heard and felt in step with the physics.
         for (const item of trooper.news) {
-          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, 7, { alarm: true, from: character.root.position, source: trooper }); }
+          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, THREE.MathUtils.clamp(2 + item.speed * 1.2, 2.5, 7), { alarm: true, from: character.root.position, source: trooper }); }
           if (item.type === 'armor') audio.clank(trooper.root.position);
           // A grenade leaves his hand (or drops at his feet if he was knocked over).
           if (item.type === 'grenade' && !death) {

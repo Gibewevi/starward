@@ -41,6 +41,18 @@ import { PACE } from './stormtrooper.js';
  * further off they run. Disarmed: he runs for his rifle. Nobody fires
  * through a squadmate, nor into his own cover.
  *
+ * Out of sight is out of sight: behind a crate the hero is lost at once
+ * (they only follow where he went for a moment), what they hear only tells
+ * them roughly where, and behind their backs they see nothing — a man who has
+ * not seen the hero for a while and does not face him is caught unaware
+ * (`trooper.unaware`: the first blow of the blade kills him).
+ *
+ * A squadmate found lying there (dead, or down and hurt), or the hero lost
+ * for good: the squad searches. Each man takes the nearest hiding place
+ * (behind a crate) not yet searched, goes to it rifle up, looks round, and
+ * takes the next; the first man to a body kneels to it (sweep()). The escort
+ * marching in on bodies does the same.
+ *
  * With a navigation grid (nav.js) they find their way round the crates and
  * walls; whoever stops moving while trying to steps aside and finds another
  * way, or another plan.
@@ -71,6 +83,8 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   const plan = {
     clock: 0, movers: new Set(), threat: new THREE.Vector3(), axis: new THREE.Vector3(1, 0, 0), seen: false, fighting: 0,
     scatter: false, fallback: 0, losses: [], lastBurst: -Infinity, lastFire: -Infinity, coverCall: Infinity, lost: false,
+    // The search under way (null when none): where, which hiding places, until when.
+    sweep: null,
   };
 
   /** A mind as at the start: calm, at his post. */
@@ -87,13 +101,15 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       // The fight: the aim before a burst (charge 0 → 1), his flank, what went wrong lately.
       charge: 0, windup: 0, windupTotal: 1, flankSide: 0, noBlind: 0, aimFails: 0, coverTime: 0, suppressed: false, suppressing: false, fellBack: false, spreadTo: null, mourned: false, reposition: false,
       spreadAgain: 0, plans: 0, rescue: null, rescueReady: 0,
+      // The bodies he has seen; the hiding place he is searching.
+      known: new Set(), point: null,
     });
   }
   function reset() {
     firing = 0;
     grenadeClock = Infinity;
     roleClock = Infinity;
-    Object.assign(plan, { movers: new Set(), seen: false, fighting: 0, scatter: false, fallback: 0, losses: [], lastBurst: -Infinity, lastFire: -Infinity, coverCall: Infinity, lost: false });
+    Object.assign(plan, { movers: new Set(), seen: false, fighting: 0, scatter: false, fallback: 0, losses: [], lastBurst: -Infinity, lastFire: -Infinity, coverCall: Infinity, lost: false, sweep: null });
     for (const mind of minds) fresh(mind);
     rescuers.clear();
     alerts?.clear();
@@ -138,6 +154,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       if (!mind.entering.length) {
         mind.entering = null;
         if (fighter) { mind.lastKnown.copy(fighter.lastKnown); alert(mind, cues); }
+        else lookForBodies(mind, cues);
       }
       return;
     }
@@ -166,14 +183,17 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       // In the dark he sees only so far — further the hero's lit blade, and down his own lamp's beam.
       const b = FEEL.blackout, range = dark < 0.5 ? senses.sight : angle < 0.4 ? Math.max(8.5, saber > 0.5 ? b.saberSight : 0) : saber > 0.5 ? b.saberSight : b.sight;
       if (distance < range) {
-        // Once he has seen the hero, he keeps track of him all around.
-        const tracking = mind.mode === 'combat' && mind.seen < 1.5;
-        // Right next to him, he feels someone there even behind his back.
-        const field = tracking ? 1 : angle < senses.cone ? 1 : angle < senses.peripheral ? 0.35 : distance < 1.8 ? 0.5 : 0;
-        if (field > 0 && (lab.clear(eye, chest) || lab.clear(eye, head))) {
+        // Having just seen him, he follows where he went — for a moment: gone behind a crate, he is lost.
+        const tracking = mind.mode === 'combat' && mind.seen < senses.track;
+        // Behind his back he sees nothing; only someone running right up to him is felt.
+        const field = tracking ? 1 : angle < senses.cone ? 1 : angle < senses.peripheral ? 0.35 : distance < senses.feel && heroSpeed > senses.rush ? 0.5 : 0;
+        // Hidden behind a crate he is not seen; his head alone over it is noticed only close by, and slowly.
+        const chestSeen = field > 0 && lab.clear(eye, chest);
+        const headSeen = field > 0 && !chestSeen && distance < senses.glimpse && lab.clear(eye, head);
+        if (chestSeen || headSeen) {
           sees = true;
           // Closer, moving faster, blade lit: noticed sooner.
-          rate = field * (1 - distance / range) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3);
+          rate = field * (headSeen ? senses.peek : 1) * (1 - distance / range) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3);
         }
       }
     }
@@ -190,11 +210,16 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       const distance = flat(noise.position).distanceTo(flat(t.root.position));
       if (distance > noise.radius || noise.source === t) continue;
       const loud = (1 - distance / noise.radius) * (noise.strength ?? 1);
+      // Heard, not seen: roughly where it was — the fainter, the vaguer.
+      const heardAt = (point, height = 0) => {
+        const error = (1 - loud) * distance * FEEL.senses.hearing, angle = random() * Math.PI * 2;
+        return flat(point).add(new THREE.Vector3(Math.sin(angle) * error, 0, Math.cos(angle) * error)).setY(height);
+      };
       if (mind.mode !== 'combat') {
         mind.awareness = Math.min(noise.alarm ? 1 : 0.92, mind.awareness + loud * 0.55);
-        mind.interest = flat(noise.position);
-        if (noise.alarm && loud > 0.3) mind.lastKnown.copy(noise.from ?? noise.position).setY(0);
-      } else if (!sees && noise.from && loud > 0.2) mind.lastKnown.copy(noise.from).setY(0);
+        mind.interest = heardAt(noise.position);
+        if (noise.alarm && loud > 0.3) mind.lastKnown.copy(heardAt(noise.from ?? noise.position));
+      } else if (!sees && noise.from && loud > 0.35) mind.lastKnown.copy(heardAt(noise.from));
       if (mind.heard <= 0 && t.free) {
         mind.heard = 0.6;
         alerts?.sound(t, temp.subVectors(noise.position, t.root.position).dot(cameraRight));
@@ -207,6 +232,11 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       if (mind.mode !== 'combat' && t.free) { mind.lastKnown.copy(at); alert(mind, cues, { quiet: true }); }
     }
     if (!sees && mind.mode !== 'combat') mind.awareness = Math.max(0, mind.awareness - senses.forget * dt);
+    // Has not seen him for a while and does not face him: caught unaware.
+    const facingHero = Math.abs(wrap(headingTo(t.root.position, hero) - t.heading)) < senses.peripheral;
+    t.unaware = !sees && (mind.mode !== 'combat' || mind.seen > senses.unaware || !facingHero);
+    // A squadmate lying there: something has happened here.
+    if (t.free && mind.mode !== 'combat') lookForBodies(mind, cues);
     // Moods.
     if (mind.awareness >= 1 && mind.mode !== 'combat' && t.free) alert(mind, cues);
     else if (mind.mode === 'calm' && mind.awareness >= senses.suspicious && t.free) {
@@ -216,12 +246,16 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       alerts?.show(t, '?');
       cues.push({ type: 'suspicious', trooper: t });
       t.reaction.vhead -= 1.2;
-    } else if ((mind.mode === 'suspicious' || mind.mode === 'searching') && mind.awareness < 0.1) calm(mind);
+    } else if (mind.mode === 'suspicious' && mind.awareness < 0.1) calm(mind);
   }
   /** Contact: he flinches and calls it out (quiet: told by a squadmate, he only turns to it). */
   function alert(mind, cues, { quiet = false } = {}) {
     const t = mind.trooper;
     const fresh = mind.mode !== 'combat';
+    // Whatever he was searching, someone else will.
+    if (mind.point) { mind.point.taken = null; mind.point = null; }
+    // Told by a squadmate: he goes by what he was told (not straight off to search, having never seen him himself).
+    if (quiet) mind.seen = Math.min(mind.seen, FEEL.ai.pursue * 0.5);
     mind.mode = 'combat';
     mind.awareness = 1;
     mind.tactic = null;
@@ -662,30 +696,123 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       mind.awareness = Math.max(0, mind.awareness - dt * 0.12);
     }
   }
-  function search(mind, dt) {
-    const t = mind.trooper, o = t.order;
-    mind.searchTime += dt;
-    // Fanned out round where he was last seen, each looking his own way.
-    const index = minds.filter(other => other.mode === 'searching').indexOf(mind);
-    const spot = mind.lastKnown.clone().add(new THREE.Vector3(Math.sin(index * 2.4), 0, Math.cos(index * 2.4)).multiplyScalar(index ? 1.8 : 0));
-    const goal = nav?.nearest(spot) ?? spot;
-    mind.aimPoint.copy(mind.lastKnown).setY(CHEST);
+  // ---- The search ----------------------------------------------------------
+  /** Squadmates lying in sight that he has not seen yet: the first one found starts a search (or joins it). */
+  function lookForBodies(mind, cues) {
+    const t = mind.trooper, eye = t.eye, facing = new THREE.Vector3(Math.sin(t.heading), 0, Math.cos(t.heading));
+    for (const body of troopers) {
+      if (body === t || !body.fallen || (!body.dead && !body.hurt) || mind.known.has(body)) continue;
+      const at = body.particle('W').position.clone();
+      at.y = Math.max(0.25, at.y);
+      const to = flat(at).sub(flat(eye));
+      if (to.length() > FEEL.senses.bodies || facing.angleTo(to) > FEEL.senses.peripheral || !lab.clear(eye, at)) continue;
+      mind.known.add(body);
+      discover(mind, body, cues);
+      return;
+    }
+  }
+  /** A body found: he calls it, and the squad (those not fighting) searches the room round it. */
+  function discover(mind, body, cues) {
+    const t = mind.trooper, at = flat(body.particle('W').position);
+    alerts?.show(t, '!', { hold: 1.2 });
+    t.reaction.vhead -= 2;
+    t.reaction.vbuckle += 0.5;
+    const searching = plan.sweep && clock < plan.sweep.until;
+    if (!searching) {
+      startSweep(at, { radius: FEEL.sweep.radius, duration: FEEL.sweep.duration });
+      cues.push({ type: 'radio', radio: 'down', trooper: t });
+    }
+    // The body itself is the first place to look.
+    if (!plan.sweep.points.some(point => point.body === body)) plan.sweep.points.unshift({ at: at.clone(), look: headingTo(t.root.position, at), body, taken: null, done: false });
+    for (const other of minds) {
+      const o = other.trooper;
+      if (o.dead || !o.free || other.entering || other.mode === 'combat' || other.mode === 'sweep') continue;
+      if (other !== mind && flat(o.root.position).distanceTo(flat(t.root.position)) > FEEL.senses.callout) continue;
+      other.mode = 'sweep';
+      other.point = null;
+      other.awareness = Math.max(other.awareness, 0.6);
+      other.known.add(body);
+      if (other !== mind) other.callout = null;
+    }
+  }
+  /**
+   * The hiding places round a point: behind the crates (out of sight from it,
+   * and from where the squad stands), a few metres apart, where a man can walk.
+   */
+  function startSweep(origin, { radius, duration }) {
+    const squadAt = minds.filter(mind => !mind.trooper.dead).reduce((sum, mind, _, all) => sum.add(flat(mind.trooper.root.position).divideScalar(all.length)), new THREE.Vector3());
+    const points = [];
+    for (const from of [origin, squadAt]) {
+      for (const spot of lab.coverSpots(from, { minDistance: 1.2 })) {
+        if (spot.position.distanceTo(flat(origin)) > radius) continue;
+        if (nav && !nav.walkable(spot.position)) continue;
+        if (points.some(point => point.at.distanceTo(spot.position) < FEEL.sweep.spacing)) continue;
+        points.push({ at: spot.position.clone(), look: Math.atan2(spot.facing.x, spot.facing.z), body: null, taken: null, done: false });
+      }
+    }
+    plan.sweep = { origin: flat(origin), points, until: clock + duration };
+  }
+  /** The next hiding place for him: the nearest one nobody has searched or taken. */
+  function nextPoint(mind) {
+    const at = flat(mind.trooper.root.position);
+    let best = null, bestDistance = Infinity;
+    for (const point of plan.sweep?.points ?? []) {
+      if (point.done || (point.taken && point.taken !== mind && !point.taken.trooper.dead)) continue;
+      // A body is checked by whoever is nearest it; the rest go on to the hiding places.
+      const distance = at.distanceTo(point.at) - (point.body ? 3 : 0);
+      if (distance < bestDistance) { bestDistance = distance; best = point; }
+    }
+    if (best) best.taken = mind;
+    return best;
+  }
+  /** Searching: to the next hiding place, rifle leading the way; there, a look round (kneeling by a body). */
+  function sweep(mind, dt) {
+    const t = mind.trooper, o = t.order, S = FEEL.sweep;
+    mind.awareness = Math.max(mind.awareness, 0.6);
+    if (!plan.sweep || clock > plan.sweep.until) { endSweep(mind); return; }
+    mind.point ??= nextPoint(mind);
+    const point = mind.point;
+    if (!point) { endSweep(mind); return; }
     o.aim = true;
-    o.aimAt = mind.aimPoint;
-    if (mind.stuckCount >= 2 || steer(mind, goal, PACE.walk, 1.2)) {
-      o.velocity.set(0, 0, 0);
-      mind.glance += dt;
-      mind.aimPoint.copy(goal).add(new THREE.Vector3(Math.sin(mind.glance * 1.4 + index), 0, Math.cos(mind.glance * 1.2 + index)).multiplyScalar(3)).setY(CHEST);
+    if (!point.arrived) {
+      // On his way: the rifle points where he goes.
+      mind.aimPoint.copy(point.at).setY(CHEST);
+      o.aimAt = mind.aimPoint;
+      if (mind.stuckCount >= 2 || steer(mind, point.at, PACE.walk * (point.body ? 1.2 : 0.95), point.body ? 0.9 : 0.45)) {
+        point.arrived = true;
+        point.pause = point.body ? S.check : pick(S.pause, random);
+        mind.glance = 0;
+        mind.stuckCount = 0;
+      }
+      return;
+    }
+    point.pause -= dt;
+    mind.glance += dt;
+    if (point.body) {
+      // Kneeling by him, a look at him, then round.
+      o.crouch = true;
+      o.aim = false;
+      o.face = headingTo(t.root.position, point.at);
+      o.look = point.at.clone().setY(0.3);
+    } else {
+      // Rifle and eyes round the hiding place, one way then the other.
+      const look = point.look + Math.sin(mind.glance * 2.2) * 1.2;
+      mind.aimPoint.copy(t.root.position).add(new THREE.Vector3(Math.sin(look), 0, Math.cos(look)).multiplyScalar(4)).setY(CHEST);
+      o.aimAt = mind.aimPoint;
       o.face = headingTo(t.root.position, mind.aimPoint);
     }
-    if (mind.searchTime > 9) {
-      // Nothing: back to wary, then calm.
-      mind.mode = 'suspicious';
-      mind.awareness = 0.45;
-      mind.interest = mind.lastKnown.clone();
-      mind.timer = 1;
-      alerts?.show(t, '?');
-    }
+    if (point.pause <= 0) { point.done = true; mind.point = null; }
+  }
+  /** Nothing found: wary for a while, then back to his post. */
+  function endSweep(mind) {
+    if (mind.point) mind.point.taken = null;
+    mind.point = null;
+    mind.mode = 'suspicious';
+    mind.awareness = 0.45;
+    mind.interest = plan.sweep?.origin.clone() ?? flat(mind.trooper.root.position);
+    mind.timer = 1;
+    alerts?.show(mind.trooper, '?');
+    if (plan.sweep && !minds.some(other => other !== mind && (other.mode === 'sweep' || other.mode === 'searching'))) plan.sweep = null;
   }
   /** Is a squadmate in the way of a shot from `from` to `to`? */
   function friendInLine(t, from, to) {
@@ -837,9 +964,14 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     mind.plans = Math.max(0, mind.plans - dt * 4);
     mind.coverTime += dt;
     if (mind.sees) mind.suppressed = false;
+    // A squadmate has him in sight: the squad knows where he is (the radio) — he goes round to see him, he does not search.
+    if (!mind.sees && plan.seen) mind.lastKnown.copy(plan.threat);
     if (mind.startle > 0) { mind.startle -= dt; o.face = headingTo(at, threat); return; }
     // Lost him for long: go and look where he was.
-    if (mind.seen > FEEL.ai.search) {
+    if (mind.seen > FEEL.ai.search && !plan.seen) {
+      // The hiding places round where he was lost (the search under way, if it is round there).
+      if (!plan.sweep || clock > plan.sweep.until || plan.sweep.origin.distanceTo(flat(mind.lastKnown)) > 4) startSweep(mind.lastKnown, { radius: FEEL.sweep.lost, duration: FEEL.sweep.lostDuration });
+      mind.point = null;
       release(mind);
       plan.movers.delete(mind);
       mind.mode = 'searching';
@@ -1081,6 +1213,8 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
         o.face = there ? headingTo(at, threat) : null;
         if (mind.sees) { plan.movers.delete(mind); mind.tactic = null; break; }
         if (there) { mind.glance += dt; o.face = headingTo(at, threat) + Math.sin(mind.glance * 2) * 0.8; o.aim = true; }
+        // Nothing there: on to the hiding places round it, without waiting.
+        if (there && mind.glance > 1.2) mind.seen = Math.max(mind.seen, FEEL.ai.search + 0.01);
         break;
       }
       case 'evade': {
@@ -1223,7 +1357,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       }
       if (mind.mode === 'calm') patrol(mind, dt);
       else if (mind.mode === 'suspicious') investigate(mind, dt);
-      else if (mind.mode === 'searching') { if (mind.sees && mind.awareness >= 1) alert(mind, cues); else search(mind, dt); }
+      else if (mind.mode === 'searching' || mind.mode === 'sweep') { if (mind.sees && mind.awareness >= 1) alert(mind, cues); else sweep(mind, dt); }
       else if (mind.mode === 'combat' && !(mind.rescue && rescue(mind, dt, hero, cues))) fight(mind, dt, hero, heroVelocity, shots, cues);
     }
     return { shots, cues };

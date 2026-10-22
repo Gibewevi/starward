@@ -243,6 +243,26 @@ export const FEEL = {
     suspicious: 0.3, // awareness that raises a "?"
     forget: 0.1, // awareness lost per second without news
     callout: 10, // m: a trooper who spots the hero alerts his squad this far
+    // Out of sight is out of sight: having just seen him, a trooper follows where he went for this long (s) only.
+    track: 0.35,
+    // Behind his back he sees nothing; only someone running (faster than `rush` m/s) this close (m) is felt.
+    feel: 0.9, rush: 2.5,
+    // Only the head showing over a crate: noticed this much slower, and not past this distance (m).
+    peek: 0.35, glimpse: 6,
+    // What he hears tells him roughly where it was: this much error (share of the distance), less the louder it is.
+    hearing: 0.45,
+    // Not seen for this long (s), and not facing him: caught unaware, the first blow of the blade kills.
+    unaware: 0.6,
+    // A squadmate lying there: noticed this far (m).
+    bodies: 9,
+  },
+  // A body found, or the hero lost: the squad searches the hiding places round it, each man the nearest one
+  // not yet searched, rifle up, a pause at each to look round; the first man to a body kneels to it.
+  sweep: {
+    radius: 13, lost: 7, // m round a body found; round where the hero was lost
+    pause: [1, 1.6], check: 1.4, // s looking round at a hiding place; kneeling by a body
+    spacing: 1.6, // m between two hiding places kept
+    duration: 40, lostDuration: 16, // s at most
   },
   grenade: {
     squadCooldown: 6, cooldown: 12, // s between grenades, for the squad and for each trooper
@@ -283,7 +303,7 @@ export const FEEL = {
     advance: 4.5, // m: how close a rusher comes before he stops to fire
     close: 2.4, // m: closer than this, he backs away
     pursue: 1, // s out of sight before they go after him
-    search: 7, // s out of sight before they search where he was last seen
+    search: 4, // s out of sight before they search the hiding places round where he was last seen
     kneel: 0.5, // chance he kneels to fire in the open (else he stands)
     blind: 0.35, // chance, behind a low crate, of a blind burst over it
     blindBurst: [5, 8], blindGap: [0.06, 0.1], blindSpread: 0.16, // shots, s between them, rad of scatter

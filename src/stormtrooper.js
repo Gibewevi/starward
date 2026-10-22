@@ -2276,7 +2276,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // Standing and still fresh, he is burnt and staggered — not yet cut apart.
     // (the whole swing that wounded him counts as that one blow)
     const sameBlow = blow !== null ? blow === woundingBlow : clock - woundedAt < 0.25;
-    sparing = !trooper.dead && !trooper.fallen && (blows < FEEL.hit.toughness || sameBlow);
+    // Caught unaware (his squad's mind says he has not seen the hero coming), the first blow kills.
+    sparing = !trooper.dead && !trooper.fallen && !trooper.unaware && (blows < FEEL.hit.toughness || sameBlow);
     if (hits.length) wake();
     for (const hit of hits) resolve(hit, time);
     if (pending) stagger(pending);
