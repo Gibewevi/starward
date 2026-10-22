@@ -142,6 +142,24 @@ export const FEEL = {
     escortAfter: 2.5, // s after the squad's last man falls
     jediAfter: 3.5, // s after the escort's last man falls
   },
+  // A bolt sent back into a trooper: in the head, or high on the chest (above this share from waist to neck), it
+  // kills; elsewhere in the body he goes down alive and hurt, and waits for a squadmate.
+  wounded: {
+    heart: 0.72,
+    bleed: [22, 30], // s down before he bleeds out, while nobody tends him
+    alone: 6, // s left to him once nobody is left to come for him
+  },
+  // A squadmate goes to him: drags him by the collar behind a crate near by, kneels and treats him, and both get up.
+  rescue: {
+    range: 12, // m: the nearest free man within this goes
+    safe: 4.5, // m: not while the Jedi stands this close to the man down
+    threat: 4.2, // m: the Jedi this close to the rescuer: he drops everything, up and firing
+    haven: 6, // m: how far from the man down a cover may be
+    drag: 1.45, // m/s backing away, dragging him
+    dragMax: 6, // s at most dragging
+    treat: [2.4, 3.4], // s kneeling by him
+    cooldown: 3, // s before he goes to someone again
+  },
   // Men through the great door.
   reinforce: {
     alarm: 1.6, // s of blinking lamp and alarm before the door opens
@@ -214,6 +232,10 @@ export const FEEL = {
     perfectStop: [0.05, 0.16], // its beat of slow motion: hold, recover
     precision: { start: 0.1, gain: 0.003, hitGain: 0.006, max: 0.95, bonus: 0.12 }, // training: grows per deflection, more per hit; adds at most `bonus` to the chance
     error: 0.16, // rad: aim error of an aimed return made from far off (none close by)
+    // The unseen grace: a bolt that reaches him waits these few frames (real
+    // seconds) before it hurts; a parry pressed meanwhile still sends it back,
+    // as if it had been in time. Nothing shows: the player just feels he made it.
+    late: { window: 0.22 },
   },
   senses: {
     sight: 11, cone: 1.05, peripheral: 1.75, // m; half-angles (rad): full view, corner of the eye

@@ -928,9 +928,38 @@ function init() {
     breakStreak();
     burns++;
   }
-  let deflections = 0, burns = 0, kills = 0;
+  let deflections = 0, burns = 0, kills = 0, lateParries = 0;
+  // The unseen grace: a bolt that reaches him waits a few frames at his chest; a parry meanwhile still sends it back.
+  function holdBolt(bolt, point) {
+    const direction = bolt.velocity.clone().normalize();
+    bolt.held = { since: inputClock, time, point: point.clone(), velocity: bolt.velocity.clone() };
+    bolt.velocity.multiplyScalar(1e-4);
+    bolt.position.copy(point).addScaledVector(direction, -0.08);
+  }
+  /** A held bolt, each frame: the guard in time sends it back; the window gone, it hits. */
+  function heldBolt(bolt) {
+    const h = bolt.held;
+    if (death || inputClock - h.since > FEEL.deflect.late.window) {
+      bolt.velocity.copy(h.velocity);
+      bolt.held = null;
+      if (death) return 'spent';
+      burnHero(bolt, h.point);
+      if (!godMode) killHero('bolt', { point: h.point, direction: h.velocity });
+      return 'spent';
+    }
+    if (parryAt >= h.time || guardUp()) {
+      bolt.velocity.copy(h.velocity);
+      bolt.held = null;
+      lateParries++;
+      // As if the blade had met it a little before his chest.
+      deflectBolt(bolt, h.point.clone().addScaledVector(h.velocity, -0.06), h.point);
+      return 'deflected';
+    }
+    return null;
+  }
   /** Every bolt, every frame: the blade first, then the hero, then (sent back) the troopers. */
   function boltMeets(bolt, a, b) {
+    if (bolt.held) return heldBolt(bolt);
     const wall = lab.segmentHit(a, b, box => box.kind === 'rail'), end = wall ? wall.point : b;
     if (!bolt.deflected) {
       if (death) return null;
@@ -946,15 +975,14 @@ function init() {
           && (closestSegments(a, end, bladeBase, bladeTip).distance < FEEL.deflect.blade || pass < FEEL.deflect.body);
         if ((front && pass < FEEL.deflect.reach) || (bolt.parried === 'side' && pass < FEEL.deflect.near) || backed) { deflectBolt(bolt, a, end); return 'deflected'; }
       }
+      // A strike under way: a bolt crossing the swinging blade is knocked away.
+      if (combat.busy && (combat.output.trail ?? 0) > 0.2 && saber.extension > 0.6 && closestSegments(a, end, bladeBase, bladeTip).distance < FEEL.deflect.blade) { deflectBolt(bolt, a, end); return 'deflected'; }
       // Dashing, he is gone before it arrives: it flies on through where he was.
       if (dodge > 0) return null;
       heroFeet.set(motion.x, 0.3, motion.z); heroHead.set(motion.x, 1.5, motion.z);
       const body = closestSegments(a, end, heroFeet, heroHead);
-      if (body.distance < 0.26) {
-        burnHero(bolt, body.c1);
-        if (!godMode) killHero('bolt', { point: body.c1, direction: bolt.velocity });
-        return 'spent';
-      }
+      // Reaching him: a few frames' grace (a parry now still sends it back).
+      if (body.distance < 0.26) { holdBolt(bolt, body.c1); return null; }
       return null;
     }
     let best = null, struck = null;
@@ -1486,6 +1514,8 @@ function init() {
       }
       for (const cue of thoughts.cues) {
         const at = cue.trooper.root.position;
+        if (cue.type === 'heal') { effects.sparks(cue.at, UP, screenRight, { count: 4, speed: 0.7, saber: 1 }); effects.flash(cue.at, 0.3, { color: new THREE.Color(0.45, 0.8, 1) }); continue; }
+        if (cue.type === 'healed') { audio.click(cue.at ?? at); continue; }
         if (cue.type === 'alert') { audio.alert('!', at); radioCall('contact', cue.trooper); }
         else if (cue.type === 'suspicious') { audio.alert('?', at); radioCall('suspicious', cue.trooper); }
         else if (cue.radio) radioCall(cue.radio, cue.trooper);
@@ -1731,7 +1761,7 @@ function init() {
     get lunge() { return lunge && { age: lunge.age, duration: lunge.duration, gap: lunge.gap, done: lunge.done, track: lunge.track }; },
     /** For checks: who is on the blade (null if nobody). */
     get skewered() { return skewered?.trooper ?? null; },
-    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, perfects, burns, kills, eliminated, streak, trauma: trauma.trauma, aiming: squad.minds.filter(mind => mind.charge > 0).length, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
+    getState: () => ({ x: motion.x, z: motion.z, speed: motion.speed, heading: motion.heading, runBlend: motion.runBlend, sprint: motion.sprint, idleTime: motion.idleTime, saber: motion.saber, attack: combat.output.name, guard: combat.guard, sequence: combat.sequence, armour: troopers.map(trooper => trooper.armour), troopersDown: troopers.filter(trooper => trooper.fallen).length, troopersDead: troopers.filter(trooper => trooper.dead).length, troopers: troopers.map(trooper => trooper.state), heroDown: knockdown.phase, hitStop: hitStop ? +hitStop.hold.toFixed(3) : 0, grenades: grenades.live.length, explosions: explosions.active, debris: debris.bodies.length, squad: squad.minds.map(mind => mind.mode), tactics: squad.minds.map(mind => mind.tactic), bolts: blasters.live.length, precision, deflections, perfects, lateParries, burns, kills, eliminated, streak, trauma: trauma.trauma, aiming: squad.minds.filter(mind => mind.charge > 0).length, severed: troopers.flatMap(trooper => [...trooper.severed]), paused, pixelSize, fps, frames: frameCount, capeFinite: cape.mesh.geometry.attributes.position.array.every(Number.isFinite), canvasWidth: renderer.domElement.width, canvasHeight: renderer.domElement.height }),
   };
   requestAnimationFrame(frame);
 }

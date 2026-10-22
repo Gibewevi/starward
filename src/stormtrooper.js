@@ -257,6 +257,8 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
   // Knocked down unhurt and getting back up; dragged by the Force; fetching
   // the rifle; a slippery spell on the floor; landings; news for the game.
   let recover = null, towing = null, pickup = null, slick = null, mounts = null, landed = 0;
+  // Down and hurt by a bolt, alive, waiting for a squadmate (he bleeds out if none comes); dragged by one's hand.
+  let hurt = null, hauled = null;
   // Held up by the Force, dropping back down, running away, turning back.
   let levitating = null, dropping = null, flee = null, turnBack = null;
   // Run through by the blade: he struggles on it, then hangs from it dead.
@@ -378,6 +380,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     Object.assign(trooper, { root, debris, dead: false, fallen: false, holding: true, severed: new Set(), parts, pieces, joints, bodies, ragdoll, caps });
     marks = [];
     collapse = crawl = spasm = recover = towing = pickup = slick = levitating = dropping = flee = turnBack = lifting = fetching = throwing = impaled = null;
+    hurt = hauled = null;
     sleep.still = sleep.dead = sleep.watch = 0;
     sleep.drift = Infinity;
     sleep.asleep = false;
@@ -396,13 +399,14 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       holdL: 1, holdR: 1, letGo: { L: 0, R: 0 }, hurt: 0, clutch: 0, wound: null, woundAge: 0,
       press: null, pressAt: null, pressHand: null, pressing: 0, limp: 0,
       linear: { hurt: 0, clutch: 0, pressing: 0, limp: 0, holdL: 1, holdR: 1 },
-      kneel: 0, yank: 0, daze: 0, reachFor: null,
+      kneel: 0, yank: 0, daze: 0, reachFor: null, stoop: 0,
       knock: new THREE.Vector3(), spin: 0, run: 0, dangle: 0, stride: 0, choke: 0,
       gait: 1, crouch: 0, aim: 0, blind: 0, attention: 0, recoil: 0, vrecoil: 0,
     });
-    Object.assign(reaction.linear, { crouch: 0, aim: 0, blind: 0 });
-    // Orders from his brain: how to move, where to face, what to aim at, whether to crouch.
-    trooper.order = { velocity: new THREE.Vector3(), face: null, aimAt: null, aim: false, crouch: false, blind: false, over: null, look: null };
+    Object.assign(reaction.linear, { crouch: 0, aim: 0, blind: 0, stoop: 0 });
+    // Orders from his brain: how to move, where to face, what to aim at, whether to crouch;
+    // drag: where his free hand holds a fallen squadmate's collar; tend: where it rests on him.
+    trooper.order = { velocity: new THREE.Vector3(), face: null, aimAt: null, aim: false, crouch: false, blind: false, over: null, look: null, drag: null, tend: null };
     Object.assign(loco, { turnRate: 0, hipYaw: 0, backward: false, lean: 0, bank: 0, lastYaw: heading });
     loco.velocity.set(0, 0, 0);
     base = joints.pelvis.position.clone();
@@ -480,7 +484,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const grips = {};
     for (const side of ['L', 'R']) {
       r.letGo[side] = Math.max(0, r.letGo[side] - dt);
-      grips[side] = !armCut(side) && !r.wound && r.letGo[side] <= 0 && !(r.press && r.pressHand === side) && !(throwing && side === 'L');
+      grips[side] = !armCut(side) && !r.wound && r.letGo[side] <= 0 && !(r.press && r.pressHand === side) && !(throwing && side === 'L') && !(side === 'L' && (trooper.order.drag || trooper.order.tend));
     }
     if (trooper.holding && !grips.L && !grips.R) dropBlaster(new THREE.Vector3());
     glide('holdL', trooper.holding && grips.L ? 1 : 0, 0.25, ease.inOutSine);
@@ -508,6 +512,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const o = trooper.order;
     const able = !towing && !levitating && !dropping && !lifting && !pickup && !fetching && !flee && !impaled;
     glide('crouch', able && o.crouch && !r.wound ? 1 : 0, 0.3, ease.inOutCubic);
+    glide('stoop', able && o.drag && !r.wound ? 1 : 0, 0.25, ease.inOutSine);
     const aimTarget = o.aimAt;
     glide('aim', able && o.aim && aimTarget && trooper.holding && !r.wound && r.daze < 0.3 ? 1 : 0, o.aim ? 0.24 : 0.4, ease.outCubic);
     // Blind fire: crouched behind cover, the rifle up over it, head down.
@@ -588,14 +593,14 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     // Reactions on top, in each joint's own frame.
     const off = (joint, x, y, z) => joint.quaternion.multiply(offsetQuaternion.setFromEuler(euler.set(x, y, z)));
     joints.pelvis.position.x += Math.sin(time * 0.5) * 0.008 + r.offset.x;
-    joints.pelvis.position.y -= 0.015 * keep + r.buckle * 0.07 + r.hurt * 0.035 + dip * 0.05 + r.limp * 0.15 + kneel * 0.42 + dazed * 0.025 + crouch * 0.38 + 0.02 * g;
+    joints.pelvis.position.y -= 0.015 * keep + r.buckle * 0.07 + r.hurt * 0.035 + dip * 0.05 + r.limp * 0.15 + kneel * 0.42 + dazed * 0.025 + crouch * 0.38 + 0.02 * g + r.stoop * 0.2;
     joints.pelvis.position.z += r.offset.z - kneel * 0.05 - crouch * 0.05;
     // Choking, the hips swing and thrust as he fights the grip.
     off(joints.pelvis, r.pitch * 0.3 + yank * 0.15 + crouch * 0.22 + writhe(4.3, 7.1, 2.3) * 0.28, r.yaw * 0.4 + writhe(3.7, 6.3, 1.9) * 0.34, r.roll * 0.4 + tilt * 0.22 + writhe(4.1, 6.9, 2.7) * 0.24);
-    off(joints.spine, -0.03 * keep + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 - dangle * 0.1 - choke * 0.14 + writhe(5.1, 8.3, 2.9) * 0.24 + crouch * 0.18 + loco.lean + aimPitch * 0.6 - r.recoil * 0.05 + throwPitch * throwWeight,
+    off(joints.spine, -0.03 * keep + breathe * 0.012 + r.pitch * 0.7 + r.hurt * 0.26 + gasp + rock + r.pressing * 0.14 + r.limp * 0.45 + kneel * 0.75 + yank * 0.4 + dazed * 0.12 - dangle * 0.1 - choke * 0.14 + writhe(5.1, 8.3, 2.9) * 0.24 + crouch * 0.18 + r.stoop * 0.8 + loco.lean + aimPitch * 0.6 - r.recoil * 0.05 + throwPitch * throwWeight,
       r.yaw * 0.6 + toward * r.hurt * 0.2 + writhe(4.3, 7.7, 2.1) * 0.32 + aimYaw + throwYaw * throwWeight, r.roll * 0.6 + toward * r.hurt * 0.06 - tilt * 0.16 + sway + writhe(4.9, 8.1, 3.1) * 0.26 + loco.bank);
     // Aiming, his cheek goes down onto the stock.
-    off(joints.neck, 0.05 * keep + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 * (1 - choke) + dazed * 0.15 - choke * 0.5 + writhe(19.7, 29.3, 9.1) * 0.18 + ((lookPitch - aimPitch * 0.4) * attend + aim * 0.12 - crouch * 0.28) * (1 - choke),
+    off(joints.neck, 0.05 * keep + r.head * 0.6 + r.hurt * 0.38 + r.pressing * 0.32 - kneel * 0.5 - yank * 0.35 * (1 - choke) + dazed * 0.15 - choke * 0.5 + writhe(19.7, 29.3, 9.1) * 0.18 + ((lookPitch - aimPitch * 0.4) * attend + aim * 0.12 - crouch * 0.28) * (1 - choke) - r.stoop * 0.45,
       (look + lookYaw * attend - r.yaw * 0.5 + r.head * 0.3 + r.headYaw + toward * r.hurt * 0.35 + pressSide * r.pressing * 0.3) * (1 - choke) + writhe(16.3, 25.9, 7.7) * 0.32, r.roll * -0.3 + r.headRoll + loll - aim * 0.14 + writhe(17.3, 27.1, 8.9) * 0.2);
     // Blind fire: head down behind the cover, back bent over.
     if (r.blind > 0.001) { off(joints.neck, 0.45 * r.blind, 0, 0); off(joints.spine, 0.14 * r.blind, 0, 0); }
@@ -695,6 +700,9 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         reach(side, target, joints[`shoulder${side}`].localToWorld(temp2.set(sign * 0.45, -0.35, 0.05)), choke);
       }
     }
+    // A fallen squadmate: the free hand holds his collar to drag him, or rests on his chest to treat him.
+    const tend = o.drag ?? o.tend;
+    if (tend && !armCut('L')) reach('L', tend, joints.shoulderL.localToWorld(temp2.set(0.4, -0.3, -0.2)), Math.max(r.stoop, o.tend ? r.crouch : 0, 1 - r.holdL));
     // Fetching the rifle: the right hand goes to it.
     if (r.reachFor) reach('R', r.reachFor.point, joints.shoulderR.localToWorld(temp2.set(-0.35, -0.3, 0.2)), r.reachFor.weight);
     // A fresh scorch: a hand presses on it for a moment.
@@ -1087,6 +1095,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     if (trooper.dead) return;
     trooper.dead = true;
     crawl = recover = lifting = null;
+    hurt = hauled = null;
     flee = turnBack = null;
     reaction.run = 0;
     if (towing?.kind === 'stand') towing = null;
@@ -1366,6 +1375,17 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
         particle.position.y -= ragdoll.gravity * h * h;
         motion.subVectors(particle.position, particle.previous).lerp(stride.copy(towing.velocity).multiplyScalar(h), 0.35);
         particle.previous.subVectors(particle.position, motion);
+      }
+    }
+    if (hauled && !trooper.dead) {
+      const neck = ragdoll.particles[particleIndex.N];
+      if (!neck.kinematic) {
+        neck.position.lerp(hauled.point, 0.12);
+        neck.previous.copy(neck.position).addScaledVector(hauled.velocity, -h);
+      }
+      for (const key of ['SL', 'SR']) {
+        const shoulder = ragdoll.particles[particleIndex[key]];
+        if (!shoulder.kinematic) shoulder.position.y += (hauled.point.y - 0.06 - shoulder.position.y) * 0.05;
       }
     }
     if (effort > 0.01 && muscles.length) {
@@ -2030,6 +2050,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
       loco.lastYaw = yaw;
     }
     if (!trooper.fallen) {
+      hurt = hauled = null;
       pose(time, dt);
       placeParticles(dt);
       if (collapse && clock >= collapse.at) { const { cause, velocity, cutChild } = collapse; fall(cause, velocity, cutChild); }
@@ -2038,6 +2059,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     } else {
       if (towing?.kind === 'body' && dt > 0) towBody(dt);
       if (impaled && dt > 0) hangStep(dt);
+      if (hurt && !trooper.dead && dt > 0) {
+        hurt.attended = Math.max(0, hurt.attended - dt);
+        if (hurt.attended <= 0 && (hurt.age += dt) > hurt.bleed) die('bleed');
+      }
       if (crawl && !trooper.dead && dt > 0) crawlStep(dt, time);
       else if (recover && !trooper.dead && dt > 0) recoverStep(dt, time);
       convulse(dt);
@@ -2424,10 +2449,41 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     marks.push(mark);
     effects?.glow(material, 3);
   }
+  /** High on the chest, the heart: a bolt there kills like one in the head. */
+  function heart(point) {
+    const w = trooper.particle('W').position, n = trooper.particle('N').position;
+    return (point.y - w.y) / Math.max(0.05, n.y - w.y) > FEEL.wounded.heart;
+  }
+  /** A bolt in the body: he goes down alive, hurt, and stays down until a squadmate treats him — or he bleeds out. */
+  function down(blow) {
+    fall('bolt', blow);
+    if (trooper.dead || !recover) return;
+    recover.stun = Infinity;
+    hurt = { age: 0, bleed: pick(FEEL.wounded.bleed, random), attended: 0 };
+  }
+  /** Treated: he gets up (the next moment), facing the threat. */
+  function heal() {
+    if (!hurt || trooper.dead || !recover) return false;
+    hurt = hauled = null;
+    recover.stun = 0;
+    if (recover.stage === 'stunned') recover.age = 0;
+    return true;
+  }
+  /** A squadmate's hand at his collar (world point, and how it moves); null lets go. */
+  function drag(point, velocity = null) {
+    if (!point || !hurt) { hauled = null; return; }
+    hauled ??= { point: new THREE.Vector3(), velocity: new THREE.Vector3() };
+    hauled.point.copy(point);
+    if (velocity) hauled.velocity.copy(velocity).setY(0); else hauled.velocity.set(0, 0, 0);
+  }
+  /** Someone is with him: he does not bleed out meanwhile. Nobody left to come: he soon does. */
+  function attend() { if (hurt) hurt.attended = 0.3; }
+  function abandon() { if (hurt) hurt.bleed = Math.min(hurt.bleed, hurt.age + FEEL.wounded.alone); }
   /**
    * Struck by a bolt (one the blade sent back): it burns into the armour and
-   * throws him back. In the head or chest it kills; in a limb it staggers him,
-   * an arm loses the rifle, a leg gives way. Returns the event.
+   * throws him back. In the head or the heart it kills; elsewhere in the body
+   * he goes down alive, hurt; in a limb it staggers him, an arm loses the
+   * rifle, a leg gives way. Returns the event.
    */
   function shot(hit, velocity) {
     const { body } = hit;
@@ -2444,14 +2500,16 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     const blow = along.clone().multiplyScalar(4.5);
     pending = null;
     if (wasStanding) {
-      if (name === 'head' || name === 'torso' || (name === 'pelvis' && random() < 0.5)) die('bolt', blow);
+      if (name === 'head' || (name === 'torso' && heart(hit.point))) die('bolt', blow);
+      else if (name === 'torso' || name === 'pelvis') down(blow);
       else if (/^(thigh|shin|foot)/.test(name)) { react(blow, hit.point, 1.2, name); reaction.imbalance += 0.7; }
       else {
         react(blow, hit.point, 1.1, name);
         if (/^(upperArm|forearm|hand)/.test(name)) dropBlaster(blow);
         else pressWound(hit.point);
       }
-    } else if (!trooper.dead) { suffer(1); jolt(body, { velocity: blow }); }
+    } else if (hurt) die('bolt', blow);
+    else if (!trooper.dead) { suffer(1); jolt(body, { velocity: blow }); }
     else jolt(body, { velocity: blow });
     if (pending) stagger(pending);
     if (!wasDead && trooper.dead) event.lethal = true;
@@ -2477,6 +2535,7 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     update, strike, reset, dispose, blocker, fire, boltHit, throwGrenade, wake,
     cut: waking(cut), die: waking(die), fall: waking(fall), forcePush: waking(forcePush), forcePull: waking(forcePull), hold: waking(hold), drop: waking(drop),
     shot: waking(shot), impale: waking(impale), skewer: waking(skewer), slideOff: waking(slideOff),
+    heal: waking(heal), drag: waking(drag), attend, abandon,
   });
   Object.defineProperties(trooper, {
     reaction: { get: () => reaction },
@@ -2498,6 +2557,10 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     /** On the blade (struggling, or dead and hanging from it). */
     impaled: { get: () => Boolean(impaled) },
     recovery: { get: () => recover },
+    /** Down, alive and hurt: waiting for a squadmate to drag him to cover and treat him. */
+    hurt: { get: () => Boolean(hurt) },
+    /** Being dragged by a squadmate's hand. */
+    hauled: { get: () => Boolean(hauled) },
     towing: { get: () => towing },
     spasm: { get: () => spasm },
     /** Dead, still, merged and out of the physics until something touches him. */
@@ -2510,14 +2573,14 @@ export function createStormtrooper({ scene, position = new THREE.Vector3(), head
     armour: { get: () => Object.values(pieces).filter(piece => !piece.userData.loose).length },
     /**
      * 'standing', 'wounded', 'impaled', 'pulled', 'held', 'dropping', 'fleeing', 'dazed',
-     * 'rearming', 'stunned', 'rising', 'down', 'crawling' or 'dead'.
+     * 'rearming', 'stunned', 'hurt', 'rising', 'down', 'crawling' or 'dead'.
      */
     state: {
       get: () => {
         if (trooper.dead) return 'dead';
         if (!trooper.fallen) return impaled ? 'impaled' : towing ? 'pulled' : levitating ? 'held' : dropping ? 'dropping' : flee ? 'fleeing' : pickup || fetching ? 'rearming' : reaction.daze > 0.2 ? 'dazed' : reaction.wound ? 'wounded' : 'standing';
         if (lifting) return 'pulled';
-        if (recover) return recover.stage === 'rising' ? 'rising' : 'stunned';
+        if (recover) return recover.stage === 'rising' ? 'rising' : hurt ? 'hurt' : 'stunned';
         return crawl?.stage === 'crawl' ? 'crawling' : 'down';
       },
     },
@@ -2537,13 +2600,15 @@ export function collideSquad(troopers) {
       if (a === b) continue;
       if (!b.fallen) {
         const block = b.blocker();
-        if (!block || b.dead) continue;
+        // Getting up, or dragged by a squadmate's hand, he knocks nobody over.
+        if (!block || b.dead || a.recovery?.stage === 'rising' || a.hauled) continue;
         for (const name of ['W', 'N', 'HT', 'HL', 'HR']) {
           const index = a.indexOf(name), particle = a.ragdoll.particles[index];
           if (particle.kinematic || particle.position.y > 1.7) continue;
           if (Math.hypot(particle.position.x - block.x, particle.position.z - block.z) > block.radius + particle.radius) continue;
           a.ragdoll.velocity(index, speed);
-          if (speed.length() < 2.2) continue;
+          // A man lying hurt (writhing, twitching, dragged) trips nobody up; thrown, he does.
+          if (speed.length() < (a.hurt ? 5 : 2.2)) continue;
           b.forcePush(speed.clone().multiplyScalar(0.65).setY(1.4));
           a.slow(0.45);
           break;

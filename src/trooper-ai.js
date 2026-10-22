@@ -24,7 +24,11 @@ import { PACE } from './stormtrooper.js';
  *   the others nearby spread out round him to catch him in a crossfire;
  * - too many lost too fast: they fall back to covers further off;
  * - a man down, a grenade, a move, covering fire, contact lost: they say so
- *   on the radio (cues the game turns into chatter).
+ *   on the radio (cues the game turns into chatter);
+ * - a man down and hurt (a bolt in the body): the nearest free squadmate
+ *   runs to him — unless the Jedi stands over him —, drags him by the collar
+ *   behind a crate near by, kneels and treats him for a few seconds, and both
+ *   get up. The Jedi coming at him, he drops it all, up and firing (rescue()).
  *
  * An anchor runs to cover (a crate between him and the hero, at a good
  * range, not taken by a squadmate, away from the others' line), crouches,
@@ -59,6 +63,8 @@ const COMMITTED = new Set(['throw', 'fire', 'blindUp', 'evade', 'spread']);
 
 export function createSquadMind({ troopers, lab, nav = null, alerts = null, posts = [], random = Math.random, cameraRight = new THREE.Vector3(1, 0, 0) }) {
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
+  // Who is going to whom: a man down and hurt → his rescuer's mind.
+  const rescuers = new Map();
   let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity, dark = 0;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
   // The squad leader's plan (coordinate()).
@@ -80,7 +86,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       entering: null, dir: null,
       // The fight: the aim before a burst (charge 0 → 1), his flank, what went wrong lately.
       charge: 0, windup: 0, windupTotal: 1, flankSide: 0, noBlind: 0, aimFails: 0, coverTime: 0, suppressed: false, suppressing: false, fellBack: false, spreadTo: null, mourned: false, reposition: false,
-      spreadAgain: 0, plans: 0,
+      spreadAgain: 0, plans: 0, rescue: null, rescueReady: 0,
     });
   }
   function reset() {
@@ -89,6 +95,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     roleClock = Infinity;
     Object.assign(plan, { movers: new Set(), seen: false, fighting: 0, scatter: false, fallback: 0, losses: [], lastBurst: -Infinity, lastFire: -Infinity, coverCall: Infinity, lost: false });
     for (const mind of minds) fresh(mind);
+    rescuers.clear();
     alerts?.clear();
   }
   /**
@@ -107,7 +114,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   /** Out of the squad for good (a body cleared away). */
   function remove(trooper) {
     const index = minds.findIndex(mind => mind.trooper === trooper);
-    if (index >= 0) { release(minds[index]); plan.movers.delete(minds[index]); alerts?.hide(trooper); minds.splice(index, 1); }
+    if (index >= 0) { endRescue(minds[index]); release(minds[index]); plan.movers.delete(minds[index]); alerts?.hide(trooper); minds.splice(index, 1); }
     const at = troopers.indexOf(trooper);
     if (at >= 0) troopers.splice(at, 1);
   }
@@ -247,6 +254,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   /** Fighters: in the fight, alive, in the room. */
   const fighting = () => minds.filter(mind => mind.mode === 'combat' && !mind.trooper.dead && !mind.trooper.impaled && !mind.entering);
   function coordinate(hero, cues) {
+    assignRescues(hero, cues);
     const fighters = fighting();
     plan.fighting = fighters.length;
     if (!fighters.length) { plan.movers.clear(); plan.scatter = false; return; }
@@ -300,6 +308,120 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     if (plan.seen && plan.fighting > 1 && random() < 0.6) {
       cues.push({ type: 'radio', radio: mind.role === 'flanker' ? 'flank' : 'move', trooper: mind.trooper });
       plan.coverCall = Math.min(plan.coverCall, clock + 0.9);
+    }
+    return true;
+  }
+
+  // ---- A man down -----------------------------------------------------------
+  /** Where a body lying on the floor is (its chest, on the floor). */
+  const chestOf = body => body.particle('N').position.clone().lerp(body.particle('W').position, 0.45).setY(0);
+  /** A man down and hurt: the nearest free squadmate goes to him — not while the Jedi stands over him. Nobody left: he bleeds out. */
+  function assignRescues(hero, cues) {
+    const R = FEEL.rescue;
+    for (const patient of troopers) {
+      if (!patient.hurt) { rescuers.delete(patient); continue; }
+      const current = rescuers.get(patient);
+      if (current?.rescue?.patient === patient) continue;
+      rescuers.delete(patient);
+      const able = minds.filter(mind => mind.trooper !== patient && !mind.trooper.dead && !mind.trooper.hurt);
+      if (!able.length) { patient.abandon(); continue; }
+      const at = chestOf(patient);
+      if (at.distanceTo(flat(hero)) < R.safe) continue;
+      let best = null, bestDistance = R.range;
+      for (const mind of able) {
+        const t = mind.trooper;
+        if (mind.mode === 'dead' || mind.rescue || !t.free || mind.entering || COMMITTED.has(mind.tactic) || clock < mind.rescueReady) continue;
+        if (flat(t.root.position).distanceTo(flat(hero)) < R.threat + 1) continue;
+        const distance = flat(t.root.position).distanceTo(at);
+        if (distance < bestDistance) { bestDistance = distance; best = mind; }
+      }
+      if (!best) continue;
+      // A man shot down beside him is an alarm in itself: the shot came from the Jedi.
+      if (best.mode !== 'combat') { best.lastKnown.copy(hero).setY(0); alert(best, cues, { quiet: true }); }
+      release(best);
+      plan.movers.delete(best);
+      best.tactic = null;
+      best.rescue = { patient, stage: 'go', clock: 0, to: null, treat: 0, pulse: 0 };
+      rescuers.set(patient, best);
+      cues.push({ type: 'radio', radio: 'cover', trooper: best.trooper });
+    }
+  }
+  /** Behind a crate near the man down, out of the Jedi's sight: where to drag him (null: treated where he lies). */
+  function haven(patient, hero) {
+    const R = FEEL.rescue, from = chestOf(patient);
+    let best = null, bestScore = Infinity;
+    for (const spot of lab.coverSpots(hero, { minDistance: 2.5 })) {
+      const distance = spot.position.distanceTo(from);
+      if (distance > R.haven) continue;
+      if (minds.some(other => other.cover && !other.trooper.dead && other.cover.position.distanceTo(spot.position) < 0.9)) continue;
+      const score = distance + (spot.position.distanceTo(flat(hero)) < 4 ? 5 : 0);
+      if (score < bestScore) { bestScore = score; best = spot.position; }
+    }
+    if (!best || best.distanceTo(from) < 0.6) return null;
+    // He backs up past the spot, so that the man he drags ends on it.
+    let to = best.clone().addScaledVector(best.clone().sub(from).normalize(), 0.7);
+    if (nav) to = nav.walkable(to) ? to : nav.nearest(to) ?? best.clone();
+    return to;
+  }
+  function endRescue(mind) {
+    const r = mind.rescue;
+    if (!r) return;
+    r.patient.drag(null);
+    rescuers.delete(r.patient);
+    mind.rescue = null;
+    mind.rescueReady = clock + FEEL.rescue.cooldown;
+    mind.tactic = null;
+  }
+  /**
+   * To the man down, running; then backing away with him by the collar to the
+   * cover near by; then kneeling by him, a hand on his chest, until he is
+   * treated and gets up. The Jedi coming at him: he drops it, up and firing.
+   * True while it takes him over.
+   */
+  function rescue(mind, dt, hero, cues) {
+    const t = mind.trooper, o = t.order, r = mind.rescue, patient = r.patient, R = FEEL.rescue;
+    if (patient.dead || !patient.hurt) { endRescue(mind); return false; }
+    const at = flat(t.root.position), body = chestOf(patient);
+    if (at.distanceTo(flat(hero)) < R.threat) {
+      endRescue(mind);
+      mind.lastKnown.copy(hero).setY(0);
+      mind.stance = 'stand';
+      mind.tactic = 'aimOpen';
+      mind.timer = 0;
+      mind.startle = 0.12;
+      t.reaction.vhead -= 1.6;
+      t.reaction.vbuckle += 0.4;
+      return false;
+    }
+    r.clock += dt;
+    patient.attend();
+    o.look = body.clone().setY(0.3);
+    if (r.stage === 'go') {
+      if (steer(mind, body, PACE.run, 0.85)) { r.stage = 'drag'; r.clock = 0; r.to = haven(patient, hero); if (!r.to) r.stage = 'treat'; }
+      return true;
+    }
+    if (r.stage === 'drag') {
+      // Facing him, backing away: his hand at the collar, the body sliding after him.
+      const hand = at.clone().addScaledVector(new THREE.Vector3(Math.sin(t.heading), 0, Math.cos(t.heading)), 0.55).setY(0.45);
+      const there = steer(mind, r.to, R.drag, 0.3);
+      o.face = headingTo(t.root.position, body);
+      o.drag = patient.particle('N').position.clone();
+      patient.drag(hand, o.velocity);
+      if (there || r.clock > R.dragMax) { patient.drag(null); r.stage = 'treat'; r.clock = 0; }
+      return true;
+    }
+    // Treating him: kneeling at his side, a hand on his chest.
+    if (at.distanceTo(body) > 1.05) { steer(mind, body, PACE.walk, 0.8); o.face = headingTo(t.root.position, body); r.clock = 0; return true; }
+    r.treat ||= pick(R.treat, random);
+    o.face = headingTo(t.root.position, body);
+    o.crouch = true;
+    o.tend = patient.particle('N').position.clone().lerp(patient.particle('W').position, 0.35);
+    if ((r.pulse -= dt) <= 0) { r.pulse = 0.5; cues.push({ type: 'heal', trooper: t, at: o.tend.clone() }); }
+    if (r.clock >= r.treat) {
+      patient.heal();
+      cues.push({ type: 'healed', trooper: t, patient });
+      endRescue(mind);
+      return false;
     }
     return true;
   }
@@ -1076,7 +1198,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
           const near = minds.filter(other => other !== mind && other.mode === 'combat' && !other.trooper.dead && other.trooper.root.position.distanceTo(t.root.position) < 11);
           if (near.length) cues.push({ type: 'radio', radio: 'down', trooper: near[Math.floor(random() * near.length)].trooper });
         }
-        release(mind); plan.movers.delete(mind); alerts?.hide(t); mind.mode = 'dead'; continue;
+        endRescue(mind); release(mind); plan.movers.delete(mind); alerts?.hide(t); mind.mode = 'dead'; continue;
       }
       o.velocity.set(0, 0, 0);
       o.face = null;
@@ -1085,6 +1207,9 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       o.crouch = false;
       o.blind = false;
       o.aimAt = mind.aimPoint;
+      o.drag = o.tend = null;
+      // Knocked off his feet, or out of the fight: whoever he was going to waits for another.
+      if (mind.rescue && (!t.free || mind.mode !== 'combat')) endRescue(mind);
       // Coming in through the door: nothing else until he is in.
       if (mind.entering) { if (t.free) march(mind, cues); else mind.entering = null; continue; }
       perceive(mind, dt, hero, heroSpeed, saber, noises, cues);
@@ -1099,7 +1224,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       if (mind.mode === 'calm') patrol(mind, dt);
       else if (mind.mode === 'suspicious') investigate(mind, dt);
       else if (mind.mode === 'searching') { if (mind.sees && mind.awareness >= 1) alert(mind, cues); else search(mind, dt); }
-      else if (mind.mode === 'combat') fight(mind, dt, hero, heroVelocity, shots, cues);
+      else if (mind.mode === 'combat' && !(mind.rescue && rescue(mind, dt, hero, cues))) fight(mind, dt, hero, heroVelocity, shots, cues);
     }
     return { shots, cues };
   }
