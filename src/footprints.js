@@ -13,6 +13,9 @@ import { stainUniforms, STAIN_LIGHT } from './stain-light.js';
  *
  * stamp(at, along, side, strength, [length, width]) — `along`: heel to toe on
  * the floor; side 'L' or 'R'; strength 0 → 1. Then update(dt).
+ *
+ * Options make other prints of the same sole: `tint`, how long they `linger`
+ * ([min, max] s), `name` — the soles pressed into the jungle's sand, dark and lasting.
  */
 function soleTexture() {
   const w = 32, h = 64, data = new Uint8Array(w * h * 4);
@@ -47,7 +50,7 @@ function soleTexture() {
   return texture;
 }
 
-export function createFootprints(scene, { max = 360, random = Math.random } = {}) {
+export function createFootprints(scene, { max = 360, random = Math.random, tint = new THREE.Color(0.5, 0.024, 0.017), linger = null, name = 'Red footprints' } = {}) {
   const geometry = new THREE.PlaneGeometry(1, 1);
   geometry.rotateX(-Math.PI / 2);
   // Heel at -Z, toe at +Z (the texture's v runs heel → toe).
@@ -57,7 +60,7 @@ export function createFootprints(scene, { max = 360, random = Math.random } = {}
   const material = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
-    uniforms: { map: { value: soleTexture() }, tint: { value: new THREE.Color(0.5, 0.024, 0.017) }, ...stainUniforms },
+    uniforms: { map: { value: soleTexture() }, tint: { value: tint }, ...stainUniforms },
     vertexShader: /* glsl */`
       ${STAIN_LIGHT}
       attribute float fade; varying float vFade; varying vec2 vUv; varying vec3 vLight;
@@ -76,7 +79,7 @@ export function createFootprints(scene, { max = 360, random = Math.random } = {}
       }`,
   });
   const mesh = new THREE.InstancedMesh(geometry, material, max);
-  mesh.name = 'Red footprints';
+  mesh.name = name;
   mesh.frustumCulled = false;
   mesh.count = 0;
   scene.add(mesh);
@@ -97,7 +100,7 @@ export function createFootprints(scene, { max = 360, random = Math.random } = {}
     mesh.setMatrixAt(i, matrix.compose(place, rotation, scale));
     mesh.instanceMatrix.needsUpdate = true;
     age[i] = 0;
-    life[i] = pick(FEEL.prints.linger, random);
+    life[i] = pick(linger ?? FEEL.prints.linger, random);
     strength[i] = Math.min(1, amount);
     return i;
   }

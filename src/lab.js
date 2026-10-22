@@ -98,7 +98,16 @@ export function createLab(scene) {
   function update(time) {
     for (const marking of markings) marking.update(time);
   }
+  return { group, obstacles, lights, floorLights, markings, update, ...obstacleQueries(obstacles) };
+}
 
+/**
+ * What the game asks of a set of obstacles (axis-aligned boxes { kind, min,
+ * max, centre }): push a walker out of them, cast a bolt or a line of sight
+ * against them, and find cover behind them from a threat. Shared by every
+ * level (the lab's cases, the jungle's ruins and rocks).
+ */
+export function obstacleQueries(obstacles) {
   const temp = new THREE.Vector3();
   /** Pushes a walker (a circle on the floor) out of every obstacle; returns the corrected point. */
   function pushOut(position, radius = 0.3) {
@@ -175,7 +184,7 @@ export function createLab(scene) {
     }
     return spots;
   }
-  return { group, obstacles, lights, floorLights, markings, pushOut, segmentHit, clear, coverSpots, update };
+  return { pushOut, segmentHit, clear, coverSpots };
 }
 
 /** A case seen from the camera (+X, +Z and its lid): frame, caps, panels, vents, handles, lights. */

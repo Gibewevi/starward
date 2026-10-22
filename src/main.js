@@ -47,6 +47,7 @@ import { createPower } from './power.js';
 import { createTransformer } from './transformer.js';
 import { createFlashlights } from './flashlights.js';
 import { lightStains } from './stain-light.js';
+import { createJungle, jungleLighting } from './jungle.js';
 
 const $ = selector => document.querySelector(selector);
 function showError(error) {
@@ -83,11 +84,16 @@ function init() {
   // The studio strip above the hero would whiten every puddle of the wet deck.
   lighting.whiteStrip.intensity *= 0.55;
 
+  // ?stage=jungle: level 2, a clearing in the jungle at night, in place of the lab.
+  const LEVEL = new URLSearchParams(location.search).get('stage') === 'jungle' ? 'jungle' : 'lab';
+  const jungle = LEVEL === 'jungle' ? createJungle(scene, { renderer }) : null;
+  if (jungle) jungleLighting(scene, lighting);
+  const BOUNDS = jungle ? jungle.bounds : ARENA;
   // The deck, closed at the back by walls, open at the front over a lower level.
-  const stage = createStage(scene, { bounds: ARENA });
+  const stage = jungle ? jungle.stage : createStage(scene, { bounds: ARENA });
   // The AI lab: crates, barrels and barriers on the floor; the room around it.
-  const lab = createLab(scene);
-  const arena = createArena(scene, { lab, floorMaterial: stage.material });
+  const lab = jungle ? jungle.lab : createLab(scene);
+  const arena = jungle ? jungle.arena : createArena(scene, { lab, floorMaterial: stage.material });
   // The wet deck mirrors the room: the reflection is added to the floor's own
   // light, strongest in the puddles (smooth in the roughness map), and it is
   // stretched towards the viewer as on wet steel — light columns and strips
@@ -129,10 +135,20 @@ function init() {
   reflection.getRenderTarget().texture.magFilter = THREE.NearestFilter;
   reflection.getRenderTarget().texture.minFilter = THREE.NearestFilter;
   scene.add(reflection);
+  // Nothing to mirror on sand.
+  if (jungle) reflection.visible = false;
 
   const character = createCharacter();
   scene.add(character.root);
   const motion = new MotionController();
+  // Where the hero starts: the middle of the lab, the jungle's own spot.
+  const START = jungle?.start ?? null;
+  const toStart = () => {
+    if (START) Object.assign(motion, { x: START.x, z: START.z, heading: START.heading });
+    character.root.position.set(motion.x, 0, motion.z);
+    cameraFocus.set(motion.x, 0.6, motion.z);
+  };
+  toStart();
   character.root.rotation.y = motion.heading;
   const cape = createCoat({ scene, character });
   const saber = createSaber({ socket: character.saberSocket, scene });
@@ -148,7 +164,7 @@ function init() {
   const screenUp = new THREE.Vector3(-8, 0, -10).normalize(), screenRight = new THREE.Vector3(10, 0, -8).normalize();
   const towards = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
   // Screen directions as headings: down (towards the camera) 0.68, up -2.47, left -0.9, right 2.24.
-  const POSTS = [
+  const POSTS = jungle ? jungle.posts : [
     { position: onScreen(-2.4, 5.4), heading: -0.9 },
     { position: onScreen(0.3, 5.7), route: [onScreen(0.3, 5.7), onScreen(4.7, 6.2), onScreen(4.9, 7.6), onScreen(0.8, 7.9)] },
     { position: onScreen(4.1, 8.4), heading: -2.47 },
@@ -163,13 +179,14 @@ function init() {
   // Burns that stay: blasts and bolts mark the floor and the crates for good.
   const marks = createScorchMarks(scene, { lab });
   // The blade melts what it goes into: molten trails that cool, cuts that stay.
-  const scars = createSaberScars(scene, { lab, bounds: ARENA });
+  const scars = createSaberScars(scene, { lab, bounds: BOUNDS });
   let scarSparks = 0, scarSizzle = 0;
   const explosions = createExplosions(scene, { marks, slots: 5 });
   camera.layers.enable(1);
   loadExplosionAssets(explosions).catch(error => console.error('Chargement de l’explosion interrompu :', error));
   const debris = createDebris(scene, { lab });
-  debris.scatter();
+  // Scraps of the lab's floor: none in the jungle.
+  if (!jungle) debris.scatter();
   const grenades = createGrenades(scene, {
     lab, reach: FEEL.grenade.reach,
     onBeep: (grenade, progress) => audio.beep(progress, grenade.position),
@@ -179,8 +196,10 @@ function init() {
   const prints = createFootprints(scene);
   let soles = new WeakMap();
   const footAt = new THREE.Vector3(), toeAt = new THREE.Vector3();
-  /** A foot coming down: drops under it are trodden in (some taken up); a red sole prints, fainter each step. */
+  /** A foot coming down: drops under it are trodden in (some taken up); a red sole prints, fainter each step.
+   * In the jungle, it presses into the sand or splashes in the stream as well. */
   function footfall(walker, at, along, side, size) {
+    jungle?.step(at, along, side, size, walker === character ? motion.speed : walker.velocity?.length() ?? 1.5);
     const sole = soles.get(walker) ?? { L: 0, R: 0, last: 'R' };
     sole.last = side;
     const found = effects.tread(at);
@@ -209,6 +228,18 @@ function init() {
     if (along.lengthSq() < 1e-6) along.set(Math.sin(trooper.heading), 0, Math.cos(trooper.heading));
     footfall(trooper, heel.clone().lerp(toe, 0.5).setY(0), along.normalize(), side, FEEL.prints.trooper);
   }
+  /** Who goes through the jungle's plants and water this frame: the hero, his blade held low, the bodies standing or lying, nearest first. */
+  function jungleActors(swing) {
+    const actors = [{ x: motion.x, z: motion.z, radius: 0.5, strength: 1, speed: motion.speed }];
+    if (saber.extension > 0.6 && bladeTip.y < 0.9) actors.push({ x: bladeTip.x, z: bladeTip.z, radius: 0.35, strength: Math.min(1.5, swing / 6), speed: swing, wades: bladeTip.y < 0.1 });
+    const others = troopers.map(trooper => {
+      const at = whereIs(trooper);
+      return { x: at.x, z: at.z, radius: trooper.fallen ? 0.7 : 0.45, strength: trooper.fallen ? 0.8 : 1, speed: trooper.velocity.length() };
+    });
+    if (duel.present) others.push({ x: duel.enemy.motion.x, z: duel.enemy.motion.z, radius: 0.5, strength: 1, speed: duel.enemy.motion.speed });
+    others.sort((a, b) => Math.hypot(a.x - motion.x, a.z - motion.z) - Math.hypot(b.x - motion.x, b.z - motion.z));
+    return [...actors, ...others].slice(0, 8);
+  }
   // Warnings: a glint at a muzzle about to fire; chevrons at the screen's edges for threats out of view.
   const telegraph = createTelegraph(scene, { overlay: $('#threats') });
   const knockdown = createHeroRagdoll(character, { lab });
@@ -220,18 +251,20 @@ function init() {
   const blasters = createBlasters(scene, { effects, lab, marks });
   // The squad finds its way round the crates and walls on a navigation grid.
   // In the back corner, the transformer the room's lights hang on (an obstacle like a crate).
-  const transformer = createTransformer(scene, { lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
+  const transformer = createTransformer(scene, { lab: jungle ? null : lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
+  // The lab's: not in the jungle.
+  transformer.group.visible = !jungle;
   // The room's power: every light of it follows one level; the rifle lamps for the dark.
   const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
   const flashlights = createFlashlights(scene, { lab, bounds: arena.bounds });
   // What may light the red stains in the dark: the rifle lamps, their spills, the blade.
   const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights];
-  const nav = createNav(lab, ARENA);
+  const nav = createNav(lab, BOUNDS);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
   const reinforcements = createReinforcements({ door: arena.door });
   // Rounds through the room for the men who come in: each his own part of it, on the move.
-  const rounds = patrolRounds({ lab, nav, bounds: ARENA });
+  const rounds = patrolRounds({ lab, nav, bounds: BOUNDS });
   /** One of a wave: made in the corridor, marched through the door into the room, then off on his round. */
   function bringIn(index) {
     const door = arena.door, heading = Math.atan2(door.out.x, door.out.z);
@@ -376,7 +409,9 @@ function init() {
     effects.clear(); blasters.clear(); squad.reset(); grenades.clear(); explosions.clear(); marks.clear(); scars.clear();
     prints.clear();
     soles = new WeakMap();
-    debris.clear(); debris.scatter();
+    debris.clear();
+    if (!jungle) debris.scatter();
+    jungle?.reset();
   }
   // Hit stops: at most one per enemy and per attack sequence.
   const stopped = new Set();
@@ -1020,6 +1055,8 @@ function init() {
     effects.blast(at.clone().setY(0.35), { sparks: 45, embers: 0, speed: 24 });
     debris.blast(at);
     debris.fragments(at, 18 + Math.round(Math.random() * 8));
+    // The plants flattened outward, the water thrown up.
+    jungle?.blast(at);
     for (const trooper of troopers) {
       const offset = whereIs(trooper).sub(at).setY(0), distance = offset.length();
       if (distance > blast.radius) continue;
@@ -1114,6 +1151,13 @@ function init() {
   const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(1, 1) }));
   composer.addPass(new RenderPass(scene, camera));
   composer.addPass(new BeamPass(camera, () => flashlights.volumes));
+  if (jungle) {
+    // The moonlight through the canopy: wide, faint, cold shafts in the damp air.
+    const shafts = new BeamPass(camera, () => jungle.air.beams), u = shafts.material.uniforms;
+    u.tint.value.setRGB(0.55, 0.8, 0.9);
+    u.level.value = 0.35; u.spread.value = 0.13; u.full.value = 11; u.haze.value = 0.6;
+    composer.addPass(shafts);
+  }
   const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), 0.45, 0.15, 1.15);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
@@ -1140,11 +1184,18 @@ function init() {
   const keys = new Set();
   let paused = true, time = 0, moved = false, forcedGuard = false;
   let stageStarted = false;
+  // The menu's other stage is another page: the level is built once, at load.
+  const autoplay = new URLSearchParams(location.search).has('play');
+  if (autoplay) history.replaceState(null, '', jungle ? '?stage=jungle' : location.pathname);
   const stageMenu = createStageMenu({
-    onStart() {
+    initial: jungle ? 1 : 0,
+    onStart(number) {
+      const wanted = number === 2 ? 'jungle' : 'lab';
+      if (wanted !== LEVEL) { location.assign(wanted === 'jungle' ? '?stage=jungle&play' : '?play'); return; }
       if (stageStarted) restart();
       stageStarted = true;
-      document.title = 'STARWARD — Stage 1 : Intérieur';
+      document.title = jungle ? 'STARWARD — Stage 2 : Jungle' : 'STARWARD — Stage 1 : Intérieur';
+      $('#pause-overlay .eyebrow').textContent = jungle ? 'STARWARD / STAGE 2' : 'STARWARD / STAGE 1';
       $('#game').inert = false;
       setPause(false);
       if (audio.enabled) audio.start();
@@ -1210,9 +1261,9 @@ function init() {
     death = null;
     wounds.clear();
     $('#death').classList.remove('on');
-    motion.reset(); character.root.position.set(0, 0, 0); character.root.rotation.y = motion.heading;
+    motion.reset(); toStart(); character.root.rotation.y = motion.heading;
     character.update({ dt: 0, time, speed: 0, runBlend: 0, turnRate: 0 });
-    combat.reset(); trail.clear(); cape.reset(); bladeReady = false; cameraFocus.set(0, 0.6, 0);
+    combat.reset(); trail.clear(); cape.reset(); bladeReady = false;
   }
   function togglePanel(name) {
     const willOpen = $(`#${name}-panel`).hidden;
@@ -1232,7 +1283,7 @@ function init() {
   }
   $('#pixel-size').addEventListener('change', event => { pixelSize = Number(event.target.value); resize(); });
   $('#camera-zoom').addEventListener('input', event => desiredHeight = Number(event.target.value));
-  $('#reflections').addEventListener('change', event => reflection.visible = event.target.checked);
+  $('#reflections').addEventListener('change', event => reflection.visible = event.target.checked && !jungle);
   $('#resume').addEventListener('click', () => setPause(false));
   $('#return-menu').addEventListener('click', () => {
     setPause(true);
@@ -1616,7 +1667,7 @@ function init() {
         }
         // Landings, armour coming off: heard and felt in step with the physics.
         for (const item of trooper.news) {
-          if (item.type === 'land') { audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, THREE.MathUtils.clamp(2 + item.speed * 1.2, 2.5, 7), { alarm: true, from: character.root.position, source: trooper }); }
+          if (item.type === 'land') { jungle?.landing(item.point, item.speed); audio.thud(Math.min(1, item.speed / 8), item.point); trauma.add(Math.min(0.15, item.speed * 0.02)); noise(item.point, THREE.MathUtils.clamp(2 + item.speed * 1.2, 2.5, 7), { alarm: true, from: character.root.position, source: trooper }); }
           if (item.type === 'armor') audio.clank(trooper.root.position);
           // A grenade leaves his hand (or drops at his feet if he was knocked over).
           if (item.type === 'grenade' && !death) {
@@ -1641,13 +1692,15 @@ function init() {
         if (contacts.some(contact => contact.fresh) && scarSizzle <= 0) { scarSizzle = 0.3; audio.sizzle(contacts[0].point); }
         if (contacts.length) scrape = 1;
       }
+      // Through the plants: the blade cuts what it meets; its tip through the stream throws it up.
+      if (jungle && saber.extension > 0.6 && bladeReady && !down && sim > 0) jungle.cut(lastBase, lastTip, bladeBase, bladeTip, swing);
       scars.update(sim);
       bladeReady = saber.extension > 0.6;
       lastBase.copy(bladeBase);
       lastTip.copy(bladeTip);
       // Bolts fly: the blade, the hero, the troopers, then crates and floor.
       for (const event of blasters.update(sim, boltMeets)) {
-        if (event.type === 'impact') audio.boltImpact(event.point);
+        if (event.type === 'impact') { audio.boltImpact(event.point); if (event.point.y < 0.3) jungle?.bolt(event.point); }
       }
       // Bolts whizzing past his head.
       chest.set(motion.x, 1.15, motion.z);
@@ -1718,6 +1771,7 @@ function init() {
       const stirs = [{ at: here.set(motion.x, 1, motion.z).clone(), speed: motion.speed }, { at: bladeTip.clone(), speed: Math.min(12, swing) }];
       if (duel.present) stirs.push({ at: duel.enemy.tip.clone(), speed: Math.min(12, duel.enemy.swing.length()) });
       for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
+      if (jungle) jungle.update(sim, { time, actors: jungleActors(swing), stirs, fog: scene.fog });
       lightStains(power.level, stainLights);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
@@ -1790,11 +1844,12 @@ function init() {
     if (streakAge >= 3.5 && streak) streak = 0;
     streakNoteEl.textContent = streakNote;
     streakNoteEl.classList.toggle('on', streakNoteAge < 1.1);
-    if (++frameCount === 3) stageMenu.ready();
+    if (++frameCount === 3) { stageMenu.ready(); if (autoplay) stageMenu.launch(); }
     if (!manual) requestAnimationFrame(frame);
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
+    level: LEVEL, jungle,
     // Game feel settings, tweakable live from the console.
     feel: FEEL,
     /** Runs the game for some seconds without waiting for the display (checks, hidden windows). */

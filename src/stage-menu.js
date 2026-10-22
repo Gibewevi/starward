@@ -1,7 +1,7 @@
 import './stage-menu.css';
 import { renderMenuPixels } from './menu-pixels.js';
 
-export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isPanelOpen, closePanels }) {
+export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isPanelOpen, closePanels, initial = 0 }) {
   const root = document.querySelector('#stage-menu');
   const cards = [...root.querySelectorAll('[data-stage]')];
   const confirm = root.querySelector('#stage-confirm');
@@ -45,22 +45,16 @@ export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isP
       card.setAttribute('aria-pressed', String(selected === i));
     });
     root.dataset.selected = String(selected + 1);
-    confirm.disabled = selected !== 0 || !ready;
-    notice.hidden = selected === 0;
+    confirm.disabled = !ready;
+    notice.hidden = true;
     description.textContent = selected === 0
       ? 'Infiltrez le hangar. Affrontez l’escouade impériale.'
-      : 'Une nouvelle destination. Une autre bataille.';
+      : 'Prototype : une clairière de jungle, la nuit. Eau, plantes, ruines.';
     if (focus) cards[selected].focus({ preventScroll: true });
   }
 
   function activate() {
     if (!ready || launching || !open) return;
-    if (selected !== 0) {
-      root.classList.remove('is-locked');
-      void root.offsetWidth;
-      root.classList.add('is-locked');
-      return;
-    }
     launching = true;
     confirm.disabled = true;
     root.classList.add('is-launching');
@@ -71,7 +65,7 @@ export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isP
       root.classList.remove('is-launching');
       document.body.classList.remove('menu-open');
       launching = false;
-      onStart();
+      onStart(selected + 1);
     }, reducedMotion.matches ? 0 : 420);
   }
 
@@ -105,10 +99,12 @@ export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isP
     }
   }, true);
 
-  select(0);
+  select(initial);
   return {
     get open() { return open; },
     ready() { ready = true; select(selected); },
+    /** Straight into the selected stage (coming back from a switch of level). */
+    launch() { activate(); },
     show() {
       window.clearTimeout(launchTimer);
       launching = false; open = true; padReady = false;
@@ -116,7 +112,7 @@ export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isP
       root.hidden = false;
       root.classList.remove('is-launching', 'is-locked');
       document.body.classList.add('menu-open');
-      select(0, true);
+      select(selected, true);
     },
     update(now) {
       if (!open) return;

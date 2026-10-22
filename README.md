@@ -6,9 +6,9 @@ Prototype jouable d’action 3D isométrique, consacré au plaisir du déplaceme
 
 Sous Windows, double-cliquer sur **Jouer.bat**. Le prototype compilé est fourni dans `dist/` et se lance avec Node.js, sans téléchargement supplémentaire. Garder la fenêtre du serveur ouverte pendant la partie. Adresse : **http://127.0.0.1:5173/**.
 
-Le menu principal propose deux stages : **Stage 1 — Intérieur** lance la salle actuelle ; **Stage 2 — Jungle** est un aperçu du prochain environnement, encore indisponible. Survoler une carte pour la sélectionner : l’illustration zoome par paliers et se déplace avec la souris, avec des particules et un balayage lumineux. Cliquer sur le stage 1, ou sélectionner avec les flèches puis confirmer avec Entrée. À la manette : stick gauche / croix directionnelle, puis A. Au toucher, appuyer sur la carte du stage 1.
+Le menu principal propose deux stages : **Stage 1 — Intérieur** lance la salle actuelle ; **Stage 2 — Jungle** lance le prototype de la jungle (voir plus bas). Survoler une carte pour la sélectionner : l’illustration zoome par paliers et se déplace avec la souris, avec des particules et un balayage lumineux. Cliquer sur une carte, ou sélectionner avec les flèches puis confirmer avec Entrée. À la manette : stick gauche / croix directionnelle, puis A. Au toucher, appuyer sur la carte. Changer de stage recharge la page et lance directement le stage choisi ; le stage 2 s’ouvre aussi à l’adresse **http://127.0.0.1:5173/?stage=jungle**.
 
-**Échap → Retour aux stages** permet de revenir au menu ; sélectionner de nouveau le stage 1 recommence la partie. La scène reste en attente dans le menu. Les effets respectent la préférence système de réduction des animations.
+**Échap → Retour aux stages** permet de revenir au menu ; sélectionner de nouveau le même stage recommence la partie. La scène reste en attente dans le menu. Les effets respectent la préférence système de réduction des animations.
 
 Pour observer le stormtrooper de face, de profil et de dos : **http://127.0.0.1:5173/stormtrooper.html**. Cette vue utilise le même modèle et les mêmes animations que le jeu.
 
@@ -110,6 +110,16 @@ Sur écran tactile, le joystick et le bouton de course apparaissent automatiquem
 - Géométrie 3D, ombres dynamiques, réflexion planaire, lumière bleue et halo. Rendu à résolution réduite agrandi en nearest-neighbor ; le halo lumineux est calculé avant cet agrandissement.
 
 Le modèle du personnage a été créé pour ce prototype. Le corps est un maillage continu dont les sommets se déforment avec un squelette de 22 os compatible Mixamo, y compris aux articulations. Un étalonnage propre au personnage lit l’éclairage froid du laboratoire comme une lumière neutre chaude, pour garder les bruns de la référence ; seule la lueur du sabre reste bleue. Les mouvements proviennent des captures Mixamo distribuées avec les exemples three.js (`Xbot.glb`) ; seules les rotations utiles sont conservées dans `src/mocap-clips.js`. Les textures et les polices sont locales. Aucun compte ni accès Internet n’est nécessaire pour jouer une fois les fichiers présents.
+
+## Stage 2 — Jungle (prototype)
+
+Une clairière rectangulaire de 24 × 18 m, la nuit, pour éprouver la physique, les nouveaux modèles et le combat avant de bâtir le niveau complet. Le Jedi arrive du côté proche d’un ruisseau ; de l’autre côté, des ruines où l’escouade monte la garde. Le déroulé est le même qu’au stage 1 : l’escouade, puis une escorte qui sort du sentier entre deux piliers au fond, puis le Jedi.
+
+- **Eau** (`src/water.js`) : ruisseau et mares d’eau claire turquoise, plus sombre là où c’est profond. La surface est une simulation d’ondes (équation des ondes sur une grille de 8 cm, renvoyées par les berges) : chaque pas dans l’eau creuse des ronds qui s’élargissent, quiconque y marche laisse un sillage, un corps qui tombe, un tir ou une grenade font jaillir des gouttes qui retombent en petits ronds. Reflets de la lune et des lampes des ruines sur les rides, écume sur les bords et là où l’eau est agitée, nénuphars qui suivent les vagues. Le fond se voit au travers, teinté, traversé de caustiques.
+- **Sable** : chaque pas s’imprime dans le sable humide et y reste longtemps (environ cinq minutes), en plus des empreintes rouges ; rien sur les dalles de pierre, une gerbe dans l’eau.
+- **Végétation** (`src/vegetation.js`) : herbes de toutes longueurs, roseaux au bord de l’eau, fougères, plantes à larges feuilles, des milliers de plantes en instances. Tout bouge sans cesse au vent, par rafales, chaque plante avec sa propre phase et un frémissement rapide au bout des feuilles. Le Jedi, les soldats (debout ou à terre) et la lame tenue bas les écartent en passant. Les coups de sabre coupent les plantes à la hauteur où la lame est passée et projettent des morceaux de feuilles qui voltigent puis se posent. Une explosion couche la végétation dans le sens du souffle, puis elle se redresse en oscillant.
+- **Air** (`src/jungle-air.js`) : des colonnes de clair de lune traversent la canopée (passe volumétrique, comme les lampes des fusils dans le noir au stage 1) ; poussières et pollens n’y sont visibles que là où une colonne ou une lampe les éclaire, et s’écartent au passage du Jedi et de sa lame. Des lucioles clignotent au ras des plantes et fuient quand on s’approche.
+- **Ruines** : blocs de pierre couverts de coussins de mousse, bandes lumineuses chaudes et diodes rouges encastrées ; rochers ; grands troncs et lianes autour de la clairière, jungle épaisse au-delà des bords.
 
 ## Sabotage et salle dans le noir
 
@@ -247,7 +257,11 @@ Pour régénérer les animations : télécharger https://threejs.org/examples/mo
 - `src/reinforcements.js` : l’escorte par la grande porte (alarme, ouverture, sortie un par un, fermeture), appelée par le déroulé de la partie.
 - `src/duel.js` : le Jedi au sabre rouge — son entrée par la porte, puis le duel (règles `src/duel-rules.js`, adversaire `src/duel-ai.js`, lames vivantes `src/duel-blades.js`, coupe finale `src/duel-finisher.js`).
 - `src/music.js` : la musique de son entrée et du duel, synthétisée en Web Audio.
-- `src/lab.js` : caisses, barils, barrières détaillés, lumières au sol, panneaux rouges hachurés, collisions, lignes de vue et abris.
+- `src/lab.js` : caisses, barils, barrières détaillés, lumières au sol, panneaux rouges hachurés, collisions, lignes de vue et abris (`obstacleQueries`, partagé avec la jungle).
+- `src/jungle.js` : stage 2, la clairière : sol peint, ruines, rochers, sentier d’entrée, postes de l’escouade, branchement de l’eau, des plantes, de l’air et des empreintes dans le sable.
+- `src/water.js` : eau simulée (ondes, sillages, éclaboussures, gouttes, nénuphars).
+- `src/vegetation.js` : plantes en instances animées par le vent, écartées, coupées et soufflées dans le shader.
+- `src/jungle-air.js` : poussières éclairées par les colonnes de lune et les lampes, lucioles.
 - `src/saber-scars.js` : traînées incandescentes du sabre sur les objets, les murs et le sol, et entailles persistantes.
 - `src/arena.js` : la salle (murs, piliers, consoles, fenêtre, porte, rambardes, niveau inférieur, grilles, bandes de danger, lumières).
 - `src/kit.js` : assemblage des décors en maillages fusionnés, lumières au sol instanciées, halos, respiration des lumières, couleurs sûres sous le tone mapping.
