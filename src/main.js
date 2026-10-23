@@ -87,8 +87,13 @@ function init() {
 
   // ?stage=jungle: level 2, a clearing in the jungle at night, in place of the lab.
   const LEVEL = new URLSearchParams(location.search).get('stage') === 'jungle' ? 'jungle' : 'lab';
-  const jungle = LEVEL === 'jungle' ? createJungle(scene, { renderer }) : null;
-  if (jungle) jungleLighting(scene, lighting);
+  // The jungle by night, at random each time it is launched (?night=1 or ?night=0 to choose): as
+  // the lab after the blackout — only the ruins' lamps lit, the dust thick before them, the
+  // troopers' rifle lamps on, and they see less far.
+  const nightAsked = new URLSearchParams(location.search).get('night');
+  const JUNGLE_NIGHT = LEVEL === 'jungle' && (nightAsked === null ? Math.random() < 0.5 : nightAsked !== '0');
+  const jungle = LEVEL === 'jungle' ? createJungle(scene, { renderer, night: JUNGLE_NIGHT }) : null;
+  if (jungle) jungleLighting(scene, lighting, { night: JUNGLE_NIGHT });
   // Keep the hero below centre so the jungle's paths and distant ruins lead
   // into the view, with less foreground foliage between him and the camera.
   const stageViewOffset = new THREE.Vector3(jungle ? -1.8 : 0, 0, jungle ? -2.3 : 0);
@@ -264,7 +269,7 @@ function init() {
   const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
   const flashlights = createFlashlights(scene, { lab, bounds: arena.bounds });
   // What may light the red stains in the dark: the rifle lamps, their spills, the blade.
-  const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights];
+  const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights, ...(jungle?.lamps ?? [])];
   const nav = createNav(lab, BOUNDS);
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
@@ -400,7 +405,7 @@ function init() {
     reset();
     // The power back on, the transformer as new.
     plunge = null;
-    night = 0;
+    night = JUNGLE_NIGHT ? 1 : 0;
     blackout = null;
     cascade = [];
     power.level = 1;
@@ -626,10 +631,10 @@ function init() {
   // running through the fittings, the mains hum sinking into silence. Then the
   // dark: the troopers' rifle lamps clicking on one by one, the blade's glow
   // the only light round the hero.
-  let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
+  let plunge = null, night = JUNGLE_NIGHT ? 1 : 0, blackout = null, cascade = [], flashAge = Infinity;
   /** In the dark a blade lights more of the room round it. */
   // In the dark (the room after the blackout, the jungle at night) the blade lights further and brighter.
-  function nightBlade(blade) { const dark = jungle ? 0.5 : night; blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * dark; light.distance = [3.2, 2.6][index] + 2.2 * dark; }); }
+  function nightBlade(blade) { const dark = jungle ? Math.max(0.5, night) : night; blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * dark; light.distance = [3.2, 2.6][index] + 2.2 * dark; }); }
   const flashEl = $('#flash'), promptEl = $('#prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
   function startPlunge() {
     const s = transformer.socket, a = transformer.approach;
@@ -1174,7 +1179,7 @@ function init() {
     // The moonlight through the canopy: wide, faint, cold shafts in the damp air.
     const shafts = new BeamPass(camera, () => jungle.air.beams), u = shafts.material.uniforms;
     u.tint.value.setRGB(0.55, 0.8, 0.9);
-    u.level.value = 0.2; u.spread.value = 0.13; u.full.value = 11; u.haze.value = 0.4;
+    u.level.value = JUNGLE_NIGHT ? 0.05 : 0.2; u.spread.value = 0.13; u.full.value = 11; u.haze.value = 0.4;
     composer.addPass(shafts);
   }
   const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), jungle ? 0.32 : 0.45, 0.15, jungle ? 1.4 : 1.15);
@@ -1216,7 +1221,7 @@ function init() {
   let stageStarted = false;
   // The menu's other stage is another page: the level is built once, at load.
   const autoplay = new URLSearchParams(location.search).has('play');
-  if (autoplay) history.replaceState(null, '', jungle ? '?stage=jungle' : location.pathname);
+  if (autoplay) history.replaceState(null, '', jungle ? `?stage=jungle${nightAsked === null ? '' : `&night=${nightAsked}`}` : location.pathname);
   const stageMenu = createStageMenu({
     initial: jungle ? 1 : 0,
     onStart(number) {
@@ -1224,7 +1229,7 @@ function init() {
       if (wanted !== LEVEL) { location.assign(wanted === 'jungle' ? '?stage=jungle&play' : '?play'); return; }
       if (stageStarted) restart();
       stageStarted = true;
-      document.title = jungle ? 'STARWARD — Stage 2 : Jungle' : 'STARWARD — Stage 1 : Intérieur';
+      document.title = jungle ? `STARWARD — Stage 2 : Jungle${JUNGLE_NIGHT ? ' de nuit' : ''}` : 'STARWARD — Stage 1 : Intérieur';
       $('#pause-overlay .eyebrow').textContent = jungle ? 'STARWARD / STAGE 2' : 'STARWARD / STAGE 1';
       $('#game').inert = false;
       setPause(false);
@@ -1802,7 +1807,8 @@ function init() {
       if (duel.present) stirs.push({ at: duel.enemy.tip.clone(), speed: Math.min(12, duel.enemy.swing.length()) });
       for (const trooper of flashlights.update(sim, { troopers, hero: character.root.position, night, stirs })) audio.click(trooper.root.position);
       if (jungle) jungle.update(sim, { time, actors: jungleActors(swing), stirs, fog: scene.fog, lights: duel.present ? [...saber.lights, ...duel.enemy.saber.lights] : saber.lights, focus: playerPosition });
-      lightStains(power.level, stainLights);
+      // In the dark the stains show only in the light that falls on them (the rifle lamps, the blade, the ruins' lamps).
+      lightStains(night ? 0 : power.level, stainLights);
       // A finisher landing jolts the view.
       if (action.shake > lastActionShake + 0.05) { trauma.add(action.shake * 0.5); rumble(0.5 * action.shake, 0.4, 0.15); }
       lastActionShake = action.shake;
@@ -1879,7 +1885,7 @@ function init() {
   }
   // Read-only diagnostics for regression checks; this does not drive gameplay.
   window.__STARWARD__ = {
-    level: LEVEL, jungle,
+    level: LEVEL, jungle, jungleNight: JUNGLE_NIGHT,
     // Game feel settings, tweakable live from the console.
     feel: FEEL,
     /** Runs the game for some seconds without waiting for the display (checks, hidden windows). */

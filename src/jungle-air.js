@@ -7,14 +7,20 @@ import * as THREE from 'three';
  * or a lamp of the ruins lights them, whirled aside by whoever goes through —
  * and fireflies wandering low over the plants, blinking.
  *
- * createJungleAir(scene, { bounds, shafts, lamps }) — shafts: [{ at, forward,
+ * On a black night (`night`) the moon barely comes through: the dust hangs
+ * thick before the lamps of the ruins instead, warm in their light.
+ *
+ * createJungleAir(scene, { bounds, shafts, lamps, night }) — shafts: [{ at, forward,
  * length }]; lamps: point lights. `beams` for the beam pass; update(dt, { time, stirs }).
  */
-export function createJungleAir(scene, { bounds, shafts = [], lamps = [], random = Math.random } = {}) {
+export function createJungleAir(scene, { bounds, shafts = [], lamps = [], night = false, random = Math.random } = {}) {
   const group = new THREE.Group();
   group.name = 'Jungle air';
   scene.add(group);
-  const beams = shafts.map(shaft => ({ lens: shaft.at.clone(), forward: shaft.forward.clone().normalize(), length: shaft.length, on: shaft.strength ?? 1, light: null }));
+  const beams = shafts.map(shaft => ({ lens: shaft.at.clone(), forward: shaft.forward.clone().normalize(), length: shaft.length, on: (shaft.strength ?? 1) * (night ? 0.25 : 1), light: null }));
+  // Where the dust hangs: in the shafts, before the lamps, anywhere (shares).
+  const [inShafts, byLamps] = night ? [0.15, 0.85] : [0.65, 0.85];
+  const lampReach = night ? 3.2 : 2.6, lampGlow = night ? 1.25 : 0.9;
 
   // ---- Motes ----------------------------------------------------------------------
   const MOTES = 900;
@@ -24,12 +30,12 @@ export function createJungleAir(scene, { bounds, shafts = [], lamps = [], random
     // Most hang in the shafts, the rest round the lamps and anywhere.
     let x, y, z;
     const pick = random();
-    if (pick < 0.65 && beams.length) {
+    if (pick < inShafts && beams.length) {
       const beam = beams[i % beams.length], along = random() * beam.length * 0.95, radius = 0.12 * along * random();
       const side = new THREE.Vector3(random() - 0.5, random() - 0.5, random() - 0.5).normalize().multiplyScalar(radius);
       const p = beam.lens.clone().addScaledVector(beam.forward, along).add(side);
       x = p.x; y = Math.max(0.15, p.y); z = p.z;
-    } else if (pick < 0.85 && lamps.length) {
+    } else if (pick < byLamps && lamps.length) {
       const lamp = lamps[i % lamps.length].position;
       x = lamp.x + (random() - 0.5) * 3; y = 0.2 + random() * 2.6; z = lamp.z + (random() - 0.5) * 3;
     } else {
@@ -86,8 +92,8 @@ export function createJungleAir(scene, { bounds, shafts = [], lamps = [], random
     }
     for (const lamp of lamps) {
       const d = lamp.position.distanceTo(p);
-      if (d > 2.6) continue;
-      const share = (1 - d / 2.6) ** 2 * 0.9;
+      if (d > lampReach) continue;
+      const share = (1 - d / lampReach) ** 2 * lampGlow;
       out.r += warm.r * share; out.g += warm.g * share; out.b += warm.b * share;
     }
     return out;

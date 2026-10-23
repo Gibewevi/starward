@@ -74,7 +74,7 @@ function createPassage(obstacles) {
 }
 const ROCKS = [[-3, 2.1, 0.55], [2.1, 4.6, 0.45], [10.2, 2.6, 0.6], [-9.6, 4.2, 0.55], [6.4, 8.2, 0.4], [-1, -3.8, 0.4], [8.3, 4, 0.35]];
 
-export function createJungle(scene, { renderer = null, random = Math.random } = {}) {
+export function createJungle(scene, { renderer = null, random = Math.random, night = false } = {}) {
   const group = new THREE.Group();
   group.name = 'Jungle';
   scene.add(group);
@@ -273,7 +273,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
     const forward = new THREE.Vector3(0.22, -1, 0.12).normalize();
     return { at: new THREE.Vector3(x, 0, z).addScaledVector(forward, -9), forward, length: 10.5, strength };
   });
-  const air = createJungleAir(scene, { bounds: B, shafts, lamps, random });
+  const air = createJungleAir(scene, { bounds: B, shafts, lamps, night, random });
   const prints = createFootprints(scene, { max: 900, tint: new THREE.Color(0.1, 0.075, 0.05), linger: [240, 300], name: 'Sand footprints' });
 
   // ---- The squad's posts: sentries by the ruins, two on rounds ------------------------------------
@@ -380,7 +380,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   const stage = { floor: ground, material: groundMaterial, roughnessTexture: null, bounds: B, update() {} };
   // The hero comes in from the near side of the stream, the ruins and the squad across it.
   const start = { x: 2, z: 7.6, heading: -2.47 };
-  return { bounds: B, start, lab, arena, stage, mirror, layout, posts, vegetation, water, air, prints, lamps, ruins, step, cut, blast, force, groundAt, bolt, landing, update, reset, inWater, waterDepth, slabs };
+  return { bounds: B, night, start, lab, arena, stage, mirror, layout, posts, vegetation, water, air, prints, lamps, ruins, step, cut, blast, force, groundAt, bolt, landing, update, reset, inWater, waterDepth, slabs };
 }
 
 /**
@@ -389,19 +389,24 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
  * below; the ruins' amber lamps, the blade and the blasts provide local
  * colour. A faint cold fill preserves the hero's silhouette.
  */
-export function jungleLighting(scene, lighting) {
-  scene.background = new THREE.Color(0x061015);
-  scene.fog = new THREE.FogExp2(0x0c1c22, 0.023);
-  scene.environmentIntensity = 0.22;
-  scene.traverse(object => { if (object.isHemisphereLight) { object.color.set(0x668892); object.groundColor.set(0x29251f); object.intensity = 1.15; } });
-  lighting.keyLight.color.set(0xa9bfdc);
-  lighting.keyLight.intensity = 3.1;
+export function jungleLighting(scene, lighting, { night = false } = {}) {
+  scene.background = new THREE.Color(night ? 0x020406 : 0x061015);
+  scene.fog = new THREE.FogExp2(night ? 0x04080b : 0x0c1c22, night ? 0.03 : 0.023);
+  scene.environmentIntensity = night ? 0.08 : 0.22;
+  scene.traverse(object => {
+    if (!object.isHemisphereLight) return;
+    object.color.set(night ? 0x2b3a58 : 0x668892);
+    object.groundColor.set(night ? 0x09090d : 0x29251f);
+    object.intensity = night ? 0.42 : 1.15;
+  });
+  lighting.keyLight.color.set(night ? 0x7d95c4 : 0xa9bfdc);
+  lighting.keyLight.intensity = night ? 0.5 : 3.1;
   lighting.keyLight.shadow.mapSize.set(2048, 2048);
   Object.assign(lighting.keyLight.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8 });
   lighting.keyLight.shadow.camera.updateProjectionMatrix();
   lighting.rimLight.color.set(0x6b9693);
-  lighting.rimLight.intensity = 0.8;
-  lighting.whiteStrip.intensity = 0.7;
+  lighting.rimLight.intensity = night ? 0.3 : 0.8;
+  lighting.whiteStrip.intensity = night ? 0.2 : 0.7;
   lighting.whiteStrip.color.set(0x9fc2c8);
   lighting.redStrip.intensity = 0;
 }

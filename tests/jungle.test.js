@@ -301,3 +301,23 @@ test('the Force through the plants: a push sweeps the cone outward, a pull draws
   plants.reset();
   assert.ok(plants.uniforms.uGustB.value.every(slot => slot.y === 0));
 });
+
+test('by night the moon barely comes through: the dust hangs before the ruins\' lamps instead', () => {
+  const day = createJungle(new THREE.Scene(), { random: seeded(18) });
+  const night = createJungle(new THREE.Scene(), { random: seeded(18), night: true });
+  assert.equal(night.night, true);
+  assert.ok(night.air.beams.every((beam, i) => beam.on <= day.air.beams[i].on * 0.25 + 1e-9), 'the shafts faint');
+  // Motes lit by the lamps (warm) rather than the shafts: more of them by night, round the lamps.
+  const nearLamps = jungle => {
+    jungle.air.update(1 / 60, { time: 1 });
+    const geometry = jungle.air.group.getObjectByName('Motes').geometry, position = geometry.attributes.position, glow = geometry.attributes.glow;
+    let lit = 0;
+    for (let i = 0; i < position.count; i++) {
+      if (glow.getX(i) < 0.1) continue;
+      const p = new THREE.Vector3().fromBufferAttribute(position, i);
+      if (jungle.lamps.some(lamp => lamp.position.distanceTo(p) < 2.6)) lit++;
+    }
+    return lit;
+  };
+  assert.ok(nearLamps(night) > nearLamps(day) * 1.8, `thick before the lamps (${nearLamps(night)} by night, ${nearLamps(day)} by day)`);
+});
