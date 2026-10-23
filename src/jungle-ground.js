@@ -26,8 +26,8 @@ export const fbm = (x, z) => valueNoise(x, z) * 0.6 + valueNoise(x * 2.1 + 5, z 
 const smooth = THREE.MathUtils.smoothstep;
 const mixRGB = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-const MUD = [0.19, 0.13, 0.085], DARK_MUD = [0.1, 0.07, 0.045], SAND = [0.36, 0.27, 0.17], MOSS = [0.11, 0.16, 0.065];
-const PUDDLE = [0.05, 0.055, 0.055], SLAB = [0.17, 0.175, 0.165], JOINT = [0.05, 0.06, 0.04];
+const MUD = [0.29, 0.235, 0.17], DARK_MUD = [0.15, 0.13, 0.105], SAND = [0.52, 0.43, 0.31], MOSS = [0.12, 0.19, 0.095];
+const PUDDLE = [0.055, 0.08, 0.095], SLAB = [0.21, 0.25, 0.29], JOINT = [0.045, 0.065, 0.055];
 /** The iron grate on the slabs: [x, z, width, depth]. */
 export const GRATE = [-1.4, -7.4, 1.4, 0.9];
 
@@ -54,7 +54,15 @@ export function createFloorLayout({ bounds: B, waterDepth, slabs }) {
   /** Wet earth by the water: 1 at the bank, 0 a metre and a half off. */
   const wetness = (x, z) => 1 - smooth(toWater(x, z), 0.1, 1.5);
   /** The trodden paths: winding bands of bare wet sand. */
-  const path = (x, z) => (slabs(x, z) ? 0 : 1 - smooth(Math.abs(fbm(x * 0.21 + 40, z * 0.21 - 13) - 0.5), 0.025, 0.06));
+  const path = (x, z) => {
+    if (slabs(x, z)) return 0;
+    const worn = 1 - smooth(Math.abs(fbm(x * 0.21 + 40, z * 0.21 - 13) - 0.5), 0.025, 0.06);
+    // A legible entrance from the spawn, continuing over the shallows into
+    // the clearing. Foliage clusters frame the hero instead of covering him.
+    const centre = 2 + Math.sin((7.6 - z) * 0.45) * 0.8;
+    const entrance = (1 - smooth(Math.abs(x - centre), 0.65, 1.3)) * smooth(z, -2, 0);
+    return Math.max(worn, entrance);
+  };
   /** Puddles in the low mud and on the slabs (0 dry → 1 standing water). */
   const puddle = (x, z) => {
     if (waterDepth(x, z) > 0) return 0;
@@ -87,7 +95,7 @@ export function paintJungleFloor({ bounds: B, waterDepth, slabs, layout, scale =
     c = mixRGB(c, MOSS, moss);
     r = Math.max(r, 0.92 * moss + r * (1 - moss));
     // The mud by the water: darker and glossy.
-    c = mixRGB(c, [c[0] * 0.55, c[1] * 0.6, c[2] * 0.62], wet * 0.8);
+    c = mixRGB(c, [c[0] * 0.7, c[1] * 0.76, c[2] * 0.8], wet * 0.75);
     r -= wet * 0.4;
     if (slabs(x, z)) {
       // Slabs: dark stone, a shade each, mossy joints, cracks; rain lies on them.
@@ -122,7 +130,10 @@ export function paintJungleFloor({ bounds: B, waterDepth, slabs, layout, scale =
       }
       if (fine < 0.015) c = c.map(v => v * 0.6);
     }
-    // Puddles: black standing water with a soft wet rim.
+    // Small wet grooves also catch the light along the trodden paths.
+    const rut = trail * (1 - smooth(Math.abs(Math.sin(x * 18 + z * 7 + n * 5)), 0.08, 0.26));
+    if (!slabs(x, z)) { r -= rut * 0.22; h -= rut * 0.06; }
+    // Puddles: dark standing water with a soft wet rim.
     if (pool > 0) {
       c = mixRGB(c, PUDDLE, pool * 0.75);
       r = r * (1 - pool) + 0.03 * pool;

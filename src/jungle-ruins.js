@@ -44,15 +44,15 @@ function plating() {
     const course = Math.floor(j / 16), row = j % 16, seam = (i + (course % 2) * 21) % 32;
     const groove = row === 0, lip = row === 1, edge = seam === 0, rivet = (row === 3 || row === 12) && (seam === 3 || seam === 28);
     const panel = hash(Math.floor((i + (course % 2) * 21) / 32), course);
-    let v = 0.105 + 0.035 * panel + 0.02 * hash(i * 0.7, j * 1.3);
+    let v = 0.19 + 0.05 * panel + 0.025 * hash(i * 0.7, j * 1.3);
     // Grime running down from the grooves.
     v *= 1 - 0.25 * Math.max(0, hash(i, course * 7) - 0.6) * (1 - row / 16);
     let r = 0.52 + 0.12 * panel;
     if (groove || edge) { v = 0.035; r = 0.85; }
-    else if (lip) { v = 0.22; r = 0.35; }
-    else if (rivet) { v = 0.3; r = 0.3; }
+    else if (lip) { v = 0.34; r = 0.35; }
+    else if (rivet) { v = 0.42; r = 0.3; }
     const moss = !groove && hash(i * 3.3, j * 7.1) > 0.965 ? 1 : 0;
-    const c = moss ? [0.07, 0.12, 0.04] : [v * 0.97, v, v * 1.04];
+    const c = moss ? [0.07, 0.12, 0.04] : [v * 0.72, v * 0.92, v * 1.17];
     colour.data.set(c.map(value => value * 255).concat(255), (j * S + i) * 4);
     rough.data.set([r * 255, r * 255, r * 255, 255], (j * S + i) * 4);
   }
@@ -123,6 +123,12 @@ export function buildRuins(group, { random = Math.random } = {}) {
   for (const [x, z, w, h, d, lit, kind] of RUINS) {
     obstacles.push({ kind: kind === 'wall' ? 'pillar' : 'crate', min: new THREE.Vector3(x - w / 2, 0, z - d / 2), max: new THREE.Vector3(x + w / 2, h, z + d / 2), centre: new THREE.Vector3(x, h / 2, z) });
     plated.push(box(w, h, d, x, h / 2, z, 0.05));
+    // Raised corner rails and a bevelled plinth give each ruin a readable
+    // silhouette and catch the cold rim light between the ivy strands.
+    bands.push(box(w + 0.08, 0.12, d + 0.08, x, 0.12, z, 0.025));
+    for (const dx of [-1, 1]) for (const dz of [-1, 1]) {
+      bands.push(box(0.07, h - 0.2, 0.07, x + dx * (w / 2 - 0.025), h / 2, z + dz * (d / 2 - 0.025), 0.015));
+    }
     if (kind === 'wall') {
       // Bands round the tall ones: plates stacked.
       for (let y = 0.9 + random() * 0.4; y < h - 0.4; y += 0.9 + random() * 0.5) bands.push(box(w + 0.06, 0.1, d + 0.06, x, y, z, 0.03));
@@ -147,18 +153,24 @@ export function buildRuins(group, { random = Math.random } = {}) {
       // A white strip set in a dark frame, diodes beside it, a warm lamp in front.
       const normal = faceNormals[face], across = new THREE.Vector3(normal.z, 0, -normal.x);
       const out = (face[1] === 'x' ? w : d) / 2, span = face[1] === 'x' ? d : w;
-      const tall = Math.min(1.2, h * 0.5), mid = Math.min(h * 0.55, h - tall / 2 - 0.15);
+      const tall = Math.min(2.4, h * 0.65), mid = Math.min(h * 0.55, h - tall / 2 - 0.15);
       const offset = (random() - 0.5) * span * 0.4;
       const centre = new THREE.Vector3(x, mid, z).addScaledVector(normal, out).addScaledVector(across, offset);
       const flat = (a, b, c) => (face[1] === 'x' ? new THREE.BoxGeometry(c, b, a) : new THREE.BoxGeometry(a, b, c));
       frames.push(flat(0.16, tall + 0.1, 0.04).translate(centre.x, centre.y, centre.z));
       const strip = centre.clone().addScaledVector(normal, 0.022);
       strips.push(flat(0.06, tall, 0.02).translate(strip.x, strip.y, strip.z));
+      // Small metal braces break up the luminous panel like the old fixtures
+      // in the ruins, while preserving an unbroken pool of light below it.
+      for (const t of [-0.27, 0.27]) {
+        const brace = strip.clone().addScaledVector(normal, 0.018);
+        frames.push(flat(0.13, 0.035, 0.025).translate(brace.x, brace.y + tall * t, brace.z));
+      }
       for (let k = 0; k < 3; k++) {
         const led = centre.clone().addScaledVector(normal, 0.012).addScaledVector(across, 0.17).setY(centre.y + tall / 2 - 0.08 - k * 0.09);
         leds.push(flat(0.045, 0.045, 0.02).translate(led.x, led.y, led.z));
       }
-      const lamp = new THREE.PointLight(0xffd6a8, 5, 6.5, 1.7);
+      const lamp = new THREE.PointLight(0xffba78, 8.5, 6.5, 1.8);
       lamp.position.copy(centre).addScaledVector(normal, 0.45);
       group.add(lamp);
       lamps.push(lamp);
@@ -173,13 +185,17 @@ export function buildRuins(group, { random = Math.random } = {}) {
     }
   }
 
+  // The open doorway above the reinforcement trail: only overhead dressing,
+  // keeping the existing path and collision geometry unchanged.
+  plated.push(box(3.2, 0.48, 1.2, 4, 3.85, -8.4, 0.06));
+  bands.push(box(3.35, 0.1, 1.3, 4, 4.11, -8.4, 0.025));
   const plating = platedMaterial();
   const ledMaterial = new THREE.MeshBasicMaterial({ name: 'red diodes', color: new THREE.Color(2.6, 0.12, 0.08), toneMapped: false });
   const parts = [
     [plated, plating, 'Ruins', true],
     [bands, plating, 'Ruin bands', true],
     [frames, new THREE.MeshStandardMaterial({ color: 0x0b0c0d, roughness: 0.4, metalness: 0.6 }), 'Ruin light frames', false],
-    [strips, new THREE.MeshBasicMaterial({ name: 'ruin light strips', color: new THREE.Color(2.6, 2.4, 2.05), toneMapped: false }), 'Ruin lights', false],
+    [strips, new THREE.MeshBasicMaterial({ name: 'ruin light strips', color: new THREE.Color(4.5, 3.05, 1.65), toneMapped: false }), 'Ruin lights', false],
     [leds, ledMaterial, 'Ruin diodes', false],
     [mossy, new THREE.MeshStandardMaterial({ color: 0x2a3d1c, roughness: 0.95 }), 'Moss', true],
   ];

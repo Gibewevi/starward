@@ -42,7 +42,7 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
     rectMin: { value: new THREE.Vector2(rect.minX, rect.minZ) }, rectSize: { value: new THREE.Vector2(width, length) },
     time: { value: 0 }, viewDir: { value: new THREE.Vector3(-8, -8.2, -10).normalize() },
     moonDir: { value: new THREE.Vector3(0.4, 0.8, 0.45).normalize() }, moonColor: { value: new THREE.Color(0.55, 0.7, 0.9) },
-    shallow: { value: new THREE.Color(0.035, 0.22, 0.21) }, deep: { value: new THREE.Color(0.008, 0.06, 0.075) }, sky: { value: new THREE.Color(0.02, 0.05, 0.06) },
+    shallow: { value: new THREE.Color(0.018, 0.065, 0.072) }, deep: { value: new THREE.Color(0.006, 0.016, 0.026) }, sky: { value: new THREE.Color(0.02, 0.035, 0.055) },
     glintPos: { value: glints.map(g => g.position) }, glintColor: { value: glints.map(g => g.color) },
     fogColor: { value: new THREE.Color() }, fogDensity: { value: 0 },
   };
@@ -84,19 +84,23 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
         vec3 colour = mix(water, sky, fresnel * 0.6);
         // The moon, and the lamps of the ruins, glinting on the ripples.
         vec3 r = reflect(-eye, n);
-        colour += moonColor * pow(max(dot(r, moonDir), 0.0), 40.0) * 0.9;
+        // Broken pinpoints on the pixel grid, rather than a broad milky disk.
+        vec2 pixel = floor(vWorld.xz * 28.0);
+        float sparkle = fract(sin(dot(pixel, vec2(127.1, 311.7))) * 43758.5453);
+        float broken = smoothstep(0.3, 0.85, sparkle + sin(time * 1.2 + pixel.y * 0.6) * 0.12);
+        colour += moonColor * pow(max(dot(r, moonDir), 0.0), 110.0) * 0.45 * broken;
         for (int i = 0; i < ${GLINTS}; i++) {
           vec3 toLight = glintPos[i] - vWorld; float far = length(toLight);
           // Sharp: a lamp makes a bright streak on the ripples, not a sheen over the whole stream.
           float s = pow(max(dot(r, toLight / far), 0.0), 90.0) / (1.0 + far * far * 0.12);
-          colour += glintColor[i] * s * 3.5;
+          colour += glintColor[i] * s * 4.0 * (0.2 + broken * 0.8);
         }
         // Foam along the edge, and where the water is churned.
         float churn = clamp(abs(dx) * 18.0 + abs(dz) * 18.0, 0.0, 1.0);
         float foam = smoothstep(0.2, 0.04, depth) * (0.55 + 0.45 * sin(vWorld.x * 23.0 + time * 2.0) * sin(vWorld.z * 19.0 - time * 1.7)) + churn * 0.35;
-        colour = mix(colour, vec3(0.32, 0.46, 0.44), clamp(foam * 0.6, 0.0, 0.45));
+        colour = mix(colour, vec3(0.13, 0.23, 0.24), clamp(foam * 0.35, 0.0, 0.3));
         // Clear: the bed shows through at the edges, and what the floor below mirrors (main.js).
-        float alpha = mix(0.3, 0.72, smoothstep(0.05, 0.8, depth)) + fresnel * 0.15 + foam * 0.12;
+        float alpha = mix(0.3, 0.58, smoothstep(0.05, 0.8, depth)) + fresnel * 0.15 + foam * 0.12;
         float fog = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
         gl_FragColor = vec4(mix(colour, fogColor, fog), clamp(alpha, 0.0, 1.0));
         #include <colorspace_fragment>

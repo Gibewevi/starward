@@ -70,7 +70,7 @@ function fernGeometry({ fronds = 7, seed = 5 } = {}) {
   for (let f = 0; f < fronds; f++) {
     const yaw = (f / fronds) * Math.PI * 2 + random() * 0.6, reach = 0.7 + random() * 0.35, rise = 0.5 + random() * 0.4;
     const dir = [Math.sin(yaw), Math.cos(yaw)], side = [Math.cos(yaw), -Math.sin(yaw)];
-    const dark = [0.025, 0.09, 0.03], light = mix([0.14, 0.36, 0.08], [0.34, 0.5, 0.12], random() * random());
+    const dark = [0.005, 0.022, 0.012], light = mix([0.025, 0.105, 0.028], [0.16, 0.23, 0.035], random() * random());
     const at = t => [dir[0] * reach * t, rise * Math.sin(Math.PI * t * 0.82) + 0.02, dir[1] * reach * t];
     // The stalk: a thin ribbon.
     let previous = null;
@@ -82,7 +82,7 @@ function fernGeometry({ fronds = 7, seed = 5 } = {}) {
     }
     // The leaflets: a pair at each step, swept towards the tip, longest mid-frond, drooping.
     for (let i = 1; i < SEG; i++) {
-      const t = i / SEG, length = 0.17 * Math.sin(Math.PI * Math.min(1, t * 1.05)) ** 0.6 + 0.02, step = 0.5 / SEG;
+      const t = i / SEG, length = 0.23 * Math.sin(Math.PI * Math.min(1, t * 1.05)) ** 0.6 + 0.025, step = 0.62 / SEG;
       const a = at(t - step), b = at(t + step), base = at(t);
       const colour = mix(dark, light, Math.min(1, 0.35 + t * 0.8)), tipColour = mix(colour, light, 0.6);
       for (const sign of [-1, 1]) {
@@ -107,13 +107,13 @@ function broadleafGeometry({ leaves = 6, seed = 7 } = {}) {
     s.quad(a, b, c, d);
     // The leaf: an oval fanned round its midrib, from the stem's top outward and down.
     const length = 0.5 + random() * 0.25, width = 0.2 + random() * 0.08, droop = 0.18 + random() * 0.2;
-    const leaf = mix([0.03, 0.13, 0.05], [0.09, 0.27, 0.1], random());
+    const leaf = mix([0.008, 0.04, 0.016], [0.035, 0.105, 0.026], random());
     const centre = s.vertex(cx + dir[0] * length * 0.5, stemHeight - droop * 0.35, cz + dir[1] * length * 0.5, leaf, 0.85);
     const rim = [];
     for (let i = 0; i < RIM; i++) {
       const angle = (i / RIM) * Math.PI * 2, along = (Math.cos(angle) * 0.5 + 0.5) * length, across = Math.sin(angle) * width * Math.sin(Math.PI * along / length + 0.15);
       // Folded along the midrib: the edges lower than the middle.
-      rim.push(s.vertex(cx + dir[0] * along + side[0] * across, stemHeight - droop * (along / length) ** 2 - Math.abs(across) * 0.45, cz + dir[1] * along + side[1] * across, mix(leaf, [0.16, 0.36, 0.12], along / length * 0.6), 0.7 + 0.3 * along / length));
+      rim.push(s.vertex(cx + dir[0] * along + side[0] * across, stemHeight - droop * (along / length) ** 2 - Math.abs(across) * 0.45, cz + dir[1] * along + side[1] * across, mix(leaf, [0.065, 0.17, 0.035], along / length * 0.6), 0.7 + 0.3 * along / length));
     }
     for (let i = 0; i < RIM; i++) s.indices.push(centre, rim[i], rim[(i + 1) % RIM]);
   }
@@ -126,7 +126,7 @@ function broadleafGeometry({ leaves = 6, seed = 7 } = {}) {
  * the vertex shader. Its shadow (`depth`) sways with it.
  */
 function plantMaterial(uniforms) {
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.62, metalness: 0, envMapIntensity: 0.3 });
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.86, metalness: 0, envMapIntensity: 0.08 });
   const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
   material.onBeforeCompile = shader => sway(shader, uniforms);
   depth.onBeforeCompile = shader => sway(shader, uniforms);

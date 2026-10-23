@@ -89,6 +89,9 @@ function init() {
   const LEVEL = new URLSearchParams(location.search).get('stage') === 'jungle' ? 'jungle' : 'lab';
   const jungle = LEVEL === 'jungle' ? createJungle(scene, { renderer }) : null;
   if (jungle) jungleLighting(scene, lighting);
+  // Keep the hero below centre so the jungle's paths and distant ruins lead
+  // into the view, with less foreground foliage between him and the camera.
+  const stageViewOffset = new THREE.Vector3(jungle ? -1.8 : 0, 0, jungle ? -2.3 : 0);
   const BOUNDS = jungle ? jungle.bounds : ARENA;
   // The deck, closed at the back by walls, open at the front over a lower level.
   const stage = jungle ? jungle.stage : createStage(scene, { bounds: ARENA });
@@ -147,7 +150,7 @@ function init() {
   const toStart = () => {
     if (START) Object.assign(motion, { x: START.x, z: START.z, heading: START.heading });
     character.root.position.set(motion.x, 0, motion.z);
-    cameraFocus.set(motion.x, 0.6, motion.z);
+    cameraFocus.set(motion.x, 0.6, motion.z).add(stageViewOffset);
   };
   toStart();
   character.root.rotation.y = motion.heading;
@@ -614,7 +617,7 @@ function init() {
   let plunge = null, night = 0, blackout = null, cascade = [], flashAge = Infinity;
   /** In the dark a blade lights more of the room round it. */
   // In the dark (the room after the blackout, the jungle at night) the blade lights further and brighter.
-  function nightBlade(blade) { const dark = jungle ? 1 : night; blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * dark; light.distance = [3.2, 2.6][index] + 2.2 * dark; }); }
+  function nightBlade(blade) { const dark = jungle ? 0.5 : night; blade.lights.forEach((light, index) => { light.intensity *= 1 + 0.8 * dark; light.distance = [3.2, 2.6][index] + 2.2 * dark; }); }
   const flashEl = $('#flash'), promptEl = $('#prompt'), prompt = createPixelPrompt(promptEl.querySelector('canvas'));
   function startPlunge() {
     const s = transformer.socket, a = transformer.approach;
@@ -1157,22 +1160,24 @@ function init() {
     // The moonlight through the canopy: wide, faint, cold shafts in the damp air.
     const shafts = new BeamPass(camera, () => jungle.air.beams), u = shafts.material.uniforms;
     u.tint.value.setRGB(0.55, 0.8, 0.9);
-    u.level.value = 0.35; u.spread.value = 0.13; u.full.value = 11; u.haze.value = 0.6;
+    u.level.value = 0.2; u.spread.value = 0.13; u.full.value = 11; u.haze.value = 0.4;
     composer.addPass(shafts);
   }
-  const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), 0.45, 0.15, 1.15);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(640, 400), jungle ? 0.32 : 0.45, 0.15, jungle ? 1.4 : 1.15);
   composer.addPass(bloom);
   if (jungle) {
     // The jungle closes in at the edges of the view.
     composer.addPass(new ShaderPass({
-      name: 'Vignette', uniforms: { tDiffuse: { value: null }, strength: { value: 0.6 } },
+      name: 'Vignette', uniforms: { tDiffuse: { value: null }, strength: { value: 0.42 } },
       vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       fragmentShader: `uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;
         void main() { vec4 c = texture2D(tDiffuse, vUv); float d = length((vUv - 0.5) * vec2(1.15, 1.0)); gl_FragColor = vec4(c.rgb * (1.0 - strength * smoothstep(0.3, 0.8, d)), c.a); }`,
     }));
   }
   composer.addPass(new OutputPass());
-  let pixelSize = 4, viewHeight = 8.2, desiredHeight = 8.2;
+  let pixelSize = jungle ? 2 : 4, viewHeight = jungle ? 12 : 8.2, desiredHeight = viewHeight;
+  $('#pixel-size').value = String(pixelSize);
+  $('#camera-zoom').value = String(viewHeight);
   function resize() {
     const width = window.innerWidth, height = window.innerHeight;
     const renderWidth = Math.max(1, Math.floor(width / pixelSize));
@@ -1763,7 +1768,7 @@ function init() {
       lean.lerp(leanTarget, 1 - Math.exp(-1.6 * sim));
       // In the duel the view frames both fighters.
       if (duelView) targetFocus.copy(duelView.focus);
-      else targetFocus.set(motion.x + motion.vx * 0.16 + lean.x, 0.6, motion.z + motion.vz * 0.16 + lean.z);
+      else targetFocus.set(motion.x + motion.vx * 0.16 + lean.x, 0.6, motion.z + motion.vz * 0.16 + lean.z).add(stageViewOffset);
       cameraFocus.lerp(targetFocus, 1 - Math.exp(-(duelView ? 5 : 7) * sim));
       stage.update({ time, playerPosition });
       lab.update(time);

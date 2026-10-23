@@ -11,7 +11,7 @@ import { createFootprints } from './footprints.js';
 /**
  * Level 2 — the jungle: for now a rectangle of it, to try the physics, the
  * new models and the fight in. Night under the canopy: wet sand and dark
- * earth, old stone slabs where ruins stood, a clear turquoise stream winding
+ * earth, old stone slabs where ruins stood, a dark blue-green stream winding
  * across with pools, mossy ruin blocks still lit by warm strips of light,
  * rocks, and plants everywhere — grass of every height, ferns, broad leaves,
  * reeds along the water — all of it moving.
@@ -35,7 +35,7 @@ const B = JUNGLE;
 /** The stream's middle line at x, its half width, and the pools: how deep the water is (0 dry → 1). */
 function waterDepth(x, z) {
   const centre = 3.2 + Math.sin(x * 0.32) * 1.4 + Math.sin(x * 0.81 + 1.3) * 0.5;
-  const half = 1.25 + 0.45 * Math.sin(x * 0.53 + 2) + 0.25 * valueNoise(x * 0.8, 9);
+  const half = 1.05 + 0.35 * Math.sin(x * 0.53 + 2) + 0.25 * valueNoise(x * 0.8, 9);
   let depth = 1 - Math.abs(z - centre) / half;
   for (const [px, pz, r] of [[6.5, 6.4, 2.3], [-8, -0.4, 1.4], [-2.2, 6.6, 1.3]]) depth = Math.max(depth, 1 - Math.hypot(x - px, z - pz) / (r * (0.9 + 0.2 * valueNoise(x * 1.1, z * 1.1))));
   return Math.max(0, Math.min(1, depth * 1.6));
@@ -89,8 +89,8 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   const layout = createFloorLayout({ bounds: B, waterDepth, slabs });
   const floor = paintJungleFloor({ bounds: B, waterDepth, slabs, layout });
   const groundMaterial = new THREE.MeshStandardMaterial({
-    name: 'jungle floor', map: floor.map, roughnessMap: floor.roughnessMap, bumpMap: floor.bumpMap, bumpScale: 1.2,
-    roughness: 1, metalness: 0, envMapIntensity: 0.12,
+    name: 'jungle floor', map: floor.map, roughnessMap: floor.roughnessMap, bumpMap: floor.bumpMap, bumpScale: 0.11,
+    roughness: 1, metalness: 0.08, envMapIntensity: 0.25,
   });
   groundMaterial.onBeforeCompile = shader => {
     shader.uniforms.tDepth = { value: water.depthTexture };
@@ -105,7 +105,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
       if (under > 0.01) {
         // The stream's bed: dark, tinted by the water over it, crossed by the light the ripples gather.
         float caustic = pow(abs(sin(vGround.x * 3.1 + time * 0.9 + sin(vGround.z * 2.7 + time * 0.7)) * sin(vGround.z * 3.4 - time * 0.8 + sin(vGround.x * 2.2))), 6.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.35, 0.6, 0.58), smoothstep(0.0, 0.5, under)) * (1.0 - 0.45 * under) + vec3(0.06, 0.16, 0.15) * caustic * (1.0 - under * 0.6);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.45, 0.65, 0.7), smoothstep(0.0, 0.5, under)) * (1.0 - 0.35 * under) + vec3(0.025, 0.065, 0.075) * caustic * (1.0 - under * 0.6);
       }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
       // Under the water the bed is wet, the surface does the shining.
@@ -172,7 +172,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   // ---- Plants -----------------------------------------------------------------------
   const place = kind => {
     const plants = [];
-    const target = { grass: 2500, reed: 280, fern: 600, broadleaf: 40 }[kind];
+    const target = { grass: 2250, reed: 220, fern: 560, broadleaf: 110 }[kind];
     for (let tries = 0; plants.length < target && tries < target * 30; tries++) {
       const x = B.minX + 0.3 + random() * (width - 0.6), z = B.minZ + 0.3 + random() * (length - 0.6);
       const wet = waterDepth(x, z), edge = Math.min(x - B.minX, B.maxX - x, z - B.minZ, B.maxZ - z);
@@ -182,15 +182,17 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
       const clump = fbm(x * 0.45 + 3, z * 0.45 - 2) + (edge < 2.2 ? 0.35 : 0) - (slabs(x, z) ? 0.35 : 0) - open * 0.9;
       if (kind === 'reed') {
         if (wet > 0.32 || (wet === 0 && layout.toWater(x, z) > 0.6)) continue;
-        plants.push({ x, z, height: 0.9 + random() * 0.75, size: 0.9 + random() * 0.4 });
+        if (layout.path(x, z) > 0.6) continue;
+        plants.push({ x, z, height: 0.55 + random() * 0.65, size: 0.8 + random() * 0.4 });
       } else if (wet > 0.04) continue;
       else if (kind === 'grass') {
         if (random() > clump * 1.3) continue;
         // Short in the open, tall in the clumps.
-        plants.push({ x, z, height: 0.18 + random() * 0.35 + clump * 0.6 * random(), size: 0.7 + random() * 0.6 });
+        plants.push({ x, z, height: 0.14 + random() * 0.24 + clump * 0.35 * random(), size: 0.75 + random() * 0.6 });
       } else {
         if (random() > clump * 1.1 - 0.2 + (edge < 2 ? 0.4 : 0)) continue;
-        plants.push(kind === 'fern' ? { x, z, height: 0.4 + random() * 0.55, size: 0.6 + random() * 0.55 } : { x, z, height: 0.45 + random() * 0.4, size: 0.5 + random() * 0.35 });
+        if (open > 0.55) continue;
+        plants.push(kind === 'fern' ? { x, z, height: 0.4 + random() * 0.5, size: 0.5 + random() * 0.45 } : { x, z, height: 0.4 + random() * 0.45, size: 0.5 + random() * 0.5 });
       }
     }
     // Beyond the edges, the jungle itself: thick and tall at the back, lower on
@@ -200,7 +202,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
       const x = B.minX - 3 + random() * (width + 8), z = B.minZ - 3 + random() * (length + 8);
       if (x > B.minX - 0.1 && x < B.maxX + 0.1 && z > B.minZ - 0.1 && z < B.maxZ + 0.1) continue;
       if (Math.abs(x - PASSAGE.x) < PASSAGE.width / 2 + 0.3 && z < B.minZ) continue;
-      const grow = x > B.maxX || z > B.maxZ ? 0.75 : 1.5;
+      const grow = x > B.maxX || z > B.maxZ ? 0.6 : 1.5;
       const shade = 0.45 + random() * 0.25;
       if (kind === 'grass') plants.push({ x, z, height: 0.5 + random() * 0.6, size: 1 + random() * 0.6, shade });
       else if (kind === 'fern') plants.push({ x, z, height: (0.6 + random() * 0.6) * grow, size: (1 + random() * 0.7) * grow, shade });
@@ -316,23 +318,23 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
 
 /**
  * Night under the canopy, from the lab's lighting: dark, the light where it
- * burns — a low cold moon (the key light, casting the shadows) barely there,
- * a dim blue-green sky, earth below; the ruins' lamps, the blade, the blasts
- * do the lighting. The studio strip over the hero is a faint cold fill.
+ * burns — a cold moon picking out the edges, a dim blue-green sky, earth
+ * below; the ruins' amber lamps, the blade and the blasts provide local
+ * colour. A faint cold fill preserves the hero's silhouette.
  */
 export function jungleLighting(scene, lighting) {
-  scene.background = new THREE.Color(0x040807);
-  scene.fog = new THREE.FogExp2(0x060c0b, 0.03);
-  scene.environmentIntensity = 0.1;
-  scene.traverse(object => { if (object.isHemisphereLight) { object.color.set(0x2c4d5c); object.groundColor.set(0x120d07); object.intensity = 0.55; } });
-  lighting.keyLight.color.set(0x87a8dc);
-  lighting.keyLight.intensity = 1.9;
+  scene.background = new THREE.Color(0x061015);
+  scene.fog = new THREE.FogExp2(0x0c1c22, 0.023);
+  scene.environmentIntensity = 0.22;
+  scene.traverse(object => { if (object.isHemisphereLight) { object.color.set(0x668892); object.groundColor.set(0x29251f); object.intensity = 1.15; } });
+  lighting.keyLight.color.set(0xa9bfdc);
+  lighting.keyLight.intensity = 3.1;
   lighting.keyLight.shadow.mapSize.set(2048, 2048);
   Object.assign(lighting.keyLight.shadow.camera, { left: -8, right: 8, top: 8, bottom: -8 });
   lighting.keyLight.shadow.camera.updateProjectionMatrix();
-  lighting.rimLight.color.set(0x3f6c66);
-  lighting.rimLight.intensity = 0.45;
-  lighting.whiteStrip.intensity = 2;
+  lighting.rimLight.color.set(0x6b9693);
+  lighting.rimLight.intensity = 0.8;
+  lighting.whiteStrip.intensity = 0.7;
   lighting.whiteStrip.color.set(0x9fc2c8);
   lighting.redStrip.intensity = 0;
 }
