@@ -106,3 +106,15 @@ body.god #god-badge{display:inline}
 .victory-card span{font-size:9px;letter-spacing:3px;color:#d6e8f6}
 @media(max-width:640px){#duel-hud{left:20px;right:20px;bottom:22px}}
 #god-badge{font-size:8px;letter-spacing:2px}
+
+/* The jungle's objective: the generators destroyed, and where those left are. */
+#objectives{position:fixed;top:40px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:5px;pointer-events:none;z-index:2;font-family:'Barlow Condensed',Arial,sans-serif;text-shadow:0 0 10px #000}
+#objectives b{font-size:11px;font-weight:600;letter-spacing:4px;color:#ff8a6a}
+#objectives span{font-size:20px;letter-spacing:3px;color:#f1e4d8}
+#objectives.pop span{animation:objective-pop .6s steps(6,end)}
+@keyframes objective-pop{0%{color:#fff;transform:scale(1.5)}100%{transform:scale(1)}}
+.generator-marker{position:fixed;left:0;top:0;width:0;height:0;pointer-events:none;z-index:2}
+.generator-marker i{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border:2px solid #ff7a3a;transform:rotate(45deg);background:#1a0a06cc;box-shadow:0 0 10px #ff5a2a88}
+.generator-marker b{position:absolute;left:-10px;top:-8px;width:20px;text-align:center;font:600 12px 'Barlow Condensed',Arial,sans-serif;color:#ffd9c4}
+.generator-marker.edge i{border-color:#ffb08a;transform:rotate(var(--turn,0rad)) rotate(45deg)}
+.generator-marker.edge i::after{content:'';position:absolute;right:-9px;top:-9px;width:7px;height:7px;border-top:2px solid #ffb08a;border-right:2px solid #ffb08a}

@@ -11,7 +11,7 @@ import { hash } from './jungle-ground.js';
  * them, a warm lamp pooling on the mud in front; ivy hanging down their faces
  * and over their tops, cushions of moss.
  *
- * buildRuins(group, { random }) → { obstacles, lamps, diodes, update(time) }.
+ * buildRuins(group, { blocks, random }) → { obstacles, lamps, zones, setZone(zone, level), update(time, dt) }.
  * The faces the camera sees are +x and +z: that is where the lights are.
  */
 // [x, z, width (x), height, depth (z), lit faces, kind]
@@ -101,9 +101,24 @@ function leafGeometry() {
   return geometry;
 }
 
-export function buildRuins(group, { random = Math.random } = {}) {
-  const obstacles = [], lamps = [], plated = [], bands = [], strips = [], frames = [], mossy = [], leds = [];
+/**
+ * Builds the ruins from `blocks` ([x, z, width, height, depth, lit faces, kind,
+ * zone]): kinds 'block', 'crate', 'wall' (tall, banded), 'core' (a generator's
+ * housing: red strips), 'tower' (a red banner on its lit face, a beacon on top).
+ * The lamps are positions to light ({ position, color, intensity, zone }), not
+ * lights: the stage lends its few real lights to the nearest. Each zone's
+ * light can be cut (setZone): its strips and lamps die, its cores go dark,
+ * only the diodes stay faintly on (battery-backed).
+ */
+export function buildRuins(group, { blocks = RUINS, posts = [], random = Math.random } = {}) {
+  const obstacles = [], lamps = [];
   const leaves = [];
+  // Every part, sorted by zone (each zone its own glowing materials, to be cut).
+  const zones = new Map();
+  const zoneOf = name => {
+    if (!zones.has(name)) zones.set(name, { level: 1, target: 1, stutter: 0, plated: [], bands: [], strips: [], frames: [], mossy: [], leds: [], cores: [], banners: [], beacons: [], poles: [], lanterns: [], lamps: [] });
+    return zones.get(name);
+  };
   const faceNormals = { '+x': new THREE.Vector3(1, 0, 0), '-x': new THREE.Vector3(-1, 0, 0), '+z': new THREE.Vector3(0, 0, 1), '-z': new THREE.Vector3(0, 0, -1) };
   const box = (w, h, d, x, y, z, radius = 0.04) => new RoundedBoxGeometry(w, h, d, 1, Math.min(radius, w / 4, h / 4, d / 4)).translate(x, y, z);
   /** Ivy down one face of a block from its top: strands of leaves, thicker near the corners. */
@@ -120,8 +135,10 @@ export function buildRuins(group, { random = Math.random } = {}) {
       }
     }
   }
-  for (const [x, z, w, h, d, lit, kind] of RUINS) {
-    obstacles.push({ kind: kind === 'wall' ? 'pillar' : 'crate', min: new THREE.Vector3(x - w / 2, 0, z - d / 2), max: new THREE.Vector3(x + w / 2, h, z + d / 2), centre: new THREE.Vector3(x, h / 2, z) });
+  for (const [x, z, w, h, d, lit, kind, zoneName = 'all'] of blocks) {
+    const zone = zoneOf(zoneName), { plated, bands, strips, frames, mossy, leds } = zone;
+    const tall = kind === 'wall' || kind === 'core' || kind === 'tower';
+    obstacles.push({ kind: tall ? 'pillar' : 'crate', min: new THREE.Vector3(x - w / 2, 0, z - d / 2), max: new THREE.Vector3(x + w / 2, h, z + d / 2), centre: new THREE.Vector3(x, h / 2, z) });
     plated.push(box(w, h, d, x, h / 2, z, 0.05));
     // Raised corner rails and a bevelled plinth give each ruin a readable
     // silhouette and catch the cold rim light between the ivy strands.
@@ -129,7 +146,7 @@ export function buildRuins(group, { random = Math.random } = {}) {
     for (const dx of [-1, 1]) for (const dz of [-1, 1]) {
       bands.push(box(0.07, h - 0.2, 0.07, x + dx * (w / 2 - 0.025), h / 2, z + dz * (d / 2 - 0.025), 0.015));
     }
-    if (kind === 'wall') {
+    if (tall) {
       // Bands round the tall ones: plates stacked.
       for (let y = 0.9 + random() * 0.4; y < h - 0.4; y += 0.9 + random() * 0.5) bands.push(box(w + 0.06, 0.1, d + 0.06, x, y, z, 0.03));
     } else if (random() < 0.7) {
@@ -139,40 +156,54 @@ export function buildRuins(group, { random = Math.random } = {}) {
     // Moss lying on top.
     for (let n = 0; n < 2; n++) {
       const mw = w * (0.25 + random() * 0.4), md = d * (0.25 + random() * 0.4);
-      mossy.push(box(mw, 0.04, md, x + (random() - 0.5) * (w - mw), h + 0.02 + (kind === 'block' ? 0.14 : 0), z + (random() - 0.5) * (d - md), 0.02));
+      mossy.push(box(mw, 0.04, md, x + (random() - 0.5) * (w - mw), h + 0.02 + (tall ? 0 : 0.14), z + (random() - 0.5) * (d - md), 0.02));
     }
     // Ivy over the faces the camera sees, more on the tall ones, and creeping over the top from the edges.
-    for (const face of ['+x', '+z']) ivy(x, z, w, h, d, face, kind === 'wall' ? 1.2 : 0.8);
-    const top = h + (kind === 'block' ? 0.14 : 0) + 0.01;
+    for (const face of ['+x', '+z']) ivy(x, z, w, h, d, face, tall ? (kind === 'wall' ? 1.2 : 0.5) : 0.8);
+    const top = h + (tall ? 0 : 0.14) + 0.01;
     for (let n = Math.round(w * d * 30); n > 0; n--) {
       const u = random() - 0.5, v = random() - 0.5, edge = Math.max(Math.abs(u), Math.abs(v));
       if (random() > edge * 2.2) continue;
       leaves.push({ at: new THREE.Vector3(x + u * w * 0.98, top, z + v * d * 0.98), normal: new THREE.Vector3(0, 1, 0), size: 0.07 + random() * 0.06, droop: 0.1, spin: random() * Math.PI * 2, flat: true });
     }
     for (const face of lit) {
-      // A white strip set in a dark frame, diodes beside it, a warm lamp in front.
       const normal = faceNormals[face], across = new THREE.Vector3(normal.z, 0, -normal.x);
       const out = (face[1] === 'x' ? w : d) / 2, span = face[1] === 'x' ? d : w;
-      const tall = Math.min(2.4, h * 0.65), mid = Math.min(h * 0.55, h - tall / 2 - 0.15);
-      const offset = (random() - 0.5) * span * 0.4;
-      const centre = new THREE.Vector3(x, mid, z).addScaledVector(normal, out).addScaledVector(across, offset);
       const flat = (a, b, c) => (face[1] === 'x' ? new THREE.BoxGeometry(c, b, a) : new THREE.BoxGeometry(a, b, c));
-      frames.push(flat(0.16, tall + 0.1, 0.04).translate(centre.x, centre.y, centre.z));
-      const strip = centre.clone().addScaledVector(normal, 0.022);
-      strips.push(flat(0.06, tall, 0.02).translate(strip.x, strip.y, strip.z));
-      // Small metal braces break up the luminous panel like the old fixtures
-      // in the ruins, while preserving an unbroken pool of light below it.
-      for (const t of [-0.27, 0.27]) {
-        const brace = strip.clone().addScaledVector(normal, 0.018);
-        frames.push(flat(0.13, 0.035, 0.025).translate(brace.x, brace.y + tall * t, brace.z));
+      if (kind === 'tower') {
+        // A red banner hanging down the face, an emblem on it; a red beacon on top.
+        const banner = new THREE.Vector3(x, h - 1.55, z).addScaledVector(normal, out + 0.02);
+        zone.banners.push(flat(0.78, 2.6, 0.02).translate(banner.x, banner.y, banner.z));
+        const mark = banner.clone().addScaledVector(normal, 0.012);
+        frames.push(flat(0.34, 0.34, 0.012).translate(mark.x, mark.y + 0.55, mark.z));
+        zone.beacons.push(new THREE.BoxGeometry(0.16, 0.16, 0.16).translate(x, h + 0.12, z));
+        const beacon = { position: new THREE.Vector3(x, h + 0.4, z).addScaledVector(normal, 0.6), color: new THREE.Color(1, 0.18, 0.12), base: 4, intensity: 4, zone: zoneName };
+        zone.lamps.push(beacon);
+        lamps.push(beacon);
+        continue;
+      }
+      // A strip set in a dark frame (white, or red on a generator's core), diodes beside it, a lamp in front.
+      const core = kind === 'core';
+      const length = Math.min(2.4, h * 0.65), mid = Math.min(h * 0.55, h - length / 2 - 0.15);
+      const offset = core ? 0 : (random() - 0.5) * span * 0.4;
+      const centre = new THREE.Vector3(x, mid, z).addScaledVector(normal, out).addScaledVector(across, offset);
+      for (const shift of core ? [-0.22, 0.22] : [0]) {
+        const at = centre.clone().addScaledVector(across, shift);
+        frames.push(flat(0.16, length + 0.1, 0.04).translate(at.x, at.y, at.z));
+        const strip = at.clone().addScaledVector(normal, 0.022);
+        (core ? zone.cores : strips).push(flat(0.06, length, 0.02).translate(strip.x, strip.y, strip.z));
+        // Small metal braces break up the luminous panel like the old fixtures.
+        for (const t of [-0.27, 0.27]) {
+          const brace = strip.clone().addScaledVector(normal, 0.018);
+          frames.push(flat(0.13, 0.035, 0.025).translate(brace.x, brace.y + length * t, brace.z));
+        }
       }
       for (let k = 0; k < 3; k++) {
-        const led = centre.clone().addScaledVector(normal, 0.012).addScaledVector(across, 0.17).setY(centre.y + tall / 2 - 0.08 - k * 0.09);
+        const led = centre.clone().addScaledVector(normal, 0.012).addScaledVector(across, core ? 0.45 : 0.17).setY(centre.y + length / 2 - 0.08 - k * 0.09);
         leds.push(flat(0.045, 0.045, 0.02).translate(led.x, led.y, led.z));
       }
-      const lamp = new THREE.PointLight(0xffba78, 8.5, 6.5, 1.8);
-      lamp.position.copy(centre).addScaledVector(normal, 0.45);
-      group.add(lamp);
+      const lamp = { position: centre.clone().addScaledVector(normal, 0.45), color: core ? new THREE.Color(1, 0.22, 0.14) : new THREE.Color(1, 0.73, 0.47), base: core ? 6 : 8.5, intensity: core ? 6 : 8.5, zone: zoneName };
+      zone.lamps.push(lamp);
       lamps.push(lamp);
     }
     // Diodes on most blocks, lit or not: a column of red points.
@@ -185,26 +216,46 @@ export function buildRuins(group, { random = Math.random } = {}) {
     }
   }
 
-  // The open doorway above the reinforcement trail: only overhead dressing,
-  // keeping the existing path and collision geometry unchanged.
-  plated.push(box(3.2, 0.48, 1.2, 4, 3.85, -8.4, 0.06));
-  bands.push(box(3.35, 0.1, 1.3, 4, 4.11, -8.4, 0.025));
-  const plating = platedMaterial();
-  const ledMaterial = new THREE.MeshBasicMaterial({ name: 'red diodes', color: new THREE.Color(2.6, 0.12, 0.08), toneMapped: false });
-  const parts = [
-    [plated, plating, 'Ruins', true],
-    [bands, plating, 'Ruin bands', true],
-    [frames, new THREE.MeshStandardMaterial({ color: 0x0b0c0d, roughness: 0.4, metalness: 0.6 }), 'Ruin light frames', false],
-    [strips, new THREE.MeshBasicMaterial({ name: 'ruin light strips', color: new THREE.Color(4.5, 3.05, 1.65), toneMapped: false }), 'Ruin lights', false],
-    [leds, ledMaterial, 'Ruin diodes', false],
-    [mossy, new THREE.MeshStandardMaterial({ color: 0x2a3d1c, roughness: 0.95 }), 'Moss', true],
-  ];
-  for (const [geometries, material, name, shadows] of parts) {
-    if (!geometries.length) continue;
-    const mesh = new THREE.Mesh(mergeGeometries(geometries.map(g => (g.index ? g.toNonIndexed() : g))), material);
-    mesh.name = name;
-    mesh.castShadow = mesh.receiveShadow = shadows;
-    group.add(mesh);
+  // Lamps on posts along the walkways and the paths (`posts`: { position, zone }): a lantern on a pole.
+  for (const { position: { x, z }, zone: zoneName = 'all' } of posts) {
+    const zone = zoneOf(zoneName);
+    zone.poles.push(box(0.09, 1.75, 0.09, x, 0.875, z, 0.02), box(0.26, 0.05, 0.26, x, 1.78, z, 0.01));
+    zone.lanterns.push(new THREE.BoxGeometry(0.15, 0.2, 0.15).translate(x, 1.64, z));
+    const lamp = { position: new THREE.Vector3(x, 1.55, z), color: new THREE.Color(1, 0.66, 0.36), base: 3.4, intensity: 3.4, zone: zoneName };
+    zone.lamps.push(lamp);
+    lamps.push(lamp);
+  }
+
+  const plating = platedMaterial(), frameMaterial = new THREE.MeshStandardMaterial({ color: 0x0b0c0d, roughness: 0.4, metalness: 0.6 });
+  const mossMaterial = new THREE.MeshStandardMaterial({ color: 0x2a3d1c, roughness: 0.95 });
+  const bannerMaterial = new THREE.MeshStandardMaterial({ name: 'banners', color: 0x8a0f0c, emissive: new THREE.Color(0.35, 0.02, 0.01), roughness: 0.8, side: THREE.DoubleSide });
+  const glow = {
+    strips: new THREE.Color(4.5, 3.05, 1.65), cores: new THREE.Color(4.2, 0.35, 0.18), leds: new THREE.Color(2.6, 0.12, 0.08), beacons: new THREE.Color(4, 0.2, 0.1), lanterns: new THREE.Color(3.4, 2.2, 1),
+  };
+  const poleMaterial = new THREE.MeshStandardMaterial({ name: 'lamp posts', color: 0x2c2016, roughness: 0.85 });
+  for (const [name, zone] of zones) {
+    zone.materials = {
+      strips: new THREE.MeshBasicMaterial({ name: 'ruin light strips', color: glow.strips.clone(), toneMapped: false }),
+      cores: new THREE.MeshBasicMaterial({ name: 'generator core strips', color: glow.cores.clone(), toneMapped: false }),
+      leds: new THREE.MeshBasicMaterial({ name: 'red diodes', color: glow.leds.clone(), toneMapped: false }),
+      beacons: new THREE.MeshBasicMaterial({ name: 'beacons', color: glow.beacons.clone(), toneMapped: false }),
+      lanterns: new THREE.MeshBasicMaterial({ name: 'lanterns', color: glow.lanterns.clone(), toneMapped: false }),
+    };
+    const parts = [
+      [zone.plated, plating, 'Ruins', true], [zone.bands, plating, 'Ruin bands', true], [zone.frames, frameMaterial, 'Ruin light frames', false],
+      [zone.strips, zone.materials.strips, 'Ruin lights', false], [zone.cores, zone.materials.cores, 'Generator cores', false],
+      [zone.leds, zone.materials.leds, 'Ruin diodes', false], [zone.mossy, mossMaterial, 'Moss', true],
+      [zone.banners, bannerMaterial, 'Banners', true], [zone.beacons, zone.materials.beacons, 'Beacons', false],
+      [zone.poles, poleMaterial, 'Lamp posts', true], [zone.lanterns, zone.materials.lanterns, 'Lanterns', false],
+    ];
+    for (const [geometries, material, label, shadows] of parts) {
+      if (!geometries.length) continue;
+      const mesh = new THREE.Mesh(mergeGeometries(geometries.map(g => (g.index ? g.toNonIndexed() : g))), material);
+      mesh.name = label;
+      mesh.userData.zone = name;
+      mesh.castShadow = mesh.receiveShadow = shadows;
+      group.add(mesh);
+    }
   }
 
   // The ivy: one instanced mesh of leaves, each facing out of its wall and drooping.
@@ -232,12 +283,30 @@ export function buildRuins(group, { random = Math.random } = {}) {
     ivyMesh.setColorAt(i, shade > 0.92 ? colour.setRGB(0.32, 0.42, 0.12) : colour.setRGB(0.06 + shade * 0.1, 0.13 + shade * 0.16, 0.04 + shade * 0.05));
   });
   ivyMesh.count = leaves.length;
+  ivyMesh.computeBoundingSphere();
   group.add(ivyMesh);
 
-  // The diodes blink, each column at its own slow pace.
-  function update(time) {
-    const on = 0.55 + 0.45 * Math.sin(time * 2.1) * Math.sin(time * 0.7 + 1);
-    ledMaterial.color.setRGB(2.6 * (0.45 + 0.55 * on), 0.12, 0.08);
+  /** A zone's light: on (1), cut (0) — dying with a stutter, or coming back. */
+  function setZone(name, level) {
+    const zone = zones.get(name);
+    if (!zone) return;
+    if (level < zone.target) zone.stutter = 0.45;
+    zone.target = level;
   }
-  return { obstacles, lamps, ivy: ivyMesh, update };
+  // The diodes blink; each zone's light follows its level (a last stutter as it is cut).
+  function update(time, dt = 1 / 60) {
+    const on = 0.55 + 0.45 * Math.sin(time * 2.1) * Math.sin(time * 0.7 + 1);
+    for (const zone of zones.values()) {
+      if (zone.stutter > 0) zone.stutter -= dt;
+      zone.level = zone.stutter > 0 && Math.sin(time * 60) > 0.2 ? zone.target + 0.6 * (1 - zone.target) : zone.target;
+      const k = zone.level, m = zone.materials;
+      m.strips.color.copy(glow.strips).multiplyScalar(k);
+      m.lanterns.color.copy(glow.lanterns).multiplyScalar(0.06 + 0.94 * k);
+      m.cores.color.copy(glow.cores).multiplyScalar(0.04 + 0.96 * k);
+      m.beacons.color.copy(glow.beacons).multiplyScalar((0.1 + 0.9 * k) * (Math.sin(time * 3.2) > -0.3 ? 1 : 0.15));
+      m.leds.color.copy(glow.leds).multiplyScalar((0.45 + 0.55 * on) * (0.3 + 0.7 * k));
+      for (const lamp of zone.lamps) lamp.intensity = lamp.base * k;
+    }
+  }
+  return { obstacles, lamps, ivy: ivyMesh, zones, setZone, update };
 }

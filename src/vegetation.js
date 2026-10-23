@@ -213,41 +213,51 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     fern: fernGeometry(),
     broadleaf: broadleafGeometry(),
   };
-  // One instanced mesh a kind; what each plant is, kept for the blade.
-  const kinds = {};
+  // Instanced meshes by kind and by patch of ground (CHUNK m a side), so that only the
+  // patches in view (and in the moon's shadow) are drawn; what each plant is, kept for the blade.
+  const CHUNK = 10, entries = [];
   for (const [kind, geometry] of Object.entries(shapes)) {
-    const plants = place(kind);
-    if (!plants.length) continue;
-    const mesh = new THREE.InstancedMesh(geometry, material, plants.length);
-    mesh.name = `Jungle ${kind}`;
-    mesh.receiveShadow = true;
-    // The big plants cast their shadows (swaying with them); the grass only takes them.
-    mesh.castShadow = kind !== 'grass';
-    mesh.customDepthMaterial = depth;
-    mesh.frustumCulled = false;
-    const phase = new Float32Array(plants.length), cut = new Float32Array(plants.length).fill(1);
-    const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), colour = new THREE.Color();
-    plants.forEach((plant, i) => {
-      phase[i] = random() * Math.PI * 2;
-      rotation.setFromAxisAngle(up, random() * Math.PI * 2);
-      mesh.setMatrixAt(i, matrix.compose(new THREE.Vector3(plant.x, 0, plant.z), rotation, new THREE.Vector3(plant.size, plant.height, plant.size)));
-      // Each its own green: lighter or darker, yellower or bluer; darker still in the thick of the jungle.
-      const shade = (0.7 + random() * 0.55) * (plant.shade ?? 1), warm = random() - 0.5;
-      mesh.setColorAt(i, colour.setRGB(shade * (1 + warm * 0.35), shade, shade * (1 - warm * 0.3)));
-    });
-    geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phase, 1));
-    const cutAttribute = new THREE.InstancedBufferAttribute(cut, 1).setUsage(THREE.DynamicDrawUsage);
-    geometry.setAttribute('aCut', cutAttribute);
-    group.add(mesh);
-    kinds[kind] = { mesh, plants, cut, cutAttribute, ...KINDS[kind] };
+    const patches = new Map();
+    for (const plant of place(kind)) {
+      const k = `${Math.floor(plant.x / CHUNK)},${Math.floor(plant.z / CHUNK)}`;
+      if (!patches.has(k)) patches.set(k, []);
+      patches.get(k).push(plant);
+    }
+    for (const plants of patches.values()) {
+      const shape = geometry.clone();
+      const mesh = new THREE.InstancedMesh(shape, material, plants.length);
+      mesh.name = `Jungle ${kind}`;
+      mesh.receiveShadow = true;
+      // The big plants cast their shadows (swaying with them); the grass only takes them.
+      mesh.castShadow = kind !== 'grass';
+      mesh.customDepthMaterial = depth;
+      const phase = new Float32Array(plants.length), cut = new Float32Array(plants.length).fill(1);
+      const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), colour = new THREE.Color();
+      plants.forEach((plant, i) => {
+        phase[i] = random() * Math.PI * 2;
+        rotation.setFromAxisAngle(up, random() * Math.PI * 2);
+        mesh.setMatrixAt(i, matrix.compose(new THREE.Vector3(plant.x, 0, plant.z), rotation, new THREE.Vector3(plant.size, plant.height, plant.size)));
+        // Each its own green: lighter or darker, yellower or bluer; darker still in the thick of the jungle.
+        const shade = (0.7 + random() * 0.55) * (plant.shade ?? 1), warm = random() - 0.5;
+        mesh.setColorAt(i, colour.setRGB(shade * (1 + warm * 0.35), shade, shade * (1 - warm * 0.3)));
+      });
+      shape.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phase, 1));
+      const cutAttribute = new THREE.InstancedBufferAttribute(cut, 1).setUsage(THREE.DynamicDrawUsage);
+      shape.setAttribute('aCut', cutAttribute);
+      // Culled by its patch's bounds, grown by how far the wind and a blast may bend it.
+      mesh.computeBoundingSphere();
+      mesh.boundingSphere.radius += 1.5;
+      group.add(mesh);
+      entries.push({ kind, mesh, plants, cut, cutAttribute, ...KINDS[kind] });
+    }
   }
   // A coarse grid of where the plants stand, for the blade.
   const CELL = 1, grid = new Map();
   const key = (x, z) => `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
-  for (const [kind, entry] of Object.entries(kinds)) entry.plants.forEach((plant, index) => {
+  for (const entry of entries) entry.plants.forEach((plant, index) => {
     const k = key(plant.x, plant.z);
     if (!grid.has(k)) grid.set(k, []);
-    grid.get(k).push({ kind, index });
+    grid.get(k).push({ entry, index });
   });
 
   // ---- Bits of leaf thrown by the blade ----------------------------------------
@@ -318,8 +328,8 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     let count = 0;
     for (let x = Math.floor(minX / CELL); x <= Math.floor(maxX / CELL); x++) {
       for (let z = Math.floor(minZ / CELL); z <= Math.floor(maxZ / CELL); z++) {
-        for (const { kind, index } of grid.get(`${x},${z}`) ?? []) {
-          const entry = kinds[kind], plant = entry.plants[index];
+        for (const { entry, index } of grid.get(`${x},${z}`) ?? []) {
+          const plant = entry.plants[index];
           if (entry.cut[index] < 0.12) continue;
           // Where the blade crosses the stem: nearest to it seen from above, at the height it has there.
           const reach = entry.radius * plant.size, standing = plant.height * entry.cut[index];
@@ -365,8 +375,8 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     let count = 0;
     for (let x = Math.floor((at.x - radius) / CELL); x <= Math.floor((at.x + radius) / CELL); x++) {
       for (let z = Math.floor((at.z - radius) / CELL); z <= Math.floor((at.z + radius) / CELL); z++) {
-        for (const { kind, index } of grid.get(`${x},${z}`) ?? []) {
-          const entry = kinds[kind], plant = entry.plants[index], l = Math.hypot(plant.x - at.x, plant.z - at.z);
+        for (const { entry, index } of grid.get(`${x},${z}`) ?? []) {
+          const plant = entry.plants[index], l = Math.hypot(plant.x - at.x, plant.z - at.z);
           if (l > radius || entry.cut[index] <= 0.06) continue;
           entry.cut[index] = l < radius * 0.75 ? 0 : 0.04 + 0.5 * (l / radius) ** 2;
           entry.cutAttribute.needsUpdate = true;
@@ -391,7 +401,7 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     updateBits(dt);
   }
   function reset() {
-    for (const entry of Object.values(kinds)) { entry.cut.fill(1); entry.cutAttribute.needsUpdate = true; }
+    for (const entry of entries) { entry.cut.fill(1); entry.cutAttribute.needsUpdate = true; }
     for (const b of bit) b.alive = false;
     for (const slot of blasts) slot.set(0, 0, -99, 0);
     for (const slot of gustB) slot.set(-99, 0, 1, 1);
@@ -399,7 +409,15 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
   return {
     group, update, cut, blast, gust, uproot, reset, uniforms,
     /** How many plants of each kind stand, and how many are cut. */
-    get counts() { return Object.fromEntries(Object.entries(kinds).map(([kind, entry]) => [kind, { plants: entry.plants.length, cut: entry.cut.filter(value => value < 1).length }])); },
+    get counts() {
+      const counts = {};
+      for (const entry of entries) {
+        const count = counts[entry.kind] ??= { plants: 0, cut: 0 };
+        count.plants += entry.plants.length;
+        count.cut += entry.cut.filter(value => value < 1).length;
+      }
+      return counts;
+    },
     get bits() { return bit.filter(b => b.alive).length; },
   };
 }

@@ -141,9 +141,9 @@ export const FEEL = {
     escort: 5, // men in the escort
     escortAfter: 2.5, // s after the squad's last man falls
     jediAfter: 3.5, // s after the escort's last man falls
-    // The jungle: no Jedi, three waves of men down the trail instead.
-    waves: [4, 5, 6], // men in each
-    waveAfter: 3, // s after the last man of a wave falls
+    // The jungle: no Jedi; each generator blown calls a wave of men down the trail.
+    waves: [3, 4, 5], // men in each, one wave after another
+    waveAfter: 2.5, // s after the last generator blows, the stage is won
   },
   // A bolt sent back into a trooper: in the head, or high on the chest (above this share from waist to neck), it
   // kills; elsewhere in the body he goes down alive and hurt, and waits for a squadmate.

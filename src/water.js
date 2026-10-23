@@ -22,7 +22,8 @@ import * as THREE from 'three';
  * createWater(scene, { rect, depthAt }) — depthAt(x, z): 0 dry, up to 1 at the
  * deepest. disturb(x, z, radius, amount); splash(at, strength, along);
  * shove(at, direction, { range, cone, power }) (power < 0 pulls);
- * crater(at, radius); depth(x, z); update(dt, { waders }); setGlints(lights).
+ * crater(at, radius); depth(x, z); update(dt, { waders, focus }) (with a focus, only
+ * the water within `reach` of it moves); setGlints(lights).
  */
 const GLINTS = 6;
 /** How far the surface rises and falls for a unit of the simulation's height (m). */
@@ -173,10 +174,12 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
   let accumulator = 0, filmed = false;
   // Where water spilt this step, for the drops thrown over the bank.
   const spills = [];
+  // The part of the water that moves: all of it, or (a big map) a window round the view.
+  const win = { i0: 1, i1: W - 1, j0: 1, j1: H - 1 };
   function simulate() {
     spills.length = 0;
-    for (let j = 1; j < H - 1; j++) {
-      for (let i = 1; i < W - 1; i++) {
+    for (let j = win.j0; j < win.j1; j++) {
+      for (let i = win.i0; i < win.i1; i++) {
         const k = j * W + i;
         if (mask[k] <= 0) continue;
         // Dry neighbours are the bank: the wave bounces off them.
@@ -199,7 +202,7 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
       }
     }
     // The level comes back slowly: no water is lost to the pushes.
-    for (let k = 0; k < height.length; k++) height[k] = (height[k] + speed[k]) * 0.99;
+    for (let j = win.j0; j < win.j1; j++) for (let k = j * W + win.i0, end = j * W + win.i1; k < end; k++) height[k] = (height[k] + speed[k]) * 0.99;
     if (filmed) spread();
     advanceShoves();
   }
@@ -207,8 +210,8 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
   function spread() {
     let left = 0;
     filmNext.set(film);
-    for (let j = 1; j < H - 1; j++) {
-      for (let i = 1; i < W - 1; i++) {
+    for (let j = win.j0; j < win.j1; j++) {
+      for (let i = win.i0; i < win.i1; i++) {
         const k = j * W + i, f = film[k];
         if (f < 1e-5 || mask[k] > 0) continue;
         // A share runs to each lower dry neighbour.
@@ -373,7 +376,11 @@ export function createWater(scene, { rect, depthAt, cell = 0.08, level = 0.035, 
 
   const matrix = new THREE.Matrix4(), quaternion = new THREE.Quaternion(), euler = new THREE.Euler(), place = new THREE.Vector3(), scale = new THREE.Vector3();
   /** Each frame: waders stir the water round their legs; the waves run; the pads ride them. */
-  function update(dt, { waders = [], time = 0, fog = null } = {}) {
+  function update(dt, { waders = [], time = 0, fog = null, focus = null, reach = 20 } = {}) {
+    if (focus) {
+      win.i0 = Math.max(1, Math.floor((focus.x - reach - rect.minX) / cell)); win.i1 = Math.min(W - 1, Math.ceil((focus.x + reach - rect.minX) / cell));
+      win.j0 = Math.max(1, Math.floor((focus.z - reach - rect.minZ) / cell)); win.j1 = Math.min(H - 1, Math.ceil((focus.z + reach - rect.minZ) / cell));
+    }
     for (const wader of waders) {
       if (wader.speed < 0.2 || depth(wader.x, wader.z) <= 0.02) continue;
       // Wading: the water is pushed ahead and closes behind, a wake.

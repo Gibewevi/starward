@@ -31,7 +31,7 @@ const PUDDLE = [0.055, 0.08, 0.095], SLAB = [0.21, 0.25, 0.29], JOINT = [0.045, 
 /** The iron grate on the slabs: [x, z, width, depth]. */
 export const GRATE = [-1.4, -7.4, 1.4, 0.9];
 
-export function createFloorLayout({ bounds: B, waterDepth, slabs }) {
+export function createFloorLayout({ bounds: B, waterDepth, slabs, paths = null }) {
   // How far each point is from the water, on a grid of 12.5 cm (a chamfer distance, two passes).
   const G = 8, GW = Math.round((B.maxX - B.minX) * G), GH = Math.round((B.maxZ - B.minZ) * G);
   const far = new Float32Array(GW * GH);
@@ -54,7 +54,8 @@ export function createFloorLayout({ bounds: B, waterDepth, slabs }) {
   /** Wet earth by the water: 1 at the bank, 0 a metre and a half off. */
   const wetness = (x, z) => 1 - smooth(toWater(x, z), 0.1, 1.5);
   /** The trodden paths: winding bands of bare wet sand. */
-  const path = (x, z) => {
+  // A map's own paths (0 → 1), or winding bands of sand.
+  const path = paths ? (x, z) => (slabs(x, z) ? 0 : paths(x, z)) : (x, z) => {
     if (slabs(x, z)) return 0;
     const worn = 1 - smooth(Math.abs(fbm(x * 0.21 + 40, z * 0.21 - 13) - 0.5), 0.025, 0.06);
     // A legible entrance from the spawn, continuing over the shallows into
@@ -72,13 +73,12 @@ export function createFloorLayout({ bounds: B, waterDepth, slabs }) {
   return { toWater, wetness, path, puddle };
 }
 
-export function paintJungleFloor({ bounds: B, waterDepth, slabs, layout, scale = 32 }) {
+export function paintJungleFloor({ bounds: B, waterDepth, slabs, layout, scale = 32, grates = [GRATE] }) {
   if (typeof document === 'undefined') return { map: null, roughnessMap: null, bumpMap: null };
   const W = Math.round((B.maxX - B.minX) * scale), H = Math.round((B.maxZ - B.minZ) * scale);
   const canvases = [0, 1, 2].map(() => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; });
   const images = canvases.map(c => c.getContext('2d').createImageData(W, H));
   const [colour, rough, height] = images.map(image => image.data);
-  const [gx, gz, gw, gd] = GRATE;
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
     const x = B.minX + (i + 0.5) / scale, z = B.minZ + (j + 0.5) / scale, k = (j * W + i) * 4;
     const n = fbm(x * 0.7, z * 0.7), grain = hash(i * 1.3, j * 0.7), fine = hash(i, j);
@@ -107,7 +107,9 @@ export function paintJungleFloor({ bounds: B, waterDepth, slabs, layout, scale =
       if (!joint && fbm(x * 4, z * 4) > 0.72) c = c.map(v => v * 0.75);
       r = joint ? 0.9 : 0.55 - 0.15 * hash(ti * 3, row * 5);
       h = joint ? 0 : bevel ? 0.55 : 0.7;
-      if (x > gx - gw / 2 && x < gx + gw / 2 && z > gz - gd / 2 && z < gz + gd / 2) {
+      const grate = grates.find(([gx, gz, gw, gd]) => x > gx - gw / 2 && x < gx + gw / 2 && z > gz - gd / 2 && z < gz + gd / 2);
+      if (grate) {
+        const [gx, gz, gw, gd] = grate;
         // The grate: iron bars over the dark.
         const bar = ((x - gx) * 12.5 % 1 + 1) % 1 < 0.38 || Math.abs(z - gz) > gd / 2 - 0.06 || Math.abs(x - gx) > gw / 2 - 0.06;
         c = bar ? [0.15, 0.15, 0.15] : [0.02, 0.02, 0.025];

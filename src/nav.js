@@ -7,11 +7,14 @@ import * as THREE from 'three';
  * A* over the grid (8 directions, no cutting corners) and straightens the
  * result: only the waypoints where the way really turns are kept.
  * lineFree(a, b) says whether a man can walk straight from a to b.
+ * `cost(point)` (≥ 1) makes some ground slower to cross — the marsh's water:
+ * the way found goes round it when it can (the walkways), and is not
+ * straightened across it.
  */
-export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 0.35 } = {}) {
+export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 0.35, cost = null } = {}) {
   const minX = bounds.minX + margin, minZ = bounds.minZ + margin;
   const cols = Math.max(1, Math.ceil((bounds.maxX - margin - minX) / cell)), rows = Math.max(1, Math.ceil((bounds.maxZ - margin - minZ) / cell));
-  const blocked = new Uint8Array(cols * rows);
+  const blocked = new Uint8Array(cols * rows), weight = new Float32Array(cols * rows).fill(1);
   const centre = (i, j, out = new THREE.Vector3()) => out.set(minX + (i + 0.5) * cell, 0, minZ + (j + 0.5) * cell);
   function rebuild() {
     const point = new THREE.Vector3();
@@ -19,6 +22,7 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
       centre(i, j, point);
       blocked[j * cols + i] = lab.obstacles.some(box => box.min.y < 1.2
         && point.x > box.min.x - clearance && point.x < box.max.x + clearance && point.z > box.min.z - clearance && point.z < box.max.z + clearance) ? 1 : 0;
+      if (cost) weight[j * cols + i] = Math.max(1, cost(point));
     }
   }
   rebuild();
@@ -40,12 +44,14 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
     }
     return null;
   }
-  /** Can he walk straight from a to b? */
-  function lineFree(a, b) {
+  /** Can he walk straight from a to b? (`cheap`: and without crossing slower ground than either end's.) */
+  function lineFree(a, b, cheap = false) {
     const dx = b.x - a.x, dz = b.z - a.z, length = Math.hypot(dx, dz), steps = Math.max(1, Math.ceil(length / (cell * 0.5)));
+    const [ai, aj] = cellOf(a), [bi, bj] = cellOf(b);
+    const most = cheap ? Math.max(inside(ai, aj) ? weight[aj * cols + ai] : 1, inside(bi, bj) ? weight[bj * cols + bi] : 1) : Infinity;
     for (let k = 0; k <= steps; k++) {
       const [i, j] = cellOf({ x: a.x + dx * k / steps, z: a.z + dz * k / steps });
-      if (!free(i, j)) return false;
+      if (!free(i, j) || weight[j * cols + i] > most) return false;
     }
     return true;
   }
@@ -57,7 +63,7 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
     const a = nearestFree(start), b = nearestFree(goal);
     if (!a || !b) return null;
     const end = free(...cellOf(goal)) ? goal.clone().setY(0) : centre(...b);
-    if (lineFree(start, end)) return [end];
+    if (lineFree(start, end, true)) return [end];
     search++;
     const startIndex = a[1] * cols + a[0], goalIndex = b[1] * cols + b[0];
     const heap = new MinHeap();
@@ -76,7 +82,7 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
         if (!free(ni, nj)) continue;
         // No cutting a corner diagonally.
         if (di && dj && (!free(i + di, j) || !free(i, j + dj))) continue;
-        const next = nj * cols + ni, score = g[index] + cost;
+        const next = nj * cols + ni, score = g[index] + cost * (weight[index] + weight[next]) / 2;
         if (stamp[next] === search && score >= g[next]) continue;
         stamp[next] = search; g[next] = score; from[next] = index;
         heap.push(next, score + h(next));
@@ -92,7 +98,7 @@ export function createNav(lab, bounds, { cell = 0.4, clearance = 0.33, margin = 
     let here = start.clone().setY(0), k = 0;
     while (k < cells.length) {
       let far = k;
-      for (let m = cells.length - 1; m > k; m--) if (lineFree(here, cells[m])) { far = m; break; }
+      for (let m = cells.length - 1; m > k; m--) if (lineFree(here, cells[m], true)) { far = m; break; }
       way.push(cells[far]);
       here = cells[far];
       k = far + 1;

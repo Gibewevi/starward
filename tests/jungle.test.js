@@ -98,25 +98,6 @@ test('wading stirs the water round the legs; standing still in it, or walking on
   assert.equal(water.energy, 0);
 });
 
-test('the clearing: the squad posted on dry ground clear of the ruins, the hero across the stream, all within reach', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(11) });
-  const nav = createNav(jungle.lab, jungle.bounds);
-  const start = new THREE.Vector3(jungle.start.x, 0, jungle.start.z);
-  assert.ok(nav.walkable(start) && !jungle.inWater(start), 'the hero starts on dry ground');
-  for (const post of jungle.posts) {
-    assert.ok(nav.walkable(post.position), 'a post where a man can stand');
-    assert.ok(jungle.lab.pushOut(post.position.clone(), 0.5).distanceTo(post.position) < 0.06, 'clear of the stones');
-    assert.ok(!jungle.inWater(post.position), 'out of the water');
-    assert.ok(nav.path(post.position, start), 'and a way to the hero');
-    for (const point of post.route ?? []) assert.ok(nav.walkable(point), 'his round on walkable ground');
-  }
-  assert.ok(patrolRounds({ lab: jungle.lab, nav, bounds: jungle.bounds }).length >= 4, 'rounds for the men who come later');
-  // Plants everywhere, none growing out of a stone.
-  const counts = jungle.vegetation.counts;
-  assert.ok(counts.grass.plants > 1500 && counts.fern.plants > 100 && counts.broadleaf.plants > 50 && counts.reed.plants > 100, JSON.stringify(counts));
-});
-
 test('the trail at the back is the squad\'s door: shut, it stops the hero; open, men come through it into the clearing', () => {
   const scene = new THREE.Scene();
   const jungle = createJungle(scene, { random: seeded(12) });
@@ -127,101 +108,15 @@ test('the trail at the back is the squad\'s door: shut, it stops the hero; open,
   let time = 0;
   for (let i = 0; i < 120; i++) jungle.arena.update(time += 1 / 60);
   assert.ok(door.isOpen);
-  const nav = createNav(jungle.lab, jungle.bounds);
+  const nav = createNav(jungle.lab, jungle.bounds, { cost: jungle.navCost });
   const threshold = door.centre.clone().addScaledVector(door.out, 0.7);
-  assert.ok(nav.walkable(threshold) && nav.path(threshold, new THREE.Vector3(0, 0, 0)), 'from the trail into the clearing');
+  assert.ok(nav.walkable(threshold) && nav.path(threshold, new THREE.Vector3(-14, 0, -14)), 'from the trail onto the command post');
   assert.ok(!jungle.lab.segmentHit(door.inside[2].clone().setY(1), threshold.clone().setY(1)), 'nothing in the way up the trail');
   door.close();
   for (let i = 0; i < 120; i++) jungle.arena.update(time += 1 / 60);
   assert.ok(door.isClosed && jungle.lab.obstacles.includes(door.shut), 'shut again');
   jungle.reset();
   assert.equal(door.openness, 0);
-});
-
-test('a foot on the sand leaves a print that stays; in the stream, a splash; on the old slabs, nothing', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(13) });
-  const along = new THREE.Vector3(0, 0, 1);
-  const sand = new THREE.Vector3(jungle.start.x, 0, jungle.start.z);
-  assert.equal(jungle.step(sand, along, 'L', FEEL.prints.hero, 1.5), 'sand');
-  assert.equal(jungle.prints.count, 1);
-  let stream = null;
-  for (let x = -8; x < 8 && !stream; x += 0.5) for (let z = -8; z < 8 && !stream; z += 0.25) if (jungle.waterDepth(x, z) > 0.6) stream = new THREE.Vector3(x, 0, z);
-  assert.ok(stream, 'there is water');
-  assert.equal(jungle.step(stream, along, 'R', FEEL.prints.hero, 3), 'water');
-  assert.ok(jungle.water.drops > 0, 'a splash');
-  assert.equal(jungle.prints.count, 1, 'no print in the water');
-  const slab = new THREE.Vector3(-3.5, 0, -7);
-  assert.ok(jungle.slabs(slab.x, slab.z));
-  jungle.step(slab, along, 'L', FEEL.prints.hero, 1.5);
-  assert.equal(jungle.prints.count, 1, 'none on stone');
-  // A minute and more later, the print is still there.
-  for (let i = 0; i < 90; i++) jungle.update(1, { time: i });
-  assert.equal(jungle.prints.count, 1, 'a print that lasts');
-  jungle.reset();
-  assert.equal(jungle.prints.count, 0);
-});
-
-test('a grenade in the clearing flattens the plants round it and heaves the water', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(14) });
-  let stream = null;
-  for (let x = -8; x < 8 && !stream; x += 0.5) for (let z = -8; z < 8 && !stream; z += 0.25) if (jungle.waterDepth(x, z) > 0.8) stream = new THREE.Vector3(x, 0, z);
-  jungle.blast(stream, 1);
-  assert.ok(jungle.vegetation.uniforms.uBlast.value.some(slot => slot.w > 0), 'the plants feel it');
-  assert.ok(jungle.water.drops > 20, 'water thrown up');
-  jungle.update(0.2, { time: 0.2 });
-  assert.ok(jungle.water.energy > 1, 'and rings');
-  assert.equal(jungle.bolt(new THREE.Vector3(jungle.start.x, 0, jungle.start.z)), false, 'a bolt into the sand: no splash');
-  assert.equal(jungle.bolt(stream), true, 'into the water: one');
-});
-
-test('the floor: puddles and paths of open mud, the banks wet, no puddle in the stream; the plants keep off the open mud', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(15) });
-  const { layout, waterDepth } = jungle;
-  let puddles = 0, paths = 0, wetBanks = 0, samples = 0;
-  for (let x = -11.5; x < 11.5; x += 0.25) for (let z = -8.5; z < 8.5; z += 0.25) {
-    samples++;
-    if (waterDepth(x, z) > 0) { assert.equal(layout.puddle(x, z), 0, 'no puddle in the stream'); assert.ok(layout.wetness(x, z) > 0.99); continue; }
-    if (layout.puddle(x, z) > 0.5) puddles++;
-    if (layout.path(x, z) > 0.5) paths++;
-    if (layout.wetness(x, z) > 0.5) wetBanks++;
-  }
-  assert.ok(puddles > samples * 0.01 && puddles < samples * 0.15, `puddles here and there (${puddles} of ${samples})`);
-  assert.ok(paths > samples * 0.03, `paths (${paths})`);
-  assert.ok(wetBanks > samples * 0.04, `wet banks (${wetBanks})`);
-  // Plants: few on the paths and in the puddles, compared with the ground they cover.
-  const grass = jungle.vegetation.group.getObjectByName('Jungle grass'), matrix = new THREE.Matrix4(), at = new THREE.Vector3();
-  let open = 0, inside = 0;
-  for (let i = 0; i < grass.count; i++) {
-    grass.getMatrixAt(i, matrix);
-    at.setFromMatrixPosition(matrix);
-    if (Math.abs(at.x) > 12 || Math.abs(at.z) > 9) continue;
-    inside++;
-    if (layout.puddle(at.x, at.z) > 0.5 || layout.path(at.x, at.z) > 0.9) open++;
-  }
-  assert.ok(open < inside * 0.05, `${open} of ${inside} tufts on open mud`);
-});
-
-test('the ruins: a lamp before every lit face, on the faces the camera sees; the blocks stand where the squad finds cover', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(16) });
-  assert.ok(jungle.lamps.length >= 8, `${jungle.lamps.length} lamps`);
-  for (const lamp of jungle.lamps) {
-    // In front of a block's +x or +z face: just outside its box, on that side.
-    const ruin = jungle.lab.obstacles.find(box => box.kind !== 'wall' && box.kind !== 'rock' && lamp.position.x > box.min.x - 0.6 && lamp.position.x < box.max.x + 0.6 && lamp.position.z > box.min.z - 0.6 && lamp.position.z < box.max.z + 0.6);
-    assert.ok(ruin, 'by a ruin');
-    assert.ok(lamp.position.x > ruin.max.x || lamp.position.z > ruin.max.z, 'on the side the camera sees');
-  }
-  const hero = new THREE.Vector3(jungle.start.x, 0, jungle.start.z);
-  const cover = jungle.lab.coverSpots(hero);
-  assert.ok(cover.length > 3, `cover from the hero behind the blocks (${cover.length} spots)`);
-  // The diodes blink.
-  jungle.ruins.update(0.3);
-  const led = scene.getObjectByName('Ruin diodes').material.color.r;
-  jungle.ruins.update(1.1);
-  assert.notEqual(scene.getObjectByName('Ruin diodes').material.color.r, led);
 });
 
 test('the Force drives the water against the bank: it spills over onto the mud, then soaks away', () => {
@@ -263,31 +158,6 @@ test('a blast in the water blows a hole in it; the water rushes back in and meet
   assert.ok(Math.abs(centre()) < 0.02, 'and calm again');
 });
 
-test('a grenade on the bank: a crater the stream pours into; in the open, the ground dug, the plants within its reach thrown, none beyond', () => {
-  const scene = new THREE.Scene();
-  const jungle = createJungle(scene, { random: seeded(17) });
-  const { water } = jungle;
-  // Just off the bank.
-  let bank = null;
-  for (let z = 3; z < 7 && !bank; z += 0.05) if (water.depth(-1, z) === 0) bank = z;
-  const shore = new THREE.Vector3(-1, 0, bank + 0.45);
-  assert.equal(water.depth(shore.x, shore.z), 0, 'dry before');
-  jungle.blast(shore, 1, 5);
-  assert.ok(water.depth(shore.x, shore.z) > 0.3, 'water in the crater');
-  assert.ok(jungle.groundAt(shore.x, shore.z) < -0.1, 'dug');
-  // In the open: a crater, the plants in it torn up, the blast reaching 5 m and no further.
-  const open = new THREE.Vector3(3.6, 0, -2.2);
-  assert.equal(jungle.groundAt(open.x, open.z), 0);
-  jungle.blast(open, 1, 5);
-  assert.ok(jungle.groundAt(open.x, open.z) < -0.12, 'a bowl');
-  assert.equal(jungle.groundAt(open.x + 3, open.z), 0, 'flat beyond');
-  const radii = jungle.vegetation.uniforms.uBlastRadius.value;
-  assert.ok(radii.includes(5), 'the blast reaches 5 m');
-  jungle.reset();
-  assert.equal(jungle.groundAt(open.x, open.z), 0, 'all as it was');
-  assert.equal(water.depth(shore.x, shore.z), 0);
-});
-
 test('the Force through the plants: a push sweeps the cone outward, a pull draws it in', () => {
   const plants = lawn();
   plants.update(1 / 60, { time: 1 });
@@ -320,4 +190,172 @@ test('by night the moon barely comes through: the dust hangs before the ruins\' 
     return lit;
   };
   assert.ok(nearLamps(night) > nearLamps(day) * 1.8, `thick before the lamps (${nearLamps(night)} by night, ${nearLamps(day)} by day)`);
+});
+
+// ---- The marsh ruins (stage 2's map) ------------------------------------------------------
+/** One marsh to look round (built once: a big map), and its way-finding. */
+let shared = null;
+function marsh() {
+  if (shared) return shared;
+  const scene = new THREE.Scene();
+  const jungle = createJungle(scene, { random: seeded(11) });
+  const generators = jungle.buildGenerators(null);
+  const nav = createNav(jungle.lab, jungle.bounds, { cost: jungle.navCost });
+  return (shared = { scene, jungle, generators, nav });
+}
+const ground = (x, z) => new THREE.Vector3(x, 0, z);
+
+test('the marsh ruins: the hero lands at the entry; every post, every generator and the command post within reach', () => {
+  const { jungle, generators, nav } = marsh();
+  const start = ground(jungle.start.x, jungle.start.z);
+  assert.ok(nav.walkable(start) && !jungle.inWater(start), 'he starts on dry ground');
+  assert.equal(generators.length, 4, 'four generators');
+  for (const g of generators) {
+    assert.ok(nav.walkable(g.approach), `${g.name}: room to stand before it`);
+    assert.ok(nav.path(start, g.approach), `${g.name}: a way there`);
+    assert.ok(!jungle.inWater(g.approach), `${g.name}: on dry ground`);
+  }
+  for (const post of jungle.posts) {
+    assert.ok(nav.walkable(post.position), 'a post where a man can stand');
+    assert.ok(!jungle.inWater(post.position), 'out of the water (or on a walkway)');
+    for (const point of post.route ?? []) assert.ok(nav.walkable(point), 'his round on walkable ground');
+  }
+  assert.ok(patrolRounds({ lab: jungle.lab, nav, bounds: jungle.bounds }).length >= 4, 'rounds for the men who come later');
+  const counts = jungle.vegetation.counts;
+  assert.ok(counts.grass.plants > 4000 && counts.fern.plants > 800 && counts.reed.plants > 800 && counts.broadleaf.plants > 100, JSON.stringify(counts));
+});
+
+test('the squad keeps to the walkways and the islands: the way to the command post goes over the planks, not through the marsh', () => {
+  const { jungle, nav } = marsh();
+  const way = nav.path(ground(jungle.start.x, jungle.start.z), ground(-14, -14));
+  assert.ok(way, 'a way');
+  let wet = 0, samples = 0, from = ground(jungle.start.x, jungle.start.z);
+  for (const point of way) {
+    for (let t = 0; t < 1; t += 0.05) {
+      const p = from.clone().lerp(point, t);
+      samples++;
+      if (jungle.inWater(p) && jungle.waterDepth(p.x, p.z) > 0.5) wet++;
+    }
+    from = point;
+  }
+  assert.ok(wet < samples * 0.08, `hardly a step in deep water (${wet} of ${samples})`);
+});
+
+test('four generators, each in its core; one blown cuts its zone\'s light, the others burn on; all back on a restart', () => {
+  const { jungle, generators } = marsh();
+  const centre = generators.find(g => g.name === 'centre');
+  const lampsOf = zone => jungle.lamps.filter(lamp => lamp.zone === zone);
+  assert.ok(lampsOf('centre').length > 2 && lampsOf('command').length > 2, 'lamps in each zone');
+  jungle.sabotaged(centre);
+  for (let i = 0; i < 60; i++) jungle.update(1 / 60, { time: i / 60 });
+  assert.ok(lampsOf('centre').every(lamp => lamp.intensity === 0), 'the centre dark');
+  assert.ok(lampsOf('command').every(lamp => lamp.intensity > 0), 'the command post still lit');
+  jungle.reset();
+  for (let i = 0; i < 2; i++) jungle.update(1 / 60, { time: i / 60 });
+  assert.ok(lampsOf('centre').every(lamp => lamp.intensity > 0), 'lit again');
+  // Its lamps share a few real lights, lent to the nearest.
+  jungle.update(1 / 60, { time: 1, focus: centre.socket });
+  const lit = jungle.lights.filter(light => light.intensity > 0);
+  assert.ok(lit.length > 0 && lit.length <= 8, `${lit.length} real lights`);
+  assert.ok(lit.every(light => light.position.distanceTo(centre.socket) < 18), 'round the view');
+});
+
+test('a foot on the sand leaves a print; in the marsh, a splash; on a walkway\'s planks or the slabs, nothing', () => {
+  const { jungle } = marsh();
+  const along = new THREE.Vector3(0, 0, 1);
+  jungle.prints.clear();
+  assert.equal(jungle.step(ground(16, 18.8), along, 'L', FEEL.prints.hero, 1.5), 'sand');
+  assert.equal(jungle.prints.count, 1);
+  let deep = null;
+  for (let x = -10; x < 10 && !deep; x += 0.5) for (let z = 5; z < 20 && !deep; z += 0.5) if (jungle.waterDepth(x, z) > 0.8 && jungle.groundAt(x, z) === 0) deep = ground(x, z);
+  assert.equal(jungle.step(deep, along, 'R', FEEL.prints.hero, 3), 'water');
+  assert.ok(jungle.water.drops > 0, 'a splash');
+  const deck = ground(7.4, 7.4);
+  assert.equal(jungle.step(deck, along, 'L', FEEL.prints.hero, 1.5), 'wood');
+  assert.ok(jungle.groundAt(deck.x, deck.z) > 0, 'up on the planks');
+  jungle.step(ground(0.5, 0.5), along, 'L', FEEL.prints.hero, 1.5);
+  assert.equal(jungle.prints.count, 1, 'none in the water, on wood or on stone');
+  jungle.reset();
+});
+
+test('the floor: puddles and paths of open mud, the banks wet, no puddle in the marsh; the plants keep off the paths', () => {
+  const { jungle } = marsh();
+  const { layout, waterDepth } = jungle;
+  let puddles = 0, paths = 0, wetBanks = 0, samples = 0;
+  for (let x = -21; x < 21; x += 0.5) for (let z = -21; z < 21; z += 0.5) {
+    samples++;
+    if (waterDepth(x, z) > 0) { assert.equal(layout.puddle(x, z), 0, 'no puddle in the marsh'); continue; }
+    if (layout.puddle(x, z) > 0.5) puddles++;
+    if (layout.path(x, z) > 0.5) paths++;
+    if (layout.wetness(x, z) > 0.5) wetBanks++;
+  }
+  assert.ok(puddles > 0 && puddles < samples * 0.1, `puddles here and there (${puddles} of ${samples})`);
+  assert.ok(paths > samples * 0.02, `paths (${paths})`);
+  assert.ok(wetBanks > samples * 0.04, `wet banks (${wetBanks})`);
+  const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
+  let open = 0, all = 0;
+  jungle.vegetation.group.traverse(mesh => {
+    if (!mesh.isInstancedMesh || mesh.name !== 'Jungle grass') return;
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getMatrixAt(i, matrix);
+      at.setFromMatrixPosition(matrix);
+      if (Math.abs(at.x) > 24 || Math.abs(at.z) > 24) continue;
+      all++;
+      if (layout.path(at.x, at.z) > 0.9) open++;
+    }
+  });
+  assert.ok(open < all * 0.03, `${open} of ${all} tufts on the paths`);
+});
+
+test('the ruins: their strips lit on the faces the camera sees; cover from the hero behind the blocks; the diodes blink', () => {
+  const { scene, jungle } = marsh();
+  const strips = jungle.lamps.filter(lamp => lamp.base >= 6);
+  assert.ok(strips.length >= 8, `${strips.length} lit strips`);
+  for (const lamp of strips) {
+    const ruin = jungle.lab.obstacles.find(box => box.kind !== 'wall' && lamp.position.x > box.min.x - 0.6 && lamp.position.x < box.max.x + 0.6 && lamp.position.z > box.min.z - 0.6 && lamp.position.z < box.max.z + 0.6);
+    assert.ok(ruin, 'by a ruin');
+    assert.ok(lamp.position.x > ruin.max.x - 0.01 || lamp.position.z > ruin.max.z - 0.01, 'on the side the camera sees');
+  }
+  const cover = jungle.lab.coverSpots(ground(0.5, 0.5));
+  assert.ok(cover.length > 3, `cover (${cover.length} spots)`);
+  const diodes = scene.getObjectByName('Ruin diodes').material;
+  jungle.ruins.update(0.3);
+  const before = diodes.color.r;
+  jungle.ruins.update(1.1);
+  assert.notEqual(diodes.color.r, before);
+});
+
+test('hidden in the marsh and the reeds, the hero is seen only closer; in the open, from as far as ever', () => {
+  const { jungle } = marsh();
+  assert.equal(jungle.seen(ground(0.5, 0.5)), 1, 'on the plaza');
+  let wading = null;
+  for (let x = -10; x < 0 && !wading; x += 0.5) for (let z = 10; z < 20 && !wading; z += 0.5) if (jungle.waterDepth(x, z) > 0.8 && jungle.groundAt(x, z) === 0) wading = ground(x, z);
+  assert.ok(jungle.seen(wading) < 0.75, `wading (${jungle.seen(wading).toFixed(2)})`);
+  assert.equal(jungle.seen(ground(7.4, 7.4)), 1, 'up on a walkway');
+});
+
+test('a grenade in the marsh blows the water open and heaves it; one on the bank opens a crater the water pours into; the ground is dug, the plants within its reach thrown, none beyond', () => {
+  const { jungle } = marsh();
+  const { water } = jungle;
+  let deep = null;
+  for (let x = -10; x < 10 && !deep; x += 0.5) for (let z = 5; z < 20 && !deep; z += 0.5) if (jungle.waterDepth(x, z) > 0.9 && jungle.groundAt(x, z) === 0) deep = ground(x, z);
+  jungle.blast(deep, 1, 5);
+  assert.ok(water.drops > 20, 'water thrown up');
+  jungle.update(0.2, { time: 0.2, focus: deep });
+  assert.ok(water.energy > 1, 'and rings');
+  assert.equal(jungle.bolt(ground(16, 18.8)), false, 'a bolt into the sand: no splash');
+  assert.equal(jungle.bolt(deep), true, 'into the water: one');
+  // Just off the centre island's shore, towards the east.
+  let bank = null;
+  for (let x = 2; x < 9 && !bank; x += 0.05) if (water.depth(x, -4) > 0) bank = x;
+  const shore = ground(bank - 0.45, -4);
+  assert.equal(water.depth(shore.x, shore.z), 0, 'dry before');
+  jungle.blast(shore, 1, 5);
+  assert.ok(water.depth(shore.x, shore.z) > 0.3, 'water in the crater');
+  assert.ok(jungle.groundAt(shore.x, shore.z) < -0.1, 'dug');
+  assert.equal(jungle.groundAt(shore.x - 3, shore.z - 3), 0, 'flat beyond');
+  assert.ok(jungle.vegetation.uniforms.uBlastRadius.value.includes(5), 'the blast reaches 5 m');
+  jungle.reset();
+  assert.equal(jungle.groundAt(shore.x, shore.z), 0, 'all as it was');
+  assert.equal(water.depth(shore.x, shore.z), 0);
 });

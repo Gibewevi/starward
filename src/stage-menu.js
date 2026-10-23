@@ -49,7 +49,7 @@ export function createStageMenu({ onStart, onHelp, onSettings, onFullscreen, isP
     notice.hidden = true;
     description.textContent = selected === 0
       ? 'Infiltrez le hangar. Affrontez l’escouade impériale.'
-      : 'Prototype : une clairière de jungle, la nuit. Eau, plantes, ruines.';
+      : 'Ruines du marais. Détruisez les quatre générateurs.';
     if (focus) cards[selected].focus({ preventScroll: true });
   }
 

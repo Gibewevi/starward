@@ -261,16 +261,18 @@ function init() {
   try { const saved = localStorage.getItem('starward.god'); if (saved !== null) godMode = saved === '1'; } catch { /* no storage */ }
   const blasters = createBlasters(scene, { effects, lab, marks });
   // The squad finds its way round the crates and walls on a navigation grid.
-  // In the back corner, the transformer the room's lights hang on (an obstacle like a crate).
-  const transformer = createTransformer(scene, { lab: jungle ? null : lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
-  // The lab's: not in the jungle.
-  transformer.group.visible = !jungle;
+  // In the back corner, the transformer the room's lights hang on (an obstacle like a crate);
+  // in the jungle, its four generators, each in its core. The one being sabotaged is `transformer`.
+  const transformers = jungle ? jungle.buildGenerators(effects) : [createTransformer(scene, { lab, effects, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) })];
+  let transformer = transformers[0];
+  /** The generator the hero standing here can run his blade into, if any. */
+  const reachableGenerator = () => transformers.find(t => t.reachable(character.root.position)) ?? null;
   // The room's power: every light of it follows one level; the rifle lamps for the dark.
-  const power = createPower({ scene, roots: [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
+  const power = createPower({ scene, roots: jungle ? [] : [{ group: lab.group, keep: FEEL.blackout.keep }, arena.group], lighting });
   const flashlights = createFlashlights(scene, { lab, bounds: arena.bounds });
   // What may light the red stains in the dark: the rifle lamps, their spills, the blade.
-  const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights, ...(jungle?.lamps ?? [])];
-  const nav = createNav(lab, BOUNDS);
+  const stainLights = [...flashlights.pool, ...flashlights.spills, ...saber.lights, ...(jungle?.lights ?? [])];
+  const nav = createNav(lab, BOUNDS, { cost: jungle?.navCost });
   const squad = createSquadMind({ troopers, lab, nav, alerts, posts: POSTS, cameraRight: screenRight });
   // Every so often the great door opens and three or four more march in.
   const reinforcements = createReinforcements({ door: arena.door });
@@ -298,16 +300,14 @@ function init() {
   // marches in through the great door; all of those down too, the Jedi comes alone.
   // In the jungle there is no Jedi: three waves of men come down the trail, one
   // after the other, each when the last is down.
-  const course = { stage: 'squad', clock: 0, wave: 0 };
+  // In the jungle: four generators to destroy, wherever the hero likes; each one blown sounds
+  // the alarm and a wave of men comes in down the trail behind the command post. The last blown, it is won.
+  const course = { stage: 'squad', clock: 0, wave: 0, destroyed: 0, pending: 0 };
   function courseStep(sim) {
-    if (jungle && (course.stage === 'squad' || course.stage === 'wave')) {
-      const cleared = !troopers.some(trooper => !trooper.dead) && reinforcements.phase === 'idle';
-      course.clock = cleared ? course.clock + sim : 0;
-      if (course.clock > (course.stage === 'squad' ? FEEL.course.escortAfter : FEEL.course.waveAfter)) {
-        if (course.wave < FEEL.course.waves.length) { reinforcements.summon(FEEL.course.waves[course.wave++]); course.stage = 'wave'; }
-        else course.stage = 'won';
-        course.clock = 0;
-      }
+    if (jungle && course.stage === 'squad') {
+      // The waves the alarms called, one through the trail after the other.
+      if (course.pending > 0 && reinforcements.phase === 'idle' && reinforcements.summon(FEEL.course.waves[Math.min(course.wave, FEEL.course.waves.length - 1)])) { course.pending--; course.wave++; }
+      if (course.destroyed >= transformers.length) { course.clock += sim; if (course.clock > FEEL.course.waveAfter) { course.stage = 'won'; course.clock = 0; } }
     } else if (course.stage === 'squad' || course.stage === 'escort') {
       // Nobody standing, and nobody still to come through the door.
       const cleared = !troopers.some(trooper => !trooper.dead) && reinforcements.phase === 'idle';
@@ -320,9 +320,42 @@ function init() {
       $('#victory').classList.toggle('on', course.clock > 2.4);
     }
   }
+  // The jungle's objective on screen: the generators destroyed, and a marker for each one left —
+  // over it in view, at the screen's edge pointing to it out of view.
+  const objectives = jungle ? Object.assign(document.createElement('div'), { id: 'objectives', innerHTML: '<b>GÉNÉRATEURS</b><span></span>' }) : null;
+  const generatorMarkers = jungle ? transformers.map((t, i) => Object.assign(document.createElement('div'), { className: 'generator-marker', innerHTML: `<i></i><b>${i + 1}</b>` })) : [];
+  if (objectives) document.body.append(objectives, ...generatorMarkers);
+  function showObjectives(pop = false) {
+    if (!objectives) return;
+    objectives.querySelector('span').textContent = `${course.destroyed} / ${transformers.length} DÉTRUITS`;
+    if (pop) { objectives.classList.remove('pop'); void objectives.offsetWidth; objectives.classList.add('pop'); }
+  }
+  const markerAt = new THREE.Vector3();
+  function markObjectives(hidden) {
+    if (!objectives) return;
+    objectives.hidden = hidden;
+    transformers.forEach((t, i) => {
+      const marker = generatorMarkers[i];
+      marker.hidden = hidden || t.state !== 'ready';
+      if (marker.hidden) return;
+      markerAt.copy(t.socket).setY(2.6).project(camera);
+      const w = window.innerWidth, h = window.innerHeight, margin = 34;
+      let x = (markerAt.x + 1) / 2 * w, y = (1 - markerAt.y) / 2 * h;
+      const inView = x > margin && x < w - margin && y > margin + 60 && y < h - margin;
+      if (!inView) {
+        // Along the line from the screen's centre, stopped at its edge.
+        const dx = x - w / 2, dy = y - h / 2, k = Math.min((w / 2 - margin) / Math.max(Math.abs(dx), 1e-3), (h / 2 - margin - 30) / Math.max(Math.abs(dy), 1e-3));
+        x = w / 2 + dx * k; y = h / 2 + dy * k;
+        marker.style.setProperty('--turn', `${Math.atan2(dy, dx) + Math.PI / 2}rad`);
+      }
+      marker.classList.toggle('edge', !inView);
+      marker.style.transform = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`;
+    });
+  }
+  showObjectives();
   /** Too many men in the room, dead ones included: the oldest bodies are cleared away. */
   function clearBodies() {
-    while (troopers.length > FEEL.reinforce.bodies) {
+    while (troopers.length > (jungle ? FEEL.reinforce.bodies + 12 : FEEL.reinforce.bodies)) {
       const old = troopers.find(trooper => trooper.dead && trooper.fallen && !trooper.impaled && trooper !== held && trooper !== skewered?.trooper);
       if (!old) break;
       old.dispose();
@@ -399,7 +432,8 @@ function init() {
     duelView = null;
     wasDueling = false;
     course.stage = 'squad';
-    course.clock = course.wave = 0;
+    course.clock = course.wave = course.destroyed = course.pending = 0;
+    showObjectives();
     $('#victory').classList.remove('on');
     resetTrooper();
     reset();
@@ -409,7 +443,8 @@ function init() {
     blackout = null;
     cascade = [];
     power.level = 1;
-    transformer.reset();
+    for (const t of transformers) t.reset();
+    transformer = transformers[0];
     flashlights.clear();
     streak = eliminated = criticalCount = 0;
     streakAge = streakBroken = Infinity;
@@ -667,7 +702,8 @@ function init() {
       return;
     }
     // (The blade off after a moment standing still: it lights as he draws it back.)
-    if (attackPressed && !down && !plunge && !death && !combat.busy && transformer.reachable(character.root.position)) { attackPressed = false; startPlunge(); }
+    const target = attackPressed && !down && !plunge && !death && !combat.busy ? reachableGenerator() : null;
+    if (target) { attackPressed = false; transformer = target; startPlunge(); }
   }
   function plungeStep(dt) {
     if (!plunge) return;
@@ -719,7 +755,14 @@ function init() {
     effects.smoulder(transformer.group, 25);
     audio.bang(s);
     noise(s, 16, { alarm: true, from: s });
-    blackout = { age: 0 };
+    // The lab's power dies with it; in the jungle, the generator's zone goes dark and the alarm calls men in.
+    if (!jungle) blackout = { age: 0 };
+    else {
+      jungle.sabotaged(transformer);
+      course.destroyed++;
+      if (course.destroyed < transformers.length) course.pending++;
+      showObjectives(true);
+    }
   }
   /** The power dies: lights out (with a last stutter), sparks racing through the fittings, the hum sinking. */
   function cutPower() {
@@ -1203,7 +1246,9 @@ function init() {
     const renderHeight = Math.max(1, Math.floor(height / pixelSize));
     renderer.setSize(renderWidth, renderHeight, false);
     composer.setSize(renderWidth, renderHeight);
-    reflection.getRenderTarget().setSize(renderWidth, renderHeight);
+    // The jungle's big wet floor is mirrored at half the resolution (it is blurred anyway).
+    const mirrorScale = jungle ? 0.5 : 1;
+    reflection.getRenderTarget().setSize(Math.max(1, Math.round(renderWidth * mirrorScale)), Math.max(1, Math.round(renderHeight * mirrorScale)));
     reflection.material.uniforms.texel.value.set(1 / renderWidth, 1 / renderHeight);
     updateProjection();
   }
@@ -1378,7 +1423,9 @@ function init() {
     onStep: f => bodyFootfall(f.character, f.motion.heading),
     kick: (at, moving) => debris.kick(at, moving),
   });
-  stainLights.push(...duel.enemy.saber.lights);
+  // No Jedi in the jungle: his blade's lights would only weigh on every lit surface.
+  if (jungle) for (const light of duel.enemy.saber.lights) light.parent?.remove(light);
+  else stainLights.push(...duel.enemy.saber.lights);
   let duelView = null, wasDueling = false;
   /** Dead in the duel: back on his feet before the Jedi, who waits for him. */
   function retryDuel() {
@@ -1644,7 +1691,7 @@ function init() {
       if (duel.outcome === 'death' && !death) { death = { cause: 'duel', age: 0, lying: 0, radioed: true, pooled: true }; breakStreak(); $('#death-hint').textContent = duel.cause; }
       const swing = sim > 0 ? lastTip.distanceTo(bladeTip) / sim : 0;
       // The squad: senses, decisions, orders; then the shots leave the muzzles.
-      const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises, darkness: night });
+      const thoughts = squad.update(sim, { hero: character.root.position, heroVelocity: velocity, saber: motion.saber, noises, darkness: night, seen: jungle ? jungle.seen(character.root.position) : 1 });
       noises.length = 0;
       if (death) thoughts.shots.length = 0;
       // The escort: the alarm, the door, the men coming out one by one. Then the Jedi.
@@ -1794,9 +1841,13 @@ function init() {
       arena.update(time);
       // The transformer: its surge, its burst; the room's power after it; the rifle lamps.
       plungeStep(sim);
-      const state = transformer.update(sim, { blade: plunge ? { base: bladeBase, tip: bladeTip } : null });
-      if (state.burst) overload();
-      if (state.spit) { audio.zap(transformer.socket, 0.5); trauma.add(0.04); }
+      let state = null;
+      for (const t of transformers) {
+        const result = t.update(sim, { blade: plunge && t === transformer ? { base: bladeBase, tip: bladeTip } : null });
+        if (t === transformer) state = result;
+        if (result.burst) { transformer = t; overload(); }
+        if (result.spit && t.socket.distanceTo(character.root.position) < 14) { audio.zap(t.socket, 0.5); trauma.add(0.04); }
+      }
       // The hum of the room's current: rising as he holds the blade back, then the surge itself.
       surgeLevel = Math.max(state.progress, plunge?.phase === 'cocking' ? 0.35 * Math.min(1, plunge.hold / FEEL.sabotage.hold) : 0);
       if (state.progress > 0) { trauma.atLeast(0.12 + 0.3 * state.progress); rumble(0.12 + 0.45 * state.progress, 0.3 + 0.5 * state.progress, 0.12); }
@@ -1849,12 +1900,14 @@ function init() {
     if (!paused) music.update();
     radio.update(paused ? 0 : dt);
     document.body.classList.toggle('night', night > 0.5);
+    markObjectives(paused || course.stage === 'won');
     // The burst's flash over everything, gone in a quarter of a second.
     flashAge += dt;
     flashEl.style.opacity = flashAge < 0.3 ? String((1 - flashAge / 0.3) ** 1.6 * 0.9) : '0';
     // The prompt by the transformer, in pixels: B (or J) to hold, DÉTRUIRE, the gauge filling as it is held.
     const cocking = plunge?.phase === 'cocking';
-    const canPlunge = !paused && !death && !duel.fighting && (cocking || (!plunge && transformer.reachable(character.root.position) && !knockdown.active));
+    const near = cocking ? transformer : reachableGenerator();
+    const canPlunge = !paused && !death && !duel.fighting && (cocking || (!plunge && near && !knockdown.active));
     const asked = paused || !duel.fighting ? null : duel.ask();
     promptEl.classList.toggle('on', canPlunge || Boolean(asked));
     if (canPlunge || asked) {
@@ -1862,7 +1915,7 @@ function init() {
       const canvas = promptEl.firstElementChild;
       canvas.style.width = `${size.width * scale}px`;
       canvas.style.height = `${size.height * scale}px`;
-      const p = (asked ? asked.anchor : transformer.socket.clone().setY(1.7)).project(camera);
+      const p = (asked ? asked.anchor : near.socket.clone().setY(1.7)).project(camera);
       promptEl.style.transform = `translate(${((p.x + 1) / 2 * window.innerWidth - size.width * scale / 2).toFixed(0)}px, ${((1 - p.y) / 2 * window.innerHeight - size.height * scale).toFixed(0)}px)`;
     }
     if (death) $('#death').dataset.device = lastDevice;
@@ -1896,7 +1949,7 @@ function init() {
     duel, music, course,
     /** For checks: every man standing falls (the course moves on). */
     clearRoom() { for (const trooper of troopers) if (!trooper.dead) trooper.die('slash', new THREE.Vector3(0, 0, 1)); },
-    renderer, composer, reflection, prints, transformer, power, flashlights, wounds, knockdown,
+    renderer, composer, reflection, prints, transformer, transformers, power, flashlights, wounds, knockdown,
     get death() { return death; },
     get plunge() { return plunge; },
     combat,

@@ -23,7 +23,7 @@ export function createJungleAir(scene, { bounds, shafts = [], lamps = [], night 
   const lampReach = night ? 3.2 : 2.6, lampGlow = night ? 1.25 : 0.9;
 
   // ---- Motes ----------------------------------------------------------------------
-  const MOTES = 900;
+  const MOTES = 1400;
   const home = new Float32Array(MOTES * 3), phase = new Float32Array(MOTES), push = new Float32Array(MOTES * 3);
   const positions = new Float32Array(MOTES * 3), glow = new Float32Array(MOTES), tint = new Float32Array(MOTES * 3);
   for (let i = 0; i < MOTES; i++) {
@@ -58,7 +58,8 @@ export function createJungleAir(scene, { bounds, shafts = [], lamps = [], night 
   group.add(points);
 
   // ---- Fireflies ----------------------------------------------------------------
-  const FLIES = 46;
+  // As many as the ground is big (46 to a clearing of 24 by 18 m).
+  const FLIES = Math.round(46 * (bounds.maxX - bounds.minX) * (bounds.maxZ - bounds.minZ) / 432);
   const flies = Array.from({ length: FLIES }, () => ({
     at: new THREE.Vector3(bounds.minX + random() * (bounds.maxX - bounds.minX), 0.3 + random() * 1.2, bounds.minZ + random() * (bounds.maxZ - bounds.minZ)),
     velocity: new THREE.Vector3(), blink: random() * 6, rate: 0.25 + random() * 0.4, wander: random() * 100,
@@ -93,7 +94,8 @@ export function createJungleAir(scene, { bounds, shafts = [], lamps = [], night 
     for (const lamp of lamps) {
       const d = lamp.position.distanceTo(p);
       if (d > lampReach) continue;
-      const share = (1 - d / lampReach) ** 2 * lampGlow;
+      // A lamp cut (its intensity down from its base) lights the dust no more.
+      const share = (1 - d / lampReach) ** 2 * lampGlow * Math.min(1, lamp.intensity / (lamp.base ?? lamp.intensity ?? 1));
       out.r += warm.r * share; out.g += warm.g * share; out.b += warm.b * share;
     }
     return out;

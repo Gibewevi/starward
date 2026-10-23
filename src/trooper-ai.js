@@ -115,7 +115,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
   const minds = troopers.map((trooper, index) => ({ trooper, post: posts[index] ?? {} }));
   // Who is going to whom: a man down and hurt → his rescuer's mind.
   const rescuers = new Map();
-  let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity, dark = 0;
+  let firing = 0, grenadeClock = Infinity, clock = 0, tick = 1 / 60, roleClock = Infinity, dark = 0, open = 1;
   const temp = new THREE.Vector3(), temp2 = new THREE.Vector3();
   // The squad leader's plan (coordinate()).
   const plan = {
@@ -219,7 +219,8 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
       const facing = new THREE.Vector3(Math.sin(t.heading), 0, Math.cos(t.heading));
       const angle = facing.angleTo(to);
       // In the dark he sees only so far — further the hero's lit blade, and down his own lamp's beam.
-      const b = FEEL.blackout, range = dark < 0.5 ? senses.sight : angle < 0.4 ? Math.max(8.5, saber > 0.5 ? b.saberSight : 0) : saber > 0.5 ? b.saberSight : b.sight;
+      // Down in the water, deep in the reeds and ferns, he is seen only closer (`seen`: 1 in the open).
+      const b = FEEL.blackout, range = (dark < 0.5 ? senses.sight : angle < 0.4 ? Math.max(8.5, saber > 0.5 ? b.saberSight : 0) : saber > 0.5 ? b.saberSight : b.sight) * (saber > 0.5 ? Math.max(0.8, open) : open);
       if (distance < range) {
         // Having just seen him, he follows where he went — for a moment: gone behind a crate, he is lost.
         const tracking = mind.mode === 'combat' && mind.seen < senses.track;
@@ -231,7 +232,7 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
         if (chestSeen || headSeen) {
           sees = true;
           // Closer, moving faster, blade lit: noticed sooner.
-          rate = field * (headSeen ? senses.peek : 1) * (1 - distance / range) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3);
+          rate = field * (headSeen ? senses.peek : 1) * (1 - distance / range) ** 0.6 / senses.notice * (1 + Math.min(heroSpeed, 4.5) / 4.5 * 0.6 + saber * 0.3) * open;
         }
       }
     }
@@ -1348,9 +1349,10 @@ export function createSquadMind({ troopers, lab, nav = null, alerts = null, post
     if (speaker) cues.push({ type: 'radio', radio: 'lost', trooper: speaker });
     return cues;
   }
-  function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [], darkness = 0 }) {
+  function update(dt, { hero, heroVelocity = new THREE.Vector3(), saber = 0, noises = [], darkness = 0, seen = 1 }) {
     const shots = [], cues = [];
     dark = darkness;
+    open = seen;
     tick = dt;
     clock += dt;
     grenadeClock += dt;
