@@ -112,14 +112,16 @@ function init() {
         color: { value: new THREE.Color(0x8698ad) }, tDiffuse: { value: null }, textureMatrix: { value: null },
         roughnessMap: { value: jungle ? jungle.mirror.roughnessTexture : stage.roughnessTexture }, texel: { value: new THREE.Vector2(1 / 640, 1 / 400) },
         dry: { value: jungle ? 0 : 0.4 },
+        // The jungle's craters (dry, dug below the mirror): nothing mirrored there.
+        craters: { value: jungle ? jungle.mirror.craterTexture : Object.assign(new THREE.DataTexture(new Float32Array(1), 1, 1, THREE.RedFormat, THREE.FloatType), { needsUpdate: true }) },
       },
       vertexShader: `uniform mat4 textureMatrix; varying vec4 mirrorUv; varying vec2 surfaceUv;
         void main(){mirrorUv=textureMatrix*vec4(position,1.);surfaceUv=uv;
         gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; uniform vec2 texel; uniform float dry; varying vec4 mirrorUv; varying vec2 surfaceUv;
+      fragmentShader: `uniform sampler2D tDiffuse; uniform sampler2D roughnessMap; uniform sampler2D craters; uniform vec2 texel; uniform float dry; varying vec4 mirrorUv; varying vec2 surfaceUv;
         void main(){
           float rough=texture2D(roughnessMap,surfaceUv).r;
-          float wet=1.-smoothstep(.2,.6,rough);
+          float wet=(1.-smoothstep(.2,.6,rough))*(1.-smoothstep(.01,.05,-texture2D(craters,surfaceUv).r));
           vec2 uv=mirrorUv.xy/mirrorUv.w;
           float stretch=mix(4.5,1.6,wet)*texel.y, wobble=(rough-.5)*texel.x*1.5;
           vec3 sum=vec3(0.); float total=0.;
@@ -289,9 +291,19 @@ function init() {
   }
   // The fight's course: the squad at its posts; all of them down, an escort
   // marches in through the great door; all of those down too, the Jedi comes alone.
-  const course = { stage: 'squad', clock: 0 };
+  // In the jungle there is no Jedi: three waves of men come down the trail, one
+  // after the other, each when the last is down.
+  const course = { stage: 'squad', clock: 0, wave: 0 };
   function courseStep(sim) {
-    if (course.stage === 'squad' || course.stage === 'escort') {
+    if (jungle && (course.stage === 'squad' || course.stage === 'wave')) {
+      const cleared = !troopers.some(trooper => !trooper.dead) && reinforcements.phase === 'idle';
+      course.clock = cleared ? course.clock + sim : 0;
+      if (course.clock > (course.stage === 'squad' ? FEEL.course.escortAfter : FEEL.course.waveAfter)) {
+        if (course.wave < FEEL.course.waves.length) { reinforcements.summon(FEEL.course.waves[course.wave++]); course.stage = 'wave'; }
+        else course.stage = 'won';
+        course.clock = 0;
+      }
+    } else if (course.stage === 'squad' || course.stage === 'escort') {
       // Nobody standing, and nobody still to come through the door.
       const cleared = !troopers.some(trooper => !trooper.dead) && reinforcements.phase === 'idle';
       course.clock = cleared ? course.clock + sim : 0;
@@ -382,7 +394,7 @@ function init() {
     duelView = null;
     wasDueling = false;
     course.stage = 'squad';
-    course.clock = 0;
+    course.clock = course.wave = 0;
     $('#victory').classList.remove('on');
     resetTrooper();
     reset();
@@ -867,6 +879,7 @@ function init() {
         trooper.forcePush(direction.multiplyScalar(pick(FEEL.push.speed) * strength).setY(pick(FEEL.push.lift) * strength));
       }
       effects.wave(leftHand, facing, { kind: 'push', length: FEEL.push.range * 0.8 });
+      jungle?.force('push', here, facing, { range: FEEL.push.range, cone: FEEL.push.cone });
       noise(here, 8.5, { alarm: true, from: here });
       grenades.push(here, facing, { range: FEEL.push.range, cone: FEEL.push.cone });
       debris.blast(here.clone().addScaledVector(facing, -0.6), { radius: FEEL.push.range * 0.7, strength: 0.45 });
@@ -882,6 +895,7 @@ function init() {
         if (trooper.forcePull(holdPoint(), { hold: true })) held = trooper;
       } else if (trooper) trooper.forcePull(here.clone().addScaledVector(toward.clone().normalize(), Math.min(FEEL.pull.stop, distance)));
       effects.wave(leftHand, toward, { kind: 'pull', length: distance });
+      jungle?.force('pull', here, toward, { range: FEEL.pull.range, cone: FEEL.pull.cone });
       noise(here, 8.5, { alarm: true, from: here });
       shove(toward.clone().negate(), FEEL.camera.kick);
       audio.force('pull');
@@ -1061,7 +1075,7 @@ function init() {
     debris.blast(at);
     debris.fragments(at, 18 + Math.round(Math.random() * 8));
     // The plants flattened outward, the water thrown up.
-    jungle?.blast(at);
+    jungle?.blast(at, 1, FEEL.blast.radius * 1.15);
     for (const trooper of troopers) {
       const offset = whereIs(trooper).sub(at).setY(0), distance = offset.length();
       if (distance > blast.radius) continue;
@@ -1591,7 +1605,7 @@ function init() {
           const up = knockdown.update(sim, time);
           if (up) { motion.x = up.x; motion.z = up.z; motion.heading = up.heading; motion.vx = motion.vz = motion.speed = 0; bladeReady = false; }
         } else {
-          character.root.position.set(motion.x, 0, motion.z);
+          character.root.position.set(motion.x, jungle ? jungle.groundAt(motion.x, motion.z) : 0, motion.z);
           character.root.rotation.y = motion.heading + action.spin;
           character.update({ dt: sim, time, speed: motion.speed, runBlend: motion.runBlend, sprintIntent: Math.max(motion.sprint, sprint && Math.hypot(x, y) > 0.05 ? 1 : 0) * (1 - action.guard), turnRate: motion.turnRate, forwardAccel: motion.forwardAccel, action });
           debris.kick(character.root.position, velocity);

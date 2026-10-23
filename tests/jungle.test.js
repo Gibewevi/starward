@@ -223,3 +223,81 @@ test('the ruins: a lamp before every lit face, on the faces the camera sees; the
   jungle.ruins.update(1.1);
   assert.notEqual(scene.getObjectByName('Ruin diodes').material.color.r, led);
 });
+
+test('the Force drives the water against the bank: it spills over onto the mud, then soaks away', () => {
+  const water = pond();
+  water.shove(new THREE.Vector3(-1.6, 0, 0), new THREE.Vector3(1, 0, 0), { range: 4, cone: 0.9, power: 1 });
+  let most = 0;
+  for (let i = 0; i < 60 * 2; i++) { water.update(1 / 60, { time: i / 60 }); most = Math.max(most, water.spilt); }
+  assert.ok(most > 0.05, `over the bank (${most.toFixed(3)})`);
+  // Spilt on the far side, where it was driven.
+  const film = water.surface.material.uniforms.tFilm.value.image;
+  let right = 0, left = 0;
+  for (let k = 0; k < film.data.length; k++) if (film.data[k] > 1e-4) ((k % film.width) * 0.08 - 2 > 0 ? right++ : left++);
+  assert.ok(right > left, `driven to the far bank (${right} cells there, ${left} behind)`);
+  for (let i = 0; i < 60 * 8; i++) water.update(1 / 60, { time: i / 60 });
+  assert.ok(water.spilt < most * 0.05, 'soaked away');
+});
+
+test('a pull draws the water towards the hero', () => {
+  const water = pond();
+  const heights = water.surface.material.uniforms.tHeight.value.image;
+  const at = x => heights.data[Math.floor(1.5 / 0.08) * heights.width + Math.floor((x + 2) / 0.08)];
+  water.shove(new THREE.Vector3(-1.9, 0, 0), new THREE.Vector3(1, 0, 0), { range: 3.4, cone: 0.9, power: -1 });
+  let near = 0;
+  for (let i = 0; i < 30; i++) { water.update(1 / 60, { time: i / 60 }); near = Math.max(near, at(-1.4)); }
+  assert.ok(near > 0.01, `heaped up on his side (${near.toFixed(3)})`);
+});
+
+test('a blast in the water blows a hole in it; the water rushes back in and meets in a jet', () => {
+  const water = pond();
+  const heights = water.surface.material.uniforms.tHeight.value.image;
+  const centre = () => heights.data[Math.floor(1.5 / 0.08) * heights.width + Math.floor(2 / 0.08)];
+  assert.equal(water.crater(new THREE.Vector3(0, 0, 0), 0.8), 'water');
+  assert.ok(centre() < -0.4, `a hole (${centre().toFixed(2)})`);
+  let jet = false, lowest = 0;
+  for (let i = 0; i < 60; i++) { water.update(1 / 60, { time: i / 60 }); if (water.drops > 10) jet = true; lowest = Math.min(lowest, centre()); }
+  assert.ok(jet, 'the jet where it meets');
+  assert.ok(centre() > -0.2, `filled back in (${centre().toFixed(2)})`);
+  for (let i = 0; i < 60 * 8; i++) water.update(1 / 60, { time: i / 60 });
+  assert.ok(Math.abs(centre()) < 0.02, 'and calm again');
+});
+
+test('a grenade on the bank: a crater the stream pours into; in the open, the ground dug, the plants within its reach thrown, none beyond', () => {
+  const scene = new THREE.Scene();
+  const jungle = createJungle(scene, { random: seeded(17) });
+  const { water } = jungle;
+  // Just off the bank.
+  let bank = null;
+  for (let z = 3; z < 7 && !bank; z += 0.05) if (water.depth(-1, z) === 0) bank = z;
+  const shore = new THREE.Vector3(-1, 0, bank + 0.45);
+  assert.equal(water.depth(shore.x, shore.z), 0, 'dry before');
+  jungle.blast(shore, 1, 5);
+  assert.ok(water.depth(shore.x, shore.z) > 0.3, 'water in the crater');
+  assert.ok(jungle.groundAt(shore.x, shore.z) < -0.1, 'dug');
+  // In the open: a crater, the plants in it torn up, the blast reaching 5 m and no further.
+  const open = new THREE.Vector3(3.6, 0, -2.2);
+  assert.equal(jungle.groundAt(open.x, open.z), 0);
+  jungle.blast(open, 1, 5);
+  assert.ok(jungle.groundAt(open.x, open.z) < -0.12, 'a bowl');
+  assert.equal(jungle.groundAt(open.x + 3, open.z), 0, 'flat beyond');
+  const radii = jungle.vegetation.uniforms.uBlastRadius.value;
+  assert.ok(radii.includes(5), 'the blast reaches 5 m');
+  jungle.reset();
+  assert.equal(jungle.groundAt(open.x, open.z), 0, 'all as it was');
+  assert.equal(water.depth(shore.x, shore.z), 0);
+});
+
+test('the Force through the plants: a push sweeps the cone outward, a pull draws it in', () => {
+  const plants = lawn();
+  plants.update(1 / 60, { time: 1 });
+  plants.gust(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 1), { range: 5, cone: 0.9, power: 1.5 });
+  plants.gust(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0), { range: 4, cone: 0.7, power: -1.1 });
+  const [push, pull] = plants.uniforms.uGustB.value;
+  assert.deepEqual([push.y, push.z], [1.5, 5]);
+  assert.ok(Math.abs(push.w - Math.cos(0.9)) < 1e-9);
+  assert.equal(pull.y, -1.1);
+  assert.deepEqual(plants.uniforms.uGustA.value[0].toArray(), [0, 0, 0, 1]);
+  plants.reset();
+  assert.ok(plants.uniforms.uGustB.value.every(slot => slot.y === 0));
+});

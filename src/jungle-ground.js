@@ -188,5 +188,18 @@ export function scatterStones(group, { bounds: B, layout, waterDepth, slabs, avo
   }
   mesh.count = n;
   group.add(mesh);
-  return mesh;
+  const original = new Float32Array(mesh.instanceMatrix.array), place = new THREE.Vector3();
+  return {
+    mesh,
+    /** A blast at `at`: the stones in its crater are blown away. */
+    clear(at, radius) {
+      for (let i = 0; i < mesh.count; i++) {
+        mesh.getMatrixAt(i, matrix);
+        place.setFromMatrixPosition(matrix);
+        if (Math.hypot(place.x - at.x, place.z - at.z) < radius) mesh.setMatrixAt(i, matrix.makeScale(0, 0, 0));
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+    },
+    reset() { mesh.instanceMatrix.array.set(original); mesh.instanceMatrix.needsUpdate = true; },
+  };
 }

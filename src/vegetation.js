@@ -10,14 +10,19 @@ import * as THREE from 'three';
  * tip more than the base; whoever goes through bends it away (`pushers`: the
  * hero, the troopers, the blade's tip — and it springs back as they pass); an
  * explosion throws everything outward with its front as it runs out, then the
- * plants rock back. A blade going through a plant cuts it at the height it
- * passed (what is left is a stub) and throws bits of leaf along the swing.
+ * plants rock back — the nearer the harder, nothing beyond its reach. The
+ * Force sweeps them too: a push flattens the cone before the hero outward,
+ * a pull draws it towards him (`gust`). A blade going through a plant cuts it
+ * at the height it passed (what is left is a stub) and throws bits of leaf
+ * along the swing; a blast tears up what grew where it opened its crater.
  *
  * createVegetation(scene, { place }) — place(kind) returns where that kind
  * grows (a list of { x, z, height, size }); then each frame
- * update(dt, { time, pushers }); blast(at, power); cut(a0, b0, a1, b1, speed).
+ * update(dt, { time, pushers }); blast(at, power, radius); gust(at, direction,
+ * { range, cone, power }) (power < 0 pulls); cut(a0, b0, a1, b1, speed);
+ * uproot(at, radius).
  */
-const PUSHERS = 8, BLASTS = 4;
+const PUSHERS = 8, BLASTS = 4, GUSTS = 2;
 const KINDS = {
   grass: { radius: 0.12, leaves: 2, color: [0.2, 0.42, 0.12] },
   reed: { radius: 0.12, leaves: 2, color: [0.22, 0.38, 0.14] },
@@ -136,12 +141,14 @@ function sway(shader, uniforms) {
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', /* glsl */`#include <common>
-      uniform float uTime; uniform vec2 uWind; uniform vec4 uPush[${PUSHERS}]; uniform vec4 uBlast[${BLASTS}];
+      uniform float uTime; uniform vec2 uWind; uniform vec4 uPush[${PUSHERS}]; uniform vec4 uBlast[${BLASTS}]; uniform float uBlastRadius[${BLASTS}];
+      uniform vec4 uGustA[${GUSTS}]; uniform vec4 uGustB[${GUSTS}];
       attribute float aBend; attribute float aPhase; attribute float aCut;`)
     .replace('#include <begin_vertex>', /* glsl */`
       vec3 transformed = vec3(position);
-      // Cut: what was above the blade is gone, a stub stays.
+      // Cut: what was above the blade is gone, a stub stays; torn up by a blast, nothing.
       transformed.y = min(transformed.y, aCut);
+      if (aCut < 0.01) transformed = vec3(0.0);
       float bend = aBend * clamp(aCut * 1.4, 0.0, 1.0);
       vec3 root = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
       float height = length(instanceMatrix[1].xyz);
@@ -153,14 +160,30 @@ function sway(shader, uniforms) {
         vec2 d = root.xz - uPush[i].xy; float l = length(d);
         if (uPush[i].z > 0.0 && l < uPush[i].z) offset += d / max(l, 0.05) * (1.0 - l / uPush[i].z) * uPush[i].w;
       }
-      // An explosion: the front runs out, everything thrown with it, then rocking back.
+      // An explosion: the front runs out, everything thrown with it, then rocking back —
+      // the nearer the harder, easing out to nothing at the edge of its reach.
       for (int i = 0; i < ${BLASTS}; i++) {
         float age = uTime - uBlast[i].z;
         if (uBlast[i].w <= 0.0 || age < 0.0 || age > 3.5) continue;
-        vec2 d = root.xz - uBlast[i].xy; float l = max(length(d), 0.05), front = age * 11.0;
-        float hit = exp(-pow((l - front) / 1.4, 2.0)) * uBlast[i].w / (1.0 + l * 0.18);
-        float rock = step(l, front) * exp(-age * 1.6) * sin(age * 9.0 - l * 0.6) * 0.45 * uBlast[i].w / (1.0 + l * 0.3);
+        vec2 d = root.xz - uBlast[i].xy; float l = max(length(d), 0.05), reach = uBlastRadius[i];
+        if (l > reach) continue;
+        float near = 1.0 - l / reach, ease = near * near * (3.0 - 2.0 * near), front = age * 11.0;
+        float hit = exp(-pow((l - front) / 1.2, 2.0)) * uBlast[i].w * ease;
+        float rock = step(l, front) * exp(-age * 1.8) * sin(age * 9.0 - l * 0.6) * 0.45 * uBlast[i].w * ease;
         offset += d / l * (hit + rock);
+      }
+      // The Force: a wave through the cone before the hero — out from him, pushing the plants
+      // flat away; or in from the far end, drawing them towards him. The nearer, the harder.
+      for (int i = 0; i < ${GUSTS}; i++) {
+        float age = uTime - uGustB[i].x, power = uGustB[i].y, reach = uGustB[i].z;
+        if (power == 0.0 || age < 0.0 || age > 2.0) continue;
+        vec2 d = root.xz - uGustA[i].xy; float l = max(length(d), 0.05), aim = dot(d / l, uGustA[i].zw);
+        if (l > reach || aim < uGustB[i].w) continue;
+        float near = 1.0 - l / reach, ease = near * (2.0 - near) * smoothstep(uGustB[i].w, mix(uGustB[i].w, 1.0, 0.4), aim);
+        float front = power > 0.0 ? age * 16.0 : reach - age * 16.0;
+        float passed = power > 0.0 ? step(l, front) : step(front, l);
+        float hit = exp(-pow((l - front) / 1.1, 2.0)) + passed * exp(-age * 2.6) * cos(age * 10.0 - l) * 0.3;
+        offset += normalize(d / l + uGustA[i].zw) * power * hit * ease;
       }
       // Metres at the tip, as far as the plant is tall; kept to a sane lean, and the plant shortened as it leans.
       offset = offset * bend * height;
@@ -179,6 +202,9 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     uTime: { value: 0 }, uWind: { value: new THREE.Vector2(0.12, 0.06) },
     uPush: { value: Array.from({ length: PUSHERS }, () => new THREE.Vector4()) },
     uBlast: { value: Array.from({ length: BLASTS }, () => new THREE.Vector4(0, 0, -99, 0)) },
+    uBlastRadius: { value: new Array(BLASTS).fill(1) },
+    uGustA: { value: Array.from({ length: GUSTS }, () => new THREE.Vector4()) },
+    uGustB: { value: Array.from({ length: GUSTS }, () => new THREE.Vector4(-99, 0, 1, 1)) },
   };
   const { material, depth } = plantMaterial(uniforms);
   const shapes = {
@@ -319,10 +345,38 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     }
     return count;
   }
-  /** An explosion at `at`: everything round it thrown outward with its front, then rocking back. */
-  function blast(at, power = 1) {
+  /** An explosion at `at`: everything within `radius` thrown outward with its front, the nearest hardest, then rocking back. */
+  function blast(at, power = 1, radius = 5) {
     blasts[nextBlast].set(at.x, at.z, uniforms.uTime.value, power);
+    uniforms.uBlastRadius.value[nextBlast] = radius;
     nextBlast = (nextBlast + 1) % BLASTS;
+  }
+  const gustA = uniforms.uGustA.value, gustB = uniforms.uGustB.value;
+  let nextGust = 0;
+  /** The Force from `at` along `direction` (on the ground): a push (power > 0) flattens the cone outward, a pull draws it in. */
+  function gust(at, direction, { range = 6, cone = 0.95, power = 1.3 } = {}) {
+    const dir = new THREE.Vector2(direction.x, direction.z).normalize();
+    gustA[nextGust].set(at.x, at.z, dir.x, dir.y);
+    gustB[nextGust].set(uniforms.uTime.value, power, range, Math.cos(cone));
+    nextGust = (nextGust + 1) % GUSTS;
+  }
+  /** Where a blast opened the ground: what grew there is torn off to the stub, thrown up and out. Returns how many. */
+  function uproot(at, radius) {
+    let count = 0;
+    for (let x = Math.floor((at.x - radius) / CELL); x <= Math.floor((at.x + radius) / CELL); x++) {
+      for (let z = Math.floor((at.z - radius) / CELL); z <= Math.floor((at.z + radius) / CELL); z++) {
+        for (const { kind, index } of grid.get(`${x},${z}`) ?? []) {
+          const entry = kinds[kind], plant = entry.plants[index], l = Math.hypot(plant.x - at.x, plant.z - at.z);
+          if (l > radius || entry.cut[index] <= 0.06) continue;
+          entry.cut[index] = l < radius * 0.75 ? 0 : 0.04 + 0.5 * (l / radius) ** 2;
+          entry.cutAttribute.needsUpdate = true;
+          along.set(plant.x - at.x, 0, plant.z - at.z).normalize();
+          throwBits(root.set(plant.x, 0.1 + random() * plant.height * 0.5, plant.z), along, 12 * (1 - l / radius) + 4, Math.ceil(entry.leaves / 2), entry.color);
+          count++;
+        }
+      }
+    }
+    return count;
   }
   function update(dt, { time, pushers = [], wind = 1 } = {}) {
     uniforms.uTime.value = time;
@@ -340,9 +394,10 @@ export function createVegetation(scene, { place, random = Math.random } = {}) {
     for (const entry of Object.values(kinds)) { entry.cut.fill(1); entry.cutAttribute.needsUpdate = true; }
     for (const b of bit) b.alive = false;
     for (const slot of blasts) slot.set(0, 0, -99, 0);
+    for (const slot of gustB) slot.set(-99, 0, 1, 1);
   }
   return {
-    group, update, cut, blast, reset, uniforms,
+    group, update, cut, blast, gust, uproot, reset, uniforms,
     /** How many plants of each kind stand, and how many are cut. */
     get counts() { return Object.fromEntries(Object.entries(kinds).map(([kind, entry]) => [kind, { plants: entry.plants.length, cut: entry.cut.filter(value => value < 1).length }])); },
     get bits() { return bit.filter(b => b.alive).length; },

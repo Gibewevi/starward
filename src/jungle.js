@@ -86,6 +86,12 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   water.group.traverse(object => object.layers.set(1));
 
   // ---- The ground: mud, wet sand, moss, puddles, slabs; what is wet shines -----------------
+  // Where explosions dug it (m, below 0 a crater, a little above at its rim), on the water's grid.
+  const CRATER_CELL = 0.08, CW = Math.ceil(width / CRATER_CELL), CH = Math.ceil(length / CRATER_CELL);
+  const craters = new Float32Array(CW * CH);
+  const craterTexture = new THREE.DataTexture(craters, CW, CH, THREE.RedFormat, THREE.FloatType);
+  craterTexture.magFilter = craterTexture.minFilter = THREE.LinearFilter;
+  craterTexture.needsUpdate = true;
   const layout = createFloorLayout({ bounds: B, waterDepth, slabs });
   const floor = paintJungleFloor({ bounds: B, waterDepth, slabs, layout });
   const groundMaterial = new THREE.MeshStandardMaterial({
@@ -95,12 +101,26 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   groundMaterial.onBeforeCompile = shader => {
     shader.uniforms.tDepth = { value: water.depthTexture };
     shader.uniforms.time = { value: 0 };
+    shader.uniforms.tCrater = { value: craterTexture };
     groundMaterial.userData.shader = shader;
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGround;')
+    const rectUv = `/ vec2(${width.toFixed(2)}, ${length.toFixed(2)})`, origin = `vec2(${B.minX.toFixed(2)}, ${B.minZ.toFixed(2)})`;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vGround; varying float vCrater; uniform sampler2D tCrater;')
+      // The craters: the floor dug (its local z is the world's height), its slope for the light.
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+        vec2 craterUv = ((modelMatrix * vec4(position, 1.0)).xz - ${origin}) ${rectUv};
+        vec2 craterStep = vec2(${(1 / CW).toFixed(6)}, ${(1 / CH).toFixed(6)});
+        vCrater = texture2D(tCrater, craterUv).r;
+        float craterX = (texture2D(tCrater, craterUv + vec2(craterStep.x, 0.0)).r - texture2D(tCrater, craterUv - vec2(craterStep.x, 0.0)).r) / ${(2 * CRATER_CELL).toFixed(3)};
+        float craterZ = (texture2D(tCrater, craterUv + vec2(0.0, craterStep.y)).r - texture2D(tCrater, craterUv - vec2(0.0, craterStep.y)).r) / ${(2 * CRATER_CELL).toFixed(3)};
+        objectNormal = normalize(vec3(-craterX, -craterZ, 1.0));`)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.z += vCrater;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGround = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec3 vGround; uniform sampler2D tDepth; uniform float time;`)
+      varying vec3 vGround; varying float vCrater; uniform sampler2D tDepth; uniform float time;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
+      // Blasted earth: scorched dark in the crater, turned over and lighter on its rim.
+      diffuseColor.rgb *= 1.0 - 0.6 * smoothstep(-0.015, -0.13, vCrater);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.2, 0.15, 0.1), smoothstep(0.004, 0.035, vCrater) * 0.5);
       float under = texture2D(tDepth, (vGround.xz - vec2(${B.minX.toFixed(2)}, ${B.minZ.toFixed(2)})) / vec2(${width.toFixed(2)}, ${length.toFixed(2)})).r;
       if (under > 0.01) {
         // The stream's bed: dark, tinted by the water over it, crossed by the light the ripples gather.
@@ -109,9 +129,11 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
       }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
       // Under the water the bed is wet, the surface does the shining.
-      roughnessFactor = mix(roughnessFactor, 0.5, step(0.01, under));`);
+      roughnessFactor = mix(roughnessFactor, 0.5, step(0.01, under));
+      roughnessFactor = mix(roughnessFactor, 0.95, smoothstep(-0.01, -0.06, vCrater) * step(under, 0.01));`);
   };
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(width, length), groundMaterial);
+  // Fine enough for a crater to be dug in it (a vertex every 12.5 cm).
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(width, length, Math.round(width * 8), Math.round(length * 8)), groundMaterial);
   ground.name = 'Jungle ground';
   ground.rotation.x = -Math.PI / 2;
   // The canvas rows run along +z (flipY off): the plane's v must too.
@@ -123,7 +145,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   const mirrorGeometry = new THREE.PlaneGeometry(width, length);
   const mirrorUv = mirrorGeometry.attributes.uv;
   for (let i = 0; i < mirrorUv.count; i++) mirrorUv.setY(i, 1 - mirrorUv.getY(i));
-  const mirror = { geometry: mirrorGeometry, centre: new THREE.Vector3(B.minX + width / 2, 0, B.minZ + length / 2), roughnessTexture: floor.roughnessMap, size: [width, length] };
+  const mirror = { geometry: mirrorGeometry, centre: new THREE.Vector3(B.minX + width / 2, 0, B.minZ + length / 2), roughnessTexture: floor.roughnessMap, craterTexture, size: [width, length] };
   // Beyond the clearing: dark earth under the jungle, to the horizon.
   const beyond = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshLambertMaterial({ color: 0x10170c }));
   beyond.rotation.x = -Math.PI / 2;
@@ -212,7 +234,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
     return plants;
   };
   const vegetation = createVegetation(scene, { place, random });
-  scatterStones(group, { bounds: B, layout, waterDepth, slabs, avoid: (x, z) => inside(x, z, 0.1), random });
+  const stones = scatterStones(group, { bounds: B, layout, waterDepth, slabs, avoid: (x, z) => inside(x, z, 0.1), random });
 
   // ---- Trees: trunks rising out of the jungle behind the far sides, vines hanging --------------
   const trunks = [], vines = [];
@@ -278,10 +300,54 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
     if (speed > 4 && b1.y < water.level + 0.05 && inWater(b1)) water.splash(b1, Math.min(1, speed / 12), b1.clone().sub(b0).setY(0).normalize());
     return count;
   }
-  function blast(at, power = 1) {
-    vegetation.blast(at, 1.6 * power);
-    water.disturb(at.x, at.z, 3, 0.08 * power);
-    if (inWater(at)) water.splash(at, 2 * power);
+  /** How high the ground is at (x, z): below 0 in a crater (m). */
+  function groundAt(x, z) {
+    const i = Math.floor((x - B.minX) / CRATER_CELL), j = Math.floor((z - B.minZ) / CRATER_CELL);
+    return i < 0 || j < 0 || i >= CW || j >= CH ? 0 : Math.min(0, craters[j * CW + i]);
+  }
+  /** Digs a crater at `at`: a bowl `depth` deep, a rim thrown up round it. */
+  function dig(at, radius, depth) {
+    const reach = radius * 1.4, ci = (at.x - B.minX) / CRATER_CELL, cj = (at.z - B.minZ) / CRATER_CELL, r = reach / CRATER_CELL;
+    for (let j = Math.max(0, Math.floor(cj - r)); j <= Math.min(CH - 1, Math.ceil(cj + r)); j++) {
+      for (let i = Math.max(0, Math.floor(ci - r)); i <= Math.min(CW - 1, Math.ceil(ci + r)); i++) {
+        // A little ragged, not a perfect bowl.
+        const d = Math.hypot(i + 0.5 - ci, j + 0.5 - cj) * CRATER_CELL / (radius * (0.88 + 0.24 * fbm(i * 0.31, j * 0.31)));
+        if (d > 1.4) continue;
+        const bowl = d < 1 ? -depth * (1 - d * d) ** 1.4 : 0, rim = depth * 0.3 * Math.exp(-(((d - 1) / 0.2) ** 2));
+        const k = j * CW + i;
+        craters[k] = THREE.MathUtils.clamp(craters[k] + bowl + rim * (craters[k] < -0.02 ? 0.3 : 1), -0.4, 0.09);
+      }
+    }
+    craterTexture.needsUpdate = true;
+  }
+  /**
+   * A grenade went off at `at`: the plants within its reach thrown outward (the
+   * nearer the harder) and torn up where it dug its crater, the stones there
+   * blown away; the water heaved — blown open if it went off in it, poured into
+   * the crater if that opened on the bank. Returns the crater's radius.
+   */
+  function blast(at, power = 1, reach = 5) {
+    const radius = 0.9 + 0.35 * power, wet = inWater(at);
+    dig(at, radius, (wet ? 0.12 : 0.17) * power);
+    vegetation.blast(at, 1.6 * power, reach);
+    vegetation.uproot(at, radius * 0.95);
+    stones.clear(at, radius);
+    water.disturb(at.x, at.z, Math.min(3, reach * 0.6), 0.05 * power);
+    if (wet) water.splash(at, 2 * power);
+    water.crater(at, radius);
+    return radius;
+  }
+  /**
+   * The Force from the hero at `at` along `direction`: through the plants and the
+   * water in its cone — a push drives them out, a pull draws them in — and the
+   * dust in the air with them.
+   */
+  const forceStirs = [];
+  function force(kind, at, direction, { range = 6, cone = 0.95 } = {}) {
+    const push = kind === 'push', dir = direction.clone().setY(0).normalize();
+    vegetation.gust(at, dir, { range: range * 1.15, cone: cone + 0.1, power: push ? 1.5 : -1.15 });
+    water.shove(at, dir, { range: range * 1.2, cone: cone + 0.1, power: push ? 1 : -0.85 });
+    for (let n = 1; n <= 5; n++) forceStirs.push({ at: at.clone().addScaledVector(dir, n * range / 5).setY(0.9), speed: push ? 9 : 6, life: 0.25 + n * 0.05 });
   }
   /** A bolt into the floor at `at`: into the water, a splash. True if it was water. */
   function bolt(at) { if (!inWater(at)) return false; water.splash(at, 0.45); return true; }
@@ -299,10 +365,11 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
     if (groundMaterial.userData.shader) groundMaterial.userData.shader.uniforms.time.value = time;
     vegetation.update(dt, { time, pushers: actors });
     water.update(dt, { time, fog, waders: actors.filter(actor => actor.wades !== false) });
-    air.update(dt, { time, stirs });
+    for (let n = forceStirs.length - 1; n >= 0; n--) if ((forceStirs[n].life -= dt) <= 0) forceStirs.splice(n, 1);
+    air.update(dt, { time, stirs: forceStirs.length ? [...stirs, ...forceStirs] : stirs });
     prints.update(dt);
   }
-  function reset() { vegetation.reset(); water.reset(); prints.clear(); door.reset(); }
+  function reset() { vegetation.reset(); water.reset(); prints.clear(); door.reset(); craters.fill(0); craterTexture.needsUpdate = true; stones.reset(); forceStirs.length = 0; }
 
   const lab = { group, obstacles, lights: lamps, floorLights: { spots: [] }, markings: [], update() {}, ...queries };
   let lastTime = null;
@@ -313,7 +380,7 @@ export function createJungle(scene, { renderer = null, random = Math.random } = 
   const stage = { floor: ground, material: groundMaterial, roughnessTexture: null, bounds: B, update() {} };
   // The hero comes in from the near side of the stream, the ruins and the squad across it.
   const start = { x: 2, z: 7.6, heading: -2.47 };
-  return { bounds: B, start, lab, arena, stage, mirror, layout, posts, vegetation, water, air, prints, lamps, ruins, step, cut, blast, bolt, landing, update, reset, inWater, waterDepth, slabs };
+  return { bounds: B, start, lab, arena, stage, mirror, layout, posts, vegetation, water, air, prints, lamps, ruins, step, cut, blast, force, groundAt, bolt, landing, update, reset, inWater, waterDepth, slabs };
 }
 
 /**
