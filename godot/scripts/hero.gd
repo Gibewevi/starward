@@ -238,6 +238,18 @@ func _waiting(name: String) -> bool:
 	return input_clock - _pending[name] <= feel.input.buffer
 
 
+## First person: his head out of the view (its bone shrunk to nothing: the hair and the face with it), or back.
+func hide_head(hidden: bool) -> void:
+	var bone := skeleton.find_bone("Head")
+	if bone >= 0:
+		skeleton.set_bone_pose_scale(bone, Vector3.ONE * (0.001 if hidden else 1.0))
+
+
+## Where his eyes are, in the world: on his head as the pose has it (not shrunk).
+func eye_position() -> Vector3:
+	return skeleton.global_transform * (animator.globals[animator.index.Head] * Vector3(0, 0.1, 0.18))
+
+
 ## Dashing (and a beat after): bolts pass through him.
 func dodging() -> bool:
 	return _dodge > 0.0
@@ -289,6 +301,11 @@ func _process(delta: float) -> void:
 	input /= maxf(1.0, input.length())
 	var world_x := INPUT_RIGHT.x * input.x + INPUT_FORWARD.x * input.y
 	var world_z := INPUT_RIGHT.y * input.x + INPUT_FORWARD.y * input.y
+	# First person: the stick goes where he looks (up ahead, right to his right).
+	if camera and camera.first_person:
+		var yaw: float = camera.view_yaw
+		world_x = -cos(yaw) * input.x + sin(yaw) * input.y
+		world_z = sin(yaw) * input.x + cos(yaw) * input.y
 	var stick := Vector2(world_x, world_z).length() > 0.2
 	var guard := _held("guard")
 	var attack_held := _held("attack")

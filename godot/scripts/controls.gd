@@ -5,7 +5,8 @@ extends Node
 ## The sword: J strikes (B), K guards — a press parries (RB, LB or A), Space
 ## dashes (Y), E twirls the blade (R3), U pulls and I pushes with the Force
 ## (LT, RT). G turns god mode on or off; dead, Enter (Start) — or a strike,
-## the guard, a dash — starts again.
+## the guard, a dash — starts again. V (Select) switches to the view from his
+## eyes and back; there, the right stick (or the mouse) looks round.
 ## Actions are registered here rather than in project.godot, to stay readable.
 
 const ACTIONS := {
@@ -24,6 +25,7 @@ const ACTIONS := {
 	"force_push": [KEY_I],
 	"god_mode": [KEY_G],
 	"retry": [KEY_ENTER, KEY_KP_ENTER],
+	"view": [KEY_V],
 }
 const BUTTONS := {
 	"attack": [JOY_BUTTON_B],
@@ -32,6 +34,7 @@ const BUTTONS := {
 	"twirl": [JOY_BUTTON_RIGHT_STICK],
 	"restart": [JOY_BUTTON_LEFT_STICK],
 	"retry": [JOY_BUTTON_START],
+	"view": [JOY_BUTTON_BACK],
 }
 const STICK := {
 	"move_left": [JOY_AXIS_LEFT_X, -1.0],

@@ -378,6 +378,8 @@ func open() -> void:
 	_pad_ready = false
 	_root.modulate = Color.WHITE
 	get_tree().paused = true
+	# The mouse back for the menu (the view from his eyes had taken it).
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _close() -> void:

@@ -27,6 +27,7 @@ extends Node
 ##     [--mortal]  (god mode off: a bolt or a blast kills him)
 ##     [--stage=jungle] [--night=<0|1>]  (the marsh ruins, by day or by night)
 ##     [--menu]  (the main menu over it)
+##     [--fps]  (the view from the hero's eyes)
 ##     [--soak]  (an endurance fight: the hero goes for the nearest man and strikes, blasts now and
 ##       then, the squad cut down and replaced; every 15 s, how fast it runs and what has piled up)
 
@@ -63,6 +64,7 @@ var _menu: StageMenu
 var _show_menu := false
 ## The endurance fight (--soak): its clocks, and the window measured since the last report.
 var _soak := false
+var _first_person := false
 var _soak_strike := 0.0
 var _soak_blast := 6.0
 var _soak_clear := 40.0
@@ -104,6 +106,8 @@ func _ready() -> void:
 			_show_menu = true
 		elif argument == "--soak":
 			_soak = true
+		elif argument == "--fps":
+			_first_person = true
 		elif argument.begins_with("--stage=") and stage.is_empty():
 			stage = argument.get_slice("=", 1)
 		elif argument.begins_with("--night=") and night_asked.is_empty():
@@ -181,6 +185,8 @@ func _ready() -> void:
 	if _view > 0.0:
 		camera.desired_height = _view
 		camera.view_height = _view
+	if _first_person:
+		camera.set_first_person(true)
 	if _shot.is_empty() or _show_menu:
 		# A check of the menu still counts its frames under it.
 		if not _shot.is_empty():
