@@ -16,7 +16,7 @@ Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`), 
 - **T** (**L3**) : tout recommencer (l’escouade à ses postes, le héros au départ).
 - **V** (**Select**) : vue à la première personne, depuis les yeux du héros (sa tête s’efface, ses bras et sa lame restent en vue), et retour à la vue de dessus. Le **stick droit** ou la **souris** regardent autour ; on avance là où l’on regarde. En marchant ou en courant, la vue se balance au rythme des pas (plus en courant), le champ s’élargit un peu au sprint ; les coups la secouent comme la vue de dessus. Ajout propre à Godot (le web n’a pas cette vue).
 - **G** : mode invincible ou non (invincible par défaut ; en attendant le menu des réglages). Mort : **Entrée** (**Start**), **J**, **K** ou **Espace** pour recommencer.
-- **Molette** : rapprocher ou éloigner la caméra ; **R** : recentrer.
+- **Molette** : rapprocher ou éloigner la caméra ; **R** : recentrer. En marchant ou en courant, la vue de dessus se balance aussi un peu au rythme des pas (environ un pixel de l’image, un peu plus en courant).
 
 ## Ce qui est porté (étape 1)
 

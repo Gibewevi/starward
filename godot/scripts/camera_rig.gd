@@ -6,7 +6,8 @@ extends Camera3D
 ## Game feel, as main.js: blows add trauma (Shake), a kick knocks the view
 ## along a swing or a push and rings out, a punch zooms in a touch, fast, and
 ## eases back. In a fight it leans a little towards the squad (lean_toward), so
-## the shooters stay in frame.
+## the shooters stay in frame. Walking and running sway it a touch with his
+## steps (about a pixel of the picture, more as he runs).
 ##
 ## First person (Select, or V): the view from the hero's eyes, in perspective —
 ## his head out of the way, his arms and blade in view. The right stick or the
@@ -148,7 +149,23 @@ func _process(delta: float) -> void:
 	var shake := global_basis.x * trauma.offset.x + global_basis.y * trauma.offset.y
 	_kick_age += delta
 	shake += _kick_direction * (_kick_amplitude * kick(_kick_age, 0.3, 11.0))
-	_aim(shake, trauma.roll)
+	# His steps: about a pixel of the picture walking, a little more running.
+	var steps := _steps(target as Hero, delta)
+	var reach := lerpf(0.03, 0.05, steps.w)
+	shake += global_basis.y * (steps.y * reach) + global_basis.x * (steps.x * reach * 0.4)
+	_aim(shake, trauma.roll + steps.z * 0.0035)
+
+
+## The sway of his steps: x side to side with the stride, y lower on each footfall (twice a stride),
+## z the roll that goes with it — all in −1..1, eased in as he gets moving; w how much he runs.
+func _steps(hero: Hero, delta: float) -> Vector4:
+	if hero == null:
+		return Vector4.ZERO
+	var state: Dictionary = hero.animator.state
+	var moving: float = state.motion if not hero.dashing() else 0.0
+	_sway = lerpf(_sway, moving, 1.0 - exp(-8.0 * delta))
+	var phase: float = state.phase * TAU
+	return Vector4(sin(phase) * _sway, -cos(phase * 2.0) * _sway, sin(phase) * _sway, state.running)
 
 
 ## The view from his eyes: looked round with the right stick (the mouse moves it as it comes), swaying with his steps.
@@ -173,14 +190,12 @@ func _first_person_step(delta: float) -> void:
 	_eye_ready = true
 	# His steps: lower on each footfall (twice a stride), side to side with the stride, a touch of roll; more as he runs.
 	var state: Dictionary = hero.animator.state
-	var moving: float = state.motion if not hero.dashing() else 0.0
-	var running: float = state.running
-	_sway = lerpf(_sway, moving, 1.0 - exp(-8.0 * delta))
-	var amplitude := lerpf(0.014, 0.032, running) * _sway
-	var phase: float = state.phase * TAU
+	var steps := _steps(hero, delta)
+	var running := steps.w
+	var amplitude := lerpf(0.014, 0.032, running)
 	var right := Vector3(-cos(view_yaw), 0, sin(view_yaw))
-	var step := Vector3.UP * (-amplitude * cos(phase * 2.0)) + right * (sin(phase) * amplitude * 0.7)
-	var step_roll := sin(phase) * 0.012 * _sway * (1.0 + running)
+	var step := Vector3.UP * (steps.y * amplitude) + right * (steps.x * amplitude * 0.7)
+	var step_roll := steps.z * 0.012 * (1.0 + running)
 	# Shakes and kicks, as over the room (a touch smaller: they are right at his eyes).
 	trauma.update(delta)
 	_kick_age += delta
@@ -194,7 +209,7 @@ func _first_person_step(delta: float) -> void:
 	# Sprinting widens the view a little; a punch narrows it, fast, and lets it go.
 	_punch_age += delta
 	var punched := 1.0 - pow(1.0 - _punch_age / 0.05, 2) if _punch_age < 0.05 else 1.0 - (1.0 - cos(PI * minf(1.0, (_punch_age - 0.05) / 0.3))) / 2.0
-	var sprint: float = state.sprint * moving
+	var sprint: float = state.sprint * _sway
 	fov = (FOV + 7.0 * sprint) * (1.0 - _punch_amount * punched * 2.0)
 
 
