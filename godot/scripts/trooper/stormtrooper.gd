@@ -3499,10 +3499,17 @@ func state() -> String:
 ## The squad's bodies meet: a body thrown into a standing trooper knocks him
 ## over (and is slowed), and bodies on the floor shove each other aside.
 static func collide_squad(troopers: Array) -> void:
-	for a: Stormtrooper in troopers:
+	# Where each body lying lies, worked out once for the frame (a sleeping one's is kept).
+	var boxes := {}
+	for t: Stormtrooper in troopers:
+		if t.fallen:
+			boxes[t] = t.bounds()
+	for ia in troopers.size():
+		var a: Stormtrooper = troopers[ia]
 		if not a.fallen:
 			continue
-		for b: Stormtrooper in troopers:
+		for ib in troopers.size():
+			var b: Stormtrooper = troopers[ib]
 			if a == b:
 				continue
 			if not b.fallen:
@@ -3526,14 +3533,22 @@ static func collide_squad(troopers: Array) -> void:
 					b.force_push(push)
 					a.slow(0.45)
 					break
-			elif troopers.find(a) < troopers.find(b):
+			elif ia < ib:
 				# Two sleeping bodies do not move; two far apart cannot touch.
-				if (a.is_asleep() and b.is_asleep()) or not _boxes_meet(a.bounds(), b.bounds()):
+				if (a.is_asleep() and b.is_asleep()) or not _boxes_meet(boxes[a], boxes[b]):
 					continue
 				var pa := a.ragdoll
 				var pb := b.ragdoll
+				# A particle of his far from all of the other (beyond his box, grown by more than any two radii) meets none of it.
+				var near_low: Vector3 = boxes[b][0] - Vector3.ONE * 0.5
+				var near_high: Vector3 = boxes[b][1] + Vector3.ONE * 0.5
 				for i in pa.count():
 					if pa.kinematic[i] != 0:
+						continue
+					var x := pa.px[i]
+					var y := pa.py[i]
+					var z := pa.pz[i]
+					if x < near_low.x or x > near_high.x or y < near_low.y or y > near_high.y or z < near_low.z or z > near_high.z:
 						continue
 					for j in pb.count():
 						if pb.kinematic[j] != 0:

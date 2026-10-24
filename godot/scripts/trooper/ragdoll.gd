@@ -458,6 +458,9 @@ func _collide_boxes() -> void:
 			var x := px[i]
 			var y := py[i]
 			var z := pz[i]
+			# Outside the box grown by its radius: it cannot touch it (the same as below, cheaper).
+			if x <= lo_x - r or x >= hi_x + r or z <= lo_z - r or z >= hi_z + r or y <= lo_y - r or y >= hi_y + r:
+				continue
 			var cx := maxf(lo_x, minf(x, hi_x))
 			var cy := maxf(lo_y, minf(y, hi_y))
 			var cz := maxf(lo_z, minf(z, hi_z))

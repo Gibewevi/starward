@@ -27,6 +27,8 @@ extends Node
 ##     [--mortal]  (god mode off: a bolt or a blast kills him)
 ##     [--stage=jungle] [--night=<0|1>]  (the marsh ruins, by day or by night)
 ##     [--menu]  (the main menu over it)
+##     [--soak]  (an endurance fight: the hero goes for the nearest man and strikes, blasts now and
+##       then, the squad cut down and replaced; every 15 s, how fast it runs and what has piled up)
 
 @export var pixel_size := 4
 
@@ -59,6 +61,13 @@ var _grenades: Array = []
 var _menu: StageMenu
 ## For checks: the menu shown in the picture (--menu).
 var _show_menu := false
+## The endurance fight (--soak): its clocks, and the window measured since the last report.
+var _soak := false
+var _soak_strike := 0.0
+var _soak_blast := 6.0
+var _soak_clear := 40.0
+var _soak_window := { "frames": 0, "process": 0.0, "real": 0.0 }
+var _soak_report := 0.0
 ## A stage started from the menu (picking it again starts it over).
 var _playing := false
 var _mortal := false
@@ -93,6 +102,8 @@ func _ready() -> void:
 			_mortal = true
 		elif argument == "--menu":
 			_show_menu = true
+		elif argument == "--soak":
+			_soak = true
 		elif argument.begins_with("--stage=") and stage.is_empty():
 			stage = argument.get_slice("=", 1)
 		elif argument.begins_with("--night=") and night_asked.is_empty():
@@ -314,6 +325,8 @@ func _process(_delta: float) -> void:
 				battle.grenade_at(throw[1], throw[2])
 	if _shot.is_empty():
 		return
+	if _soak:
+		_soak_step(_delta)
 	_frames += 1
 	var spent := Performance.get_monitor(Performance.TIME_PROCESS)
 	_process_sum += spent
@@ -339,3 +352,48 @@ func _process(_delta: float) -> void:
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(_shot)
 		get_tree().quit()
+
+
+## The endurance fight: the hero walks to the nearest man standing and strikes; a blast by him now and then;
+## when few are left, all are cut down (the next ones come in). Every 15 s of real time: what it costs.
+func _soak_step(delta: float) -> void:
+	var here := Vector3(hero.motion.x, 0, hero.motion.z)
+	var nearest: Stormtrooper = null
+	for trooper: Stormtrooper in battle.troopers:
+		if trooper.dead or trooper.fallen:
+			continue
+		if nearest == null or Battle.where_is(trooper).distance_to(here) < Battle.where_is(nearest).distance_to(here):
+			nearest = trooper
+	hero.autopilot = Vector2.ZERO
+	if nearest:
+		var to := Battle.where_is(nearest) - here
+		if to.length() > 1.6:
+			var d := Vector2(to.x, to.z).normalized()
+			hero.autopilot = Vector2(d.dot(Hero.INPUT_RIGHT), d.dot(Hero.INPUT_FORWARD))
+	_soak_strike -= delta
+	if _soak_strike <= 0.0:
+		_soak_strike = 0.35
+		hero.autopilot_presses[hero.time + 0.001] = "attack"
+	_soak_blast -= delta
+	if _soak_blast <= 0.0:
+		_soak_blast = 12.0
+		battle.detonate(here + Vector3(randf_range(-2.5, 2.5), 0, randf_range(-2.5, 2.5)))
+	_soak_clear -= delta
+	var standing := battle.troopers.filter(func(t: Stormtrooper) -> bool: return not t.dead).size()
+	if _soak_clear <= 0.0 or standing == 0:
+		_soak_clear = 40.0
+		battle.clear_room()
+	_soak_window.frames += 1
+	_soak_window.process += Performance.get_monitor(Performance.TIME_PROCESS)
+	_soak_window.real += delta
+	_soak_report += delta
+	if _soak_report >= 15.0:
+		_soak_report = 0.0
+		var w: Dictionary = _soak_window
+		print("[%4.0f s] %5.1f img/s ; calcul %5.1f ms ; nœuds %d ; objets %d ; troopers %d (%d debout) ; particules %d ; gouttes %d ; débris %d ; brûlures %d ; entailles %d ; empreintes %d ; tirs en vol %d ; dessins %d ; objets dessinés %d" % [
+			Time.get_ticks_msec() / 1000.0, w.frames / maxf(w.real, 1e-3), w.process * 1000.0 / maxi(w.frames, 1),
+			Performance.get_monitor(Performance.OBJECT_NODE_COUNT), Performance.get_monitor(Performance.OBJECT_COUNT),
+			battle.troopers.size(), standing, battle.effects.live(), battle.effects.red().lying, battle.debris.bodies.size(),
+			battle.marks.count(), battle.scars.scars(), battle.prints.count(), battle.blasters.live.size(),
+			Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)])
+		_soak_window = { "frames": 0, "process": 0.0, "real": 0.0 }
