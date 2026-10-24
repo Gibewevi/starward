@@ -50,7 +50,8 @@ Godot 4.7 : ouvrir `godot/project.godot`. Tests sans fenêtre : `godot --headles
 | `duel*.js` | `scripts/duel/*.gd` | 5 |
 | `jungle*.js`, `vegetation.js`, `water.js` | `jungle.glb`, `assets/jungle/`, `assets/data/jungle.json` + `scripts/jungle/*.gd`, `shaders/plants.gdshader`, `shaders/water_step.glsl` (les vagues sur la carte graphique), `shaders/jungle_water.gdshader`, `shaders/jungle_ground.gdshader` | 6 |
 | `audio.js`, `music.js`, `radio-comms.js` | `AudioStreamPlayer3D`, bus audio | 7 |
-| Menu, HUD, réglages (`index.html`, `stage-menu.js`, `pixel-prompt.js`, `telegraph.js`) | scènes `ui/*.tscn` | 7 |
+| Menu de sélection des stages (`stage-menu.js`, `menu-pixels.js`) | `scripts/ui/stage_menu.gd`, `scripts/ui/pixel_text.gd`, `assets/ui/menu/` | 7 (fait en avance) |
+| HUD, réglages, aide (`index.html`, `pixel-prompt.js`, `telegraph.js`) | `scripts/ui/` | 7 |
 
 ## Étapes
 

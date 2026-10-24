@@ -8,9 +8,12 @@ extends Node
 ##
 ## Two stages: the lab (stage 1) and the marsh ruins (stage 2, JungleLevel):
 ## a wider view in finer pixels, by day or by night (at random, or as asked:
-## --night=1, --night=0), the jungle closing in at the edges of the view. The
-## keys 1 and 2 switch to the one or the other (the game starts again);
-## --stage=jungle starts in the marsh.
+## --night=1, --night=0), the jungle closing in at the edges of the view.
+## The main menu (StageMenu) opens first, the game waiting under it; Escape
+## brings it back. Picking the stage being played starts it (again); picking
+## the other builds it (the scene is loaded anew, straight into the game).
+## The keys 1 and 2 switch stage too; --stage=jungle starts in the marsh.
+## A check (--screenshot) skips the menu.
 ##
 ## A frame of it can be written to a PNG for checking:
 ##   godot --path godot -- --screenshot=<file> [--frames=<n>] [--autopilot=<x>,<y>[,sprint]]
@@ -23,12 +26,15 @@ extends Node
 ##     [--blast=<seconds>:<x>:<z>,…]  (a blast then, right there)
 ##     [--mortal]  (god mode off: a bolt or a blast kills him)
 ##     [--stage=jungle] [--night=<0|1>]  (the marsh ruins, by day or by night)
+##     [--menu]  (the main menu over it)
 
 @export var pixel_size := 4
 
 ## The stage played (kept when the game starts again on another one): "lab" or "jungle"; and the jungle's night ("": at random).
 static var stage := ""
 static var night_asked := ""
+## Coming back from a switch of stage: straight into the game, no menu.
+static var skip_menu := false
 
 var viewport: SubViewport
 var world: Node3D
@@ -50,6 +56,11 @@ var _view := 0.0
 var _at := ""
 var _clear := INF
 var _grenades: Array = []
+var _menu: StageMenu
+## For checks: the menu shown in the picture (--menu).
+var _show_menu := false
+## A stage started from the menu (picking it again starts it over).
+var _playing := false
 var _mortal := false
 var _states := {}
 var _moves := {}
@@ -80,6 +91,8 @@ func _ready() -> void:
 				_grenades.append([float(parts[0]), float(parts[1]), float(parts[2]), argument.begins_with("--blast=")])
 		elif argument == "--mortal":
 			_mortal = true
+		elif argument == "--menu":
+			_show_menu = true
 		elif argument.begins_with("--stage=") and stage.is_empty():
 			stage = argument.get_slice("=", 1)
 		elif argument.begins_with("--night=") and night_asked.is_empty():
@@ -157,15 +170,49 @@ func _ready() -> void:
 	if _view > 0.0:
 		camera.desired_height = _view
 		camera.view_height = _view
+	if _shot.is_empty() or _show_menu:
+		# A check of the menu still counts its frames under it.
+		if not _shot.is_empty():
+			process_mode = Node.PROCESS_MODE_ALWAYS
+		_menu = StageMenu.new(1 if jungle else 0)
+		_menu.started.connect(_on_stage)
+		add_child(_menu)
+		if skip_menu:
+			skip_menu = false
+			_menu.visible = false
+			_menu.is_open = false
+			_playing = true
+		else:
+			_menu.open()
+
+
+## The stage picked in the menu: this one starts (again); the other is built.
+func _on_stage(number: int) -> void:
+	var wanted := "jungle" if number == 2 else "lab"
+	if wanted != stage:
+		stage = wanted
+		night_asked = ""
+		skip_menu = true
+		get_tree().reload_current_scene()
+		return
+	if _playing:
+		battle.restart()
+	_playing = true
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Escape: back to the menu (the game waits under it).
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE and _menu and not _menu.is_open:
+		_menu.open()
+		get_viewport().set_input_as_handled()
+		return
 	# 1, 2: the lab, the marsh ruins (the game starts again on it).
 	if event is InputEventKey and event.pressed and not event.echo and _shot.is_empty():
 		var wanted: String = { KEY_1: "lab", KEY_2: "jungle" }.get(event.physical_keycode, "")
 		if not wanted.is_empty() and wanted != stage:
 			stage = wanted
 			night_asked = ""
+			skip_menu = true
 			get_tree().reload_current_scene()
 
 

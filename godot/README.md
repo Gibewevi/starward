@@ -4,7 +4,7 @@ Le jeu en cours de migration vers Godot 4.7. Le plan complet, les conventions et
 
 ## Jouer
 
-Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`). Le jeu part dans le labo (stage 1) ; **2** passe aux ruines du marais (stage 2), **1** revient au labo (la partie recommence). `godot --path godot -- --stage=jungle` part directement dans le marais, de jour ou de nuit au hasard (`--night=1` ou `--night=0` pour choisir).
+Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`), ou lancer `build/STARWARD/STARWARD.exe`. Le jeu s’ouvre sur le **menu principal** (`ui/stage_menu.gd`, port du menu du web) : **←/→** (ou le stick, la croix, la souris) pour choisir entre le stage 1 (hangar impérial) et le stage 2 (ruines du marais), **Entrée** ou **Espace** (**A**, **Start**, un clic) pour lancer, **F** pour le plein écran. **Échap** y revient en cours de partie ; reprendre le même stage recommence la partie. En jeu, **2** passe aussi aux ruines du marais et **1** revient au labo. `godot --path godot -- --stage=jungle` part directement dans le marais, de jour ou de nuit au hasard (`--night=1` ou `--night=0` pour choisir).
 
 - **ZQSD / WASD** (selon la position des touches, le clavier AZERTY comme QWERTY) ou **flèches** : marcher. **Maj** : sprinter.
 - **Manette** : stick gauche, l’allure suit son inclinaison (marche lente, marche, course, sprint).
@@ -103,7 +103,7 @@ Pour les troopers : la démarche, le ragdoll seul et la navigation retombent exa
 
 Pour les effets : les grenades (rebonds, caisses, roulis, poussée de la Force, explosions) suivent le web au centième de millimètre ; les débris sont posés aux mêmes endroits et projetés de même pendant le premier quart de seconde (ensuite, une boîte qui culbute est chaotique) ; les tirs renvoyés partent dans la même direction, vers le même ennemi.
 
-Une image du jeu peut être écrite pour vérification : `godot --path godot -- --screenshot=capture.png`, avec au besoin `--frames=<n>`, `--view=<hauteur>` (caméra plus proche), `--at=<x>,<z>[,<cap>]` (où part le héros), `--clear=<secondes>` (toute l’escouade abattue à cet instant : l’escorte arrive) `--grenade=<secondes>:<x>:<z>` (une grenade lancée à ce moment vers ce point), `--blast=<secondes>:<x>:<z>` (une explosion), `--mortal` (mode invincible coupé), `--stage=jungle` et `--night=<0|1>` et des appuis programmés, par exemple `--press=0.3:attack,0.5:attack,1.9:force_push` (`3.4:hold:force_pull` … `6:release:force_pull` pour maintenir ; `retry` pour recommencer après la mort). La console indique alors les coups joués, l’état du héros et de l’escouade, les grenades, débris, brûlures et entailles, les images par seconde et le temps de calcul. Pendant une vérification, le clavier et les manettes sont ignorés.
+Une image du jeu peut être écrite pour vérification : `godot --path godot -- --screenshot=capture.png`, (le menu est alors sauté ; `--menu` le montre) avec au besoin `--frames=<n>`, `--view=<hauteur>` (caméra plus proche), `--at=<x>,<z>[,<cap>]` (où part le héros), `--clear=<secondes>` (toute l’escouade abattue à cet instant : l’escorte arrive) `--grenade=<secondes>:<x>:<z>` (une grenade lancée à ce moment vers ce point), `--blast=<secondes>:<x>:<z>` (une explosion), `--mortal` (mode invincible coupé), `--stage=jungle` et `--night=<0|1>` et des appuis programmés, par exemple `--press=0.3:attack,0.5:attack,1.9:force_push` (`3.4:hold:force_pull` … `6:release:force_pull` pour maintenir ; `retry` pour recommencer après la mort). La console indique alors les coups joués, l’état du héros et de l’escouade, les grenades, débris, brûlures et entailles, les images par seconde et le temps de calcul. Pendant une vérification, le clavier et les manettes sont ignorés.
 
 ## Organisation
 
@@ -124,6 +124,7 @@ Une image du jeu peut être écrite pour vérification : `godot --path godot -- 
 - `scripts/hero/` : le héros renversé, ses blessures, l’écran de mort.
 - `scripts/lab/` : le transformateur (et les générateurs du marais), le courant de la salle, les lampes des fusils.
 - `scripts/jungle/` : les ruines du marais, leurs plantes, leur eau, leur air, l’affichage des objectifs.
+- `scripts/ui/` : le menu principal et son alphabet en pixels.
 - `scripts/battle.gd` : l’escouade dans la scène, les coups du héros sur elle, les tirs, les explosions, la mort, le sabotage, le déroulé du combat.
 - `scripts/camera_rig.gd` : la caméra isométrique, ses secousses et ses à-coups.
 - `shaders/` : l’éclairage des personnages (partagé par le corps et le manteau), la traînée additive, les points lumineux et les gouttes, l’explosion et son reflet, les anneaux de souffle, les faisceaux et la poussière des lampes, la lumière des taches.
