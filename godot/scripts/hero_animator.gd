@@ -5,13 +5,13 @@ extends RefCounted
 ## so steps never restart when the pace changes. Light procedural layers sit
 ## on top: leaning into acceleration and turns, a sprint crouch, arms held
 ## clear of the coat, a head that looks into turns, the sword hand, and a
-## ground pass that plants the soles.
+## ground pass that plants the soles. Sword work (CombatController's output)
+## twists the torso, bends the knees and places both hands by two-bone IK.
 ##
 ## The clips, the stride widening and the gait cycle lengths come baked from
 ## the JavaScript (assets/data/mocap.json): tests/test_animator.gd replays a
 ## trace of it and must land on the same pose. The poses are worked out here,
 ## in the skeleton's space (the hero's own), then set on the Skeleton3D.
-## (Still to port with the combat, step 2: the arm IK of sword strikes.)
 
 const SOLES := [
 	["LeftFoot", Vector3(0, -0.09, -0.035)], ["LeftFoot", Vector3(0, -0.09, 0.07)], ["LeftToeBase", Vector3(0, -0.025, 0.02)],
@@ -20,6 +20,11 @@ const SOLES := [
 const IDLE_BLADE := Vector3(-0.52, -0.6, 0.6)
 const WALK_BLADE := Vector3(-0.5, -0.75, -0.2)
 const RUN_BLADE := Vector3(-0.3, -0.36, -0.88)
+## The arms the IK places: the sword arm, then the free one, each bent towards its pole (in the hero's space).
+const ARMS := [
+	["RightArm", "RightForeArm", "RightHand", Vector3(-0.55, -0.35, -0.45)],
+	["LeftArm", "LeftForeArm", "LeftHand", Vector3(0.55, -0.35, -0.45)],
+]
 
 var skeleton: Skeleton3D
 var socket: Node3D
@@ -37,11 +42,15 @@ var state := { "phase": 0.0, "idle_time": 0.0, "motion": 0.0, "running": 0.0, "s
 var rotations: Array[Quaternion] = []
 var positions: Array[Vector3] = []
 var globals: Array[Transform3D] = []
+## Where the hilt sits in the right hand (the socket's place on the hand bone).
+var socket_offset := Vector3(-0.05, -0.004, 0.006)
 
 
 func _init(target: Skeleton3D, saber_socket: Node3D = null, data: Dictionary = {}) -> void:
 	skeleton = target
 	socket = saber_socket
+	if socket:
+		socket_offset = socket.position
 	if data.is_empty():
 		data = load_mocap()
 	names = PackedStringArray(data.bones)
@@ -237,6 +246,14 @@ func update(options: Dictionary = {}) -> void:
 	var gait := _blend(walk, run, _smooth(state.running))
 	var pose := _blend(idle, gait, state.motion)
 	_apply_pose(pose, state, action)
+	var weight: float = action.get("weight", 0.0)
+	if weight > 0.0:
+		# Strikes and guard place the sword hand and aim the blade; the other
+		# hand counterbalances or joins it on the hilt.
+		_apply_arm(ARMS[0], action.hand, weight)
+		var blade := (action.blade as Vector3).normalized()
+		var grip: Vector3 = globals[index.RightHand] * socket_offset - blade * 0.1
+		_apply_arm(ARMS[1], (action.left as Vector3).lerp(grip, action.grip), weight)
 	_aim_blade(time, action)
 	if skeleton:
 		for k in names.size():
@@ -263,3 +280,48 @@ func _aim_blade(time: float, action: Dictionary) -> void:
 	# In the hand's frame (the socket's parent follows the hand bone): the hand's turn undone, then the blade's.
 	var blade := Quaternion(Vector3.UP, direction)
 	socket.quaternion = hand.basis.get_rotation_quaternion().inverse() * blade
+
+
+## Turns a bone so that the direction from → current becomes from → desired (in the skeleton's space).
+func _aim_bone(k: int, from: Vector3, current: Vector3, desired: Vector3) -> void:
+	var delta := Quaternion((current - from).normalized(), (desired - from).normalized())
+	var world := delta * globals[k].basis.get_rotation_quaternion()
+	var parent := globals[parents[k]].basis.get_rotation_quaternion() if parents[k] >= 0 else Quaternion.IDENTITY
+	rotations[k] = parent.inverse() * world
+	_globals()
+
+
+## Two-bone IK, independent of the bones' own axes (port of src/ik.js): the
+## upper bone is turned so the middle joint lands where the triangle puts it
+## (bent towards the pole), then the lower bone is turned to reach the target.
+func _solve_two_bone(upper: int, lower: int, end: int, target: Vector3, pole: Vector3) -> void:
+	var s := globals[upper].origin
+	var e := globals[lower].origin
+	var h := globals[end].origin
+	var length_a := s.distance_to(e)
+	var length_b := e.distance_to(h)
+	var direction := target - s
+	var distance := clampf(direction.length(), absf(length_a - length_b) + 1e-3, length_a + length_b - 1e-3)
+	direction = direction.normalized()
+	var cosine := clampf((length_a * length_a + distance * distance - length_b * length_b) / (2.0 * length_a * distance), -1.0, 1.0)
+	var bend := pole - s
+	bend -= direction * bend.dot(direction)
+	if bend.length_squared() < 1e-8:
+		bend = Vector3(0, -1, 0)
+	bend = bend.normalized()
+	var elbow := s + direction * (length_a * cosine) + bend * (length_a * sqrt(1.0 - cosine * cosine))
+	var reach := s + direction * distance
+	_aim_bone(upper, s, e, elbow)
+	_aim_bone(lower, globals[lower].origin, globals[end].origin, reach)
+
+
+## An arm to a goal (the hero's space), blended with the captured motion by weight.
+func _apply_arm(arm: Array, goal: Vector3, weight: float) -> void:
+	var upper: int = index[arm[0]]
+	var lower: int = index[arm[1]]
+	var fk := [rotations[upper], rotations[lower]]
+	_solve_two_bone(upper, lower, index[arm[2]], goal, globals[upper].origin + (arm[3] as Vector3))
+	if weight < 1.0:
+		rotations[upper] = _slerp(fk[0], rotations[upper], weight)
+		rotations[lower] = _slerp(fk[1], rotations[lower], weight)
+		_globals()

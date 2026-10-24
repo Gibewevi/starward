@@ -7,6 +7,8 @@ extends Node
 ##
 ## A frame of it can be written to a PNG for checking:
 ##   godot --path godot -- --screenshot=<file> [--frames=<n>] [--autopilot=<x>,<y>[,sprint]]
+##     [--press=<seconds>:<action>,…]  (attack, guard, dash, twirl, force_pull, force_push)
+##     [--view=<metres>]  (the view's height, 5 to 12: closer for a look at the hero)
 
 @export var pixel_size := 4
 
@@ -20,6 +22,10 @@ var _shot := ""
 var _frames := 0
 var _frames_left := 90
 var _autopilot := ""
+var _presses := ""
+var _view := 0.0
+var _moves := {}
+var _trail_peak := 0
 
 
 func _ready() -> void:
@@ -30,6 +36,10 @@ func _ready() -> void:
 			_frames_left = int(argument.get_slice("=", 1))
 		elif argument.begins_with("--autopilot="):
 			_autopilot = argument.get_slice("=", 1)
+		elif argument.begins_with("--view="):
+			_view = float(argument.get_slice("=", 1))
+		elif argument.begins_with("--press="):
+			_presses = argument.get_slice("=", 1)
 	var container := SubViewportContainer.new()
 	container.name = "Pixels"
 	container.stretch = true
@@ -56,11 +66,17 @@ func _ready() -> void:
 		var parts := _autopilot.split(",")
 		hero.autopilot = Vector2(float(parts[0]), float(parts[1]))
 		hero.autopilot_sprint = parts.size() > 2
+	for press in _presses.split(",", false):
+		hero.autopilot_presses[float(press.get_slice(":", 0))] = press.get_slice(":", 1)
 	camera = CameraRig.new()
 	camera.name = "Camera"
 	camera.target = hero
 	world.add_child(camera)
 	camera.current = true
+	hero.camera = camera
+	if _view > 0.0:
+		camera.desired_height = _view
+		camera.view_height = _view
 
 
 ## The lab's cold light, as lighting.js: a key light casting the shadows, a rim from behind, a blue-violet ambient.
@@ -116,7 +132,12 @@ func _process(_delta: float) -> void:
 	if _shot.is_empty():
 		return
 	_frames += 1
+	# What the check went through: the moves played, the longest trail.
+	_trail_peak = maxi(_trail_peak, hero.trail.samples.size())
+	if hero.action.name != null:
+		_moves[hero.action.name] = true
 	if _frames >= _frames_left:
+		print("%.1f s — coups joués : %s ; traînée jusqu’à %d échantillons ; héros en (%.2f ; %.2f)" % [hero.time, ", ".join(_moves.keys()), _trail_peak, hero.motion.x, hero.motion.z])
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(_shot)
 		get_tree().quit()

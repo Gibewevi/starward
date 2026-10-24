@@ -441,6 +441,8 @@ const GUARD = key(0, [-0.04, 0.98, 0.3], [0.15, 0.96, 0.22], { grip: 1, yaw: 0.2
 // the blade ready to strike.
 const HOLD = key(0, [-0.26, 0.98, 0.1], [-0.35, 0.5, 0.79], { left: [0.12, 1.15, 0.48], yaw: -0.2, pitch: 0.05, crouch: 0.6 });
 const HOLD_LEFT = new THREE.Vector3(0.12, 1.15, 0.48);
+/** The held stances, for the Godot port's bake (src/bake.js). */
+export const STANCES = { guard: GUARD, hold: HOLD, parries: PARRIES };
 
 const clamp01 = value => Math.max(0, Math.min(1, value));
 const ease = value => value * value * (3 - 2 * value);

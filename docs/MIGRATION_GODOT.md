@@ -34,12 +34,13 @@ Godot 4.7 : ouvrir `godot/project.godot`. Tests sans fenêtre : `godot --headles
 | `feel.js` | `assets/data/feel.json` + `scripts/feel.gd` (autoload `Feel`) | 1 |
 | `motion.js` | `scripts/motion_controller.gd` | 1 |
 | `character.js`, `rig.js`, `avatar-surface.js`, `jedi-head.js` | `assets/baked/hero.glb` | 1 |
-| `animator.js`, `mocap-clips.js`, `ik.js` | `scripts/hero_animator.gd`, `assets/data/mocap.json` | 1 |
+| `animator.js`, `mocap-clips.js`, `ik.js` | `scripts/hero_animator.gd`, `assets/data/mocap.json` | 1, 2 |
 | `stage.js`, `lab.js`, `arena.js` | `assets/baked/lab.glb`, `assets/data/lab.json`, `scripts/obstacles.gd` | 1 |
 | `lighting.js`, rendu pixel, bloom (`main.js`) | `scripts/main.gd` (Environment, SubViewport) | 1 |
-| `saber.js`, `blade-trail.js` | `saber.glb` + `scripts/saber.gd` | 2 |
-| `coat.js` | `scripts/coat.gd` (tissu simulé) | 2 |
-| `combat.js`, `deflect.js`, `tween.js`, `shake.js` | `scripts/combat/*.gd` | 2 |
+| `saber.js`, `blade-trail.js` | `saber.glb` + `scripts/saber.gd`, `scripts/blade_trail.gd` | 2 |
+| `coat.js` | `scripts/coat.gd` (tissu simulé, sur un fil de calcul) | 2 |
+| `combat.js`, `shake.js`, `tween.js` (kick), dash et caméra de `main.js` | `assets/data/combat.json` + `scripts/combat_controller.gd`, `scripts/shake.gd`, `scripts/camera_rig.gd`, `scripts/hero.gd` | 2 |
+| `deflect.js`, visée des coups (`findMark`, `lockOn`), arrêts sur image | `scripts/hero.gd` | 3, 4 |
 | `stormtrooper.js`, `trooper-model.js`, `trooper-gait.js`, `ragdoll.js` | `stormtrooper.glb` + `scripts/trooper/*.gd` | 3 |
 | `trooper-ai.js`, `nav.js`, `alerts.js`, `reinforcements.js` | `scripts/ai/*.gd` (AStarGrid2D) | 3 |
 | `blasters.js`, `grenades.js`, `explosions.js`, `impact-effects.js`, `scorch-marks.js`, `saber-scars.js`, `debris.js`, `wounds.js`, `footprints.js` | `scripts/fx/*.gd`, particules GPU | 4 |
@@ -63,7 +64,7 @@ Godot 4.7 : ouvrir `godot/project.godot`. Tests sans fenêtre : `godot --headles
 ## Avancement
 
 - [x] Étape 1 — Fondations (voir `godot/README.md`). Le mouvement et l’animation sont identiques au web (tests de parité). Restes : le manteau simulé (étape 2) et un calibrage plus fin des lumières (les intensités three.js et Godot ne se correspondent pas une à une).
-- [ ] Étape 2 — Sabre et combat
+- [x] Étape 2 — Sabre et combat (voir `godot/README.md`). Le contrôleur de combat et l’IK des bras sont identiques au web (tests de parité sur une trace de 1 100 pas : les 22 coups, la garde, les parades, la Force, l’empalement, le sabotage). Sabre, traînée, manteau simulé, dash, moulinet, secousses de caméra en place. Restent pour les étapes suivantes, parce qu’ils ont besoin des stormtroopers ou des effets : la visée et l’élan vers une cible, les arrêts sur image et les secousses d’impact, le renvoi des tirs, les effets de la Force (vague, corps projetés, décor), la traînée lumineuse du dash, le son. Le manteau tourne sur un fil parallèle : en GDScript sa simulation coûte environ 6 ms par image.
 - [ ] Étape 3 — Stormtroopers
 - [ ] Étape 4 — Tirs, explosions, effets
 - [ ] Étape 5 — Duel
