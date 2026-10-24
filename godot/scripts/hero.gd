@@ -16,8 +16,9 @@ extends Node3D
 ## held, the blade runs him through. A clean cut freezes the action for a beat
 ## (stop_for), then eases back to speed: `sim` is this frame's time once
 ## slowed. What he does makes noise the squad hears. Standing troopers stop
-## him like the crates do. (Bolts to deflect, and being knocked down, come
-## with step 4 of the migration.)
+## him like the crates do. Thrown off his feet by a blast (Battle's
+## HeroRagdoll), he has no control until he is up again; dead, none at all,
+## his blade going out.
 ##
 ## Screen directions on the floor: right is (10, −8), up (−8, −10) — the iso
 ## camera's axes — so pushing up walks away from the view.
@@ -51,7 +52,6 @@ var autopilot_presses := {}
 var _autopilot_held := {}
 
 ## A press is kept this long (FEEL.input.buffer) when it cannot be taken at once.
-var _input_clock := 0.0
 var _pending := { "attack": -INF, "dash": -INF, "power": -INF }
 var _pending_power := ""
 var _dash = null  ## { age, along } while dashing
@@ -74,7 +74,20 @@ var _lead := 0.0
 ## LT and B held: the thrust building up; the trooper on the blade.
 var _thrust: Variant = null
 var _skewered: Variant = null  ## { trooper, entered, depth }
+var _gush_clock := 0.0
 var _attack_pressed := false
+## Real time, for the input buffer and the unseen grace of a late parry.
+var input_clock := 0.0
+## The perfect parry: when the guard was last pressed (a press too soon after the last opens no window), and the burst it sends back.
+var parry_at := -INF
+var parry_try := -INF
+var perfect_until := -INF
+## Off his feet (a blast) or dead: no control.
+var _down := false
+## By the transformer, B held: { age, phase ("cocking", "thrust"), hold, crackle, entered, from, to }.
+var plunge: Variant = null
+## Nodes that follow his bones (for what sticks to him: drips).
+var _bone_nodes := {}
 
 
 func _ready() -> void:
@@ -158,6 +171,8 @@ static func hit_stop_scale(age: float, hold: float, recover: float, floor_scale:
 
 
 func _pressed(name: String) -> bool:
+	if _down:
+		return false
 	if manual and Input.is_action_just_pressed(name):
 		return true
 	for at in autopilot_presses:
@@ -168,11 +183,74 @@ func _pressed(name: String) -> bool:
 
 ## Held down (by hand, or by the autopilot between its "hold:" and "release:").
 func _held(name: String) -> bool:
+	if _down:
+		return false
 	return (manual and Input.is_action_pressed(name)) or _autopilot_held.get(name, false)
 
 
+## Dead, a press to try again: Enter (Start), or a strike, the guard, a dash.
+func retry_pressed() -> bool:
+	for name in ["retry", "attack", "guard", "dash"]:
+		if manual and InputMap.has_action(name) and Input.is_action_just_pressed(name):
+			return true
+		for at in autopilot_presses:
+			if autopilot_presses[at] == name and time >= at and time - sim < at:
+				return true
+	return false
+
+
+## Where one of his bones is now, in the world.
+func bone_position(bone: String) -> Vector3:
+	return skeleton.global_transform * animator.globals[animator.index[bone]].origin
+
+
+## A node that follows one of his bones.
+func bone_node(bone: String) -> Node3D:
+	if not _bone_nodes.has(bone):
+		var attachment := BoneAttachment3D.new()
+		attachment.name = "On %s" % bone
+		attachment.bone_name = bone
+		skeleton.add_child(attachment)
+		_bone_nodes[bone] = attachment
+	return _bone_nodes[bone]
+
+
+## Knocked off his feet or killed: whatever he was doing is dropped (the trooper on his blade, the one held up, the strike).
+func let_go() -> void:
+	if _skewered != null:
+		var blade := saber.segment()
+		_unskewer(blade[1] - blade[0])
+	combat.reset()
+	trail.clear()
+	_dash = null
+	_lunge = null
+	_turn = null
+	_intent = null
+	_thrust = null
+	if held:
+		held.drop()
+		held = null
+
+
 func _waiting(name: String) -> bool:
-	return _input_clock - _pending[name] <= feel.input.buffer
+	return input_clock - _pending[name] <= feel.input.buffer
+
+
+## Dashing (and a beat after): bolts pass through him.
+func dodging() -> bool:
+	return _dodge > 0.0
+
+
+## In the middle of a dash.
+func dashing() -> bool:
+	return _dash != null
+
+
+## The guard pressed: the window of a perfect parry opens — unless pressed again and again.
+func _parry_press() -> void:
+	if time - parry_try > feel.deflect.mash or time <= perfect_until + 0.2:
+		parry_at = time
+	parry_try = time
 
 
 func _noise(at: Vector3, radius: float, options: Dictionary = {}) -> void:
@@ -192,7 +270,12 @@ func _process(delta: float) -> void:
 		if _hit_stop.age > _hit_stop.hold + _hit_stop.recover:
 			_hit_stop = null
 	time += sim
-	_input_clock += delta
+	input_clock += delta
+	var knockdown: HeroRagdoll = battle.knockdown if battle else null
+	_down = knockdown != null and knockdown.active()
+	# Dead: his blade goes out as he falls.
+	if battle and battle.death != null:
+		motion.saber = maxf(0.0, motion.saber - sim * 3.0)
 	for at in autopilot_presses:
 		var press: String = autopilot_presses[at]
 		if time >= at and time - sim < at and press.contains(":"):
@@ -216,7 +299,7 @@ func _process(delta: float) -> void:
 	_dodge = maxf(0.0, _dodge - sim)
 	_dash_after = maxf(0.0, _dash_after - sim)
 	if _pressed("dash"):
-		_pending.dash = _input_clock
+		_pending.dash = input_clock
 	if _waiting("dash") and _dash == null and _dash_cooldown <= 0.0 and _skewered == null and not combat.impaling():
 		_pending.dash = -INF
 		_start_dash(Vector3(world_x, 0, world_z).normalized() if stick else _facing())
@@ -225,16 +308,23 @@ func _process(delta: float) -> void:
 	# Powers cut any strike short; a parry too; B strikes and chains.
 	_keep_hold()
 	_impale_input(delta, attack_held)
+	# The guard: held, or just pressed (a parry, the window of a perfect one).
+	var parry_pressed := _pressed("guard")
+	if parry_pressed:
+		_parry_press()
+	if battle:
+		battle.auto_parry(guard or time - parry_try < 0.3)
 	for power in ["force_pull", "force_push"]:
 		if _pressed(power):
-			_pending.power = _input_clock
+			_pending.power = input_clock
 			_pending_power = "forcePull" if power == "force_pull" else "forcePush"
 	if _waiting("power") and combat.power(_pending_power):
 		_pending.power = -INF
-	if _pressed("guard"):
+	if parry_pressed:
 		combat.parry()
+	_plunge_input(delta, attack_held)
 	if _attack_pressed:
-		_pending.attack = _input_clock
+		_pending.attack = input_clock
 	# Where the next blow would go: the strike is chosen to reach him (ahead, aside, behind).
 	if _intent != null and (_intent.dead or _intent.is_impaled()):
 		_intent = null
@@ -268,7 +358,16 @@ func _process(delta: float) -> void:
 	if released != null:
 		_unleash(released)
 
-	if _dash != null:
+	if _down:
+		# Thrown by a blast: where the ragdoll's hips are.
+		var at := knockdown.position()
+		var moving := knockdown.velocity()
+		motion.x = at.x
+		motion.z = at.z
+		motion.vx = moving.x
+		motion.vz = moving.z
+		motion.speed = 0.0
+	elif _dash != null:
 		_dash_step(sim)
 	else:
 		motion.update(sim, world_x, world_z, {
@@ -280,7 +379,7 @@ func _process(delta: float) -> void:
 	# Standing troopers stop him.
 	for trooper: Stormtrooper in _troopers():
 		var block: Variant = trooper.blocker()
-		if block == null:
+		if block == null or _down:
 			continue
 		var dx: float = motion.x - block.x
 		var dz: float = motion.z - block.z
@@ -290,19 +389,39 @@ func _process(delta: float) -> void:
 			motion.x = block.x + dx / distance * reach
 			motion.z = block.z + dz / distance * reach
 	# Crates and barrels stop him.
-	if obstacles:
+	if obstacles and not _down:
 		var at := obstacles.push_out(Vector3(motion.x, 0, motion.z), 0.3)
 		motion.x = at.x
 		motion.z = at.z
-	position = Vector3(motion.x, 0, motion.z)
-	rotation.y = motion.heading + action.spin
-	var sprint_intent: float = maxf(motion.sprint, 1.0 if asked.sprint and input.length() > 0.05 else 0.0) * (1.0 - action.guard)
-	animator.update({ "dt": sim, "time": time, "speed": motion.speed, "run_blend": motion.run_blend, "sprint_intent": sprint_intent, "turn_rate": motion.turn_rate, "forward_accel": motion.forward_accel, "action": action })
+	if _down:
+		# The ragdoll lays his skeleton out; once up, the motion capture takes over again.
+		var up: Variant = knockdown.update(sim, time)
+		if up != null:
+			motion.x = up.x
+			motion.z = up.z
+			motion.heading = up.heading
+			motion.vx = 0.0
+			motion.vz = 0.0
+			motion.speed = 0.0
+			battle._blade_ready = false
+	else:
+		position = Vector3(motion.x, 0, motion.z)
+		rotation.y = motion.heading + action.spin
+		var sprint_intent: float = maxf(motion.sprint, 1.0 if asked.sprint and input.length() > 0.05 else 0.0) * (1.0 - action.guard)
+		animator.update({ "dt": sim, "time": time, "speed": motion.speed, "run_blend": motion.run_blend, "sprint_intent": sprint_intent, "turn_rate": motion.turn_rate, "forward_accel": motion.forward_accel, "action": action })
+		# His feet push the scraps on the floor about.
+		if battle:
+			battle.debris.kick(position, Vector3(motion.vx, 0, motion.vz))
 	coat.begin(sim, time, Vector3(motion.vx, 0, motion.vz))
 	# Igniting the blade, moving or not, comes with a quick draw twirl.
 	if saber.update(motion.saber, time, action.flare) == "ignite":
 		combat.flourish()
 		_noise(position, 3.5, { "from": position })
+	# In the dark the blade lights more of the room round him.
+	var dark: float = battle.night if battle else 0.0
+	for index in saber.lights.size():
+		saber.lights[index].light_energy *= 1.0 + 0.8 * dark
+		saber.lights[index].omni_range = [3.2, 2.6][index] + 2.2 * dark
 	# Footsteps: a run heard close by, a sprint further; the blade's hum only right next to him.
 	_step_clock -= sim
 	_hum_clock -= sim
@@ -543,6 +662,7 @@ func _keep_hold() -> void:
 func _unleash(kind: String) -> void:
 	var here := Vector3(motion.x, 0, motion.z)
 	var facing := _facing()
+	var left_hand := bone_position("LeftHand")
 	if kind == "forcePush":
 		# Everyone in the cone is thrown, the nearest hardest.
 		var push: Dictionary = feel.push
@@ -556,6 +676,11 @@ func _unleash(kind: String) -> void:
 			var throw := direction * (Feel.pick(push.speed) * strength)
 			throw.y = Feel.pick(push.lift) * strength
 			trooper.force_push(throw)
+		if battle:
+			battle.effects.wave(left_hand, facing, { "kind": "push", "length": push.range * 0.8 })
+			# Grenades are swept away; the scraps on the floor too.
+			battle.grenades.push(here, facing, push.range, push.cone)
+			battle.debris.blast(here - facing * 0.6, push.range * 0.7, 0.45)
 		_noise(here, 8.5, { "alarm": true, "from": here })
 		if camera:
 			camera.shove(facing, feel.camera.kickPush)
@@ -572,6 +697,8 @@ func _unleash(kind: String) -> void:
 				held = trooper
 		elif trooper:
 			trooper.force_pull(here + toward.normalized() * minf(pull.stop, distance))
+		if battle:
+			battle.effects.wave(left_hand, toward, { "kind": "pull", "length": distance })
 		_noise(here, 8.5, { "alarm": true, "from": here })
 		if camera:
 			camera.shove(-toward, feel.camera.kick)
@@ -637,7 +764,7 @@ func _unskewer(axis: Vector3) -> void:
 
 
 ## Each frame while the thrust goes in and the body is on the blade (after the squad has thought).
-func keep_skewer(_dt: float) -> void:
+func keep_skewer(dt: float) -> void:
 	if _skewered == null:
 		return
 	var trooper: Stormtrooper = _skewered.trooper
@@ -679,4 +806,106 @@ func keep_skewer(_dt: float) -> void:
 	if not _pull_held or not moving or not trooper.is_impaled():
 		_unskewer(axis)
 		return
-	trooper.skewer(base + axis * _skewered.depth, motion.heading)
+	var wound: Vector3 = base + axis * _skewered.depth
+	trooper.skewer(wound, motion.heading)
+	# While he fights, spurts of sparks from the wound, fewer as he weakens.
+	_gush_clock -= dt
+	if not trooper.dead and _gush_clock <= 0.0 and battle:
+		_gush_clock = Feel.pick(feel.impale.gush)
+		var across := axis.cross(Vector3.UP).normalized()
+		var out := randf() < 0.6
+		var spurt := (axis * (1.0 if out else -1.0) + Vector3.UP * 0.4).normalized()
+		battle.effects.sparks(wound + axis * (0.2 if out else -0.2), spurt, across, { "count": 5 + roundi(randf() * 6.0), "speed": 2.4, "saber": 0.3 })
+
+
+# ---- Running the blade into the transformer -----------------------------------
+# B pressed by the transformer: he draws the blade far back along his right
+# side, both hands on the hilt, the arc crackling at it more and more; let go
+# too soon and he lowers it. The hold full, he drives it straight in; it
+# surges (Battle and Transformer take it from there), then blows.
+
+func _transformer() -> Transformer:
+	return battle.transformer if battle else null
+
+
+func _start_plunge() -> void:
+	var t := _transformer()
+	var s := t.socket
+	var a := t.approach
+	plunge = { "age": 0.0, "phase": "cocking", "hold": 0.0, "crackle": 0.0, "entered": false, "from": Vector3(motion.x, 0, motion.z), "to": a }
+	motion.face(atan2(s.x - a.x, s.z - a.z))
+	motion.vx = 0.0
+	motion.vz = 0.0
+	_dash = null
+	_lunge = null
+	_turn = null
+	combat.plunge()
+
+
+## B pressed by the transformer starts the wind-up; held to the end, the thrust; let go before, nothing.
+func _plunge_input(dt: float, attack_held: bool) -> void:
+	var t := _transformer()
+	if t == null:
+		return
+	if plunge != null and plunge.phase == "cocking":
+		# Let go, thrown, or another move took over: he lowers the blade.
+		if _down or not attack_held or combat.action == null or combat.action.name != "plunge":
+			combat.uncock()
+			plunge = null
+			return
+		plunge.hold += dt
+		var k := minf(1.0, plunge.hold / float(feel.sabotage.hold))
+		var s := t.socket
+		var out := t.facing
+		# The tension: the arc crackling at the blade, faster and harder.
+		plunge.crackle -= dt
+		if plunge.crackle <= 0.0:
+			plunge.crackle = 0.3 - 0.16 * k
+			battle.effects.sparks(s + out * 0.06, Vector3(out.x, 0.3 + randf() * 0.4, out.z).normalized(), Vector3(out.z, 0, -out.x), { "count": roundi(1.0 + 4.0 * k), "speed": 1.0 + 2.0 * k, "saber": 0.6 })
+		if k >= 1.0:
+			plunge.phase = "thrust"
+			combat.loose()
+		return
+	# (The blade off after a moment standing still: it lights as he draws it back.)
+	if _attack_pressed and not _down and plunge == null and battle.death == null and not combat.busy() and t.reachable(Vector3(motion.x, 0, motion.z)):
+		_attack_pressed = false
+		_start_plunge()
+
+
+## Each frame (after the squad): the quick step before the window, the blade going in.
+func plunge_step(dt: float) -> void:
+	if plunge == null:
+		return
+	var t := _transformer()
+	plunge.age += dt
+	# A quick step to just before the window, squared up to it.
+	var k := Stormtrooper.ease_by("outCubic", minf(1.0, plunge.age / 0.14))
+	motion.x = lerpf(plunge.from.x, plunge.to.x, k)
+	motion.z = lerpf(plunge.from.z, plunge.to.z, k)
+	var s := t.socket
+	motion.heading = atan2(s.x - motion.x, s.z - motion.z)
+	var playing: Variant = combat.action
+	if not plunge.entered and plunge.phase == "thrust" and playing != null and playing.name == "plunge" and combat.time / playing.duration >= playing.impact[0] - 0.01:
+		plunge.entered = true
+		t.begin()
+		# The blade goes in: a jolt, a gush of blue and molten sparks, a crack of electricity.
+		var out := t.facing
+		var effects := battle.effects
+		effects.sparks(s + out * 0.06, Vector3(out.x, 0.4, out.z).normalized(), Vector3(out.z, 0, -out.x), { "count": 60, "speed": 5.5, "saber": 0.6 })
+		effects.flash(s, 1.8, { "color": Color(0.55, 0.75, 1) })
+		effects.burst(s, { "normal": out, "power": 1.3, "tint": "blue" })
+		stop_for(0.12, 0.2)
+		if camera:
+			camera.punch(feel.camera.punch * 1.4)
+			camera.shove(-out, feel.camera.kick)
+			camera.trauma.add(0.25)
+		_noise(s, 9.0, { "alarm": true, "from": s })
+	# Pinned while it surges.
+	if plunge.entered and t.state != "surging":
+		plunge = null
+
+
+## The transformer blew: the blade comes out.
+func end_plunge() -> void:
+	combat.unpin()
+	plunge = null

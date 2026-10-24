@@ -4,7 +4,8 @@ extends Node
 ## Shift to sprint; on a gamepad the left stick, its tilt setting the pace.
 ## The sword: J strikes (B), K guards — a press parries (RB, LB or A), Space
 ## dashes (Y), E twirls the blade (R3), U pulls and I pushes with the Force
-## (LT, RT).
+## (LT, RT). G turns god mode on or off; dead, Enter (Start) — or a strike,
+## the guard, a dash — starts again.
 ## Actions are registered here rather than in project.godot, to stay readable.
 
 const ACTIONS := {
@@ -21,6 +22,8 @@ const ACTIONS := {
 	"twirl": [KEY_E],
 	"force_pull": [KEY_U],
 	"force_push": [KEY_I],
+	"god_mode": [KEY_G],
+	"retry": [KEY_ENTER, KEY_KP_ENTER],
 }
 const BUTTONS := {
 	"attack": [JOY_BUTTON_B],
@@ -28,6 +31,7 @@ const BUTTONS := {
 	"dash": [JOY_BUTTON_Y],
 	"twirl": [JOY_BUTTON_RIGHT_STICK],
 	"restart": [JOY_BUTTON_LEFT_STICK],
+	"retry": [JOY_BUTTON_START],
 }
 const STICK := {
 	"move_left": [JOY_AXIS_LEFT_X, -1.0],

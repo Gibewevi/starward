@@ -13,6 +13,9 @@ extends Node
 ##     [--at=<x>,<z>[,<heading>]]  (where the hero starts)
 ##     [--clear=<seconds>]  (the whole squad struck down then: the escort comes in)
 ##     [--view=<metres>]  (the view's height, 5 to 12: closer for a look at the hero)
+##     [--grenade=<seconds>:<x>:<z>,…]  (a grenade thrown then at that spot, its fuse 1.6 s)
+##     [--blast=<seconds>:<x>:<z>,…]  (a blast then, right there)
+##     [--mortal]  (god mode off: a bolt or a blast kills him)
 
 @export var pixel_size := 4
 
@@ -23,6 +26,9 @@ var hero: Hero
 var battle: Battle
 var camera: CameraRig
 var strip: OmniLight3D
+var key: DirectionalLight3D
+var rim: DirectionalLight3D
+var environment: Environment
 var _shot := ""
 var _frames := 0
 var _frames_left := 90
@@ -31,9 +37,13 @@ var _presses := ""
 var _view := 0.0
 var _at := ""
 var _clear := INF
+var _grenades: Array = []
+var _mortal := false
 var _states := {}
 var _moves := {}
 var _trail_peak := 0
+var _process_sum := 0.0
+var _process_worst := 0.0
 
 
 func _ready() -> void:
@@ -52,6 +62,12 @@ func _ready() -> void:
 			_at = argument.get_slice("=", 1)
 		elif argument.begins_with("--clear="):
 			_clear = float(argument.get_slice("=", 1))
+		elif argument.begins_with("--grenade=") or argument.begins_with("--blast="):
+			for throw in argument.get_slice("=", 1).split(",", false):
+				var parts := throw.split(":")
+				_grenades.append([float(parts[0]), float(parts[1]), float(parts[2]), argument.begins_with("--blast=")])
+		elif argument == "--mortal":
+			_mortal = true
 	var container := SubViewportContainer.new()
 	container.name = "Pixels"
 	container.stretch = true
@@ -91,6 +107,10 @@ func _ready() -> void:
 	hero.camera = camera
 	battle = Battle.new(hero, level, camera)
 	world.add_child(battle)
+	battle.god_mode = not _mortal
+	battle.light_room({ "environment": environment, "key": key, "rim": rim, "strip": strip })
+	battle.death_screen = DeathScreen.new()
+	add_child(battle.death_screen)
 	if not _at.is_empty():
 		var parts := _at.split(",")
 		hero.place(float(parts[0]), float(parts[1]), float(parts[2]) if parts.size() > 2 else NAN)
@@ -102,7 +122,7 @@ func _ready() -> void:
 
 ## The lab's cold light, as lighting.js: a key light casting the shadows, a rim from behind, a blue-violet ambient.
 func _build_light() -> void:
-	var environment := Environment.new()
+	environment = Environment.new()
 	environment.background_mode = Environment.BG_COLOR
 	environment.background_color = Color("101722")
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -123,7 +143,7 @@ func _build_light() -> void:
 	var env_node := WorldEnvironment.new()
 	env_node.environment = environment
 	world.add_child(env_node)
-	var key := DirectionalLight3D.new()
+	key = DirectionalLight3D.new()
 	key.name = "Key light"
 	key.light_color = Color("dce6ff")
 	key.light_energy = 1.25
@@ -131,7 +151,7 @@ func _build_light() -> void:
 	key.directional_shadow_max_distance = 30.0
 	world.add_child(key)
 	key.look_at_from_position(Vector3(-3, 7, 5), Vector3.ZERO, Vector3.UP)
-	var rim := DirectionalLight3D.new()
+	rim = DirectionalLight3D.new()
 	rim.name = "Rim light"
 	rim.light_color = Color("97abe0")
 	rim.light_energy = 0.6
@@ -153,9 +173,19 @@ func _process(_delta: float) -> void:
 	if hero.time >= _clear:
 		_clear = INF
 		battle.clear_room()
+	for throw in _grenades.duplicate():
+		if hero.time >= throw[0]:
+			_grenades.erase(throw)
+			if throw[3]:
+				battle.detonate(Vector3(throw[1], 0, throw[2]))
+			else:
+				battle.grenade_at(throw[1], throw[2])
 	if _shot.is_empty():
 		return
 	_frames += 1
+	var spent := Performance.get_monitor(Performance.TIME_PROCESS)
+	_process_sum += spent
+	_process_worst = maxf(_process_worst, spent)
 	# What the check went through: the moves played, the longest trail.
 	_trail_peak = maxi(_trail_peak, hero.trail.samples.size())
 	if hero.action.name != null:
@@ -164,7 +194,12 @@ func _process(_delta: float) -> void:
 		_states[trooper.state()] = true
 	if _frames == _frames_left:
 		print("%d images par seconde" % Engine.get_frames_per_second())
+		print("traitement : %.1f ms par image en moyenne, %.1f ms au pire" % [_process_sum * 1000.0 / _frames, _process_worst * 1000.0])
 		print("%.1f s — coups joués : %s ; traînée jusqu’à %d échantillons ; héros en (%.2f ; %.2f)" % [hero.time, ", ".join(_moves.keys()), _trail_peak, hero.motion.x, hero.motion.z])
+		print("héros : %s%s ; grenades : %d ; explosions : %d ; débris : %d (%d en mouvement) ; brûlures : %d ; entailles : %d ; empreintes : %d ; blessures : %d" % [
+			battle.knockdown.phase() if battle.knockdown.active() else "debout", " (mort)" if battle.death != null else "",
+			battle.grenades.live().size(), battle.explosions.active(), battle.debris.bodies.size(), battle.debris.awake(), battle.marks.count(),
+			battle.scars.scars(), battle.prints.count(), battle.wounds.count()])
 		print("escouade : %s ; états vus : %s ; états : %s ; %d tirs ; coupés : %s" % [
 			", ".join(battle.squad.minds.map(func(mind: Dictionary) -> String: return "%s/%s" % [mind.mode, mind.tactic])),
 			", ".join(_states.keys()), ", ".join(battle.troopers.map(func(t: Stormtrooper) -> String: return t.state())), battle.shots_fired,

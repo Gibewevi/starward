@@ -25,6 +25,8 @@ var _mesh := ImmediateMesh.new()
 
 func _ready() -> void:
 	top_level = true
+	# Its vertices are in the world's frame: the node itself stays at the origin, unturned.
+	global_transform = Transform3D.IDENTITY
 	mesh = _mesh
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	extra_cull_margin = 16384.0

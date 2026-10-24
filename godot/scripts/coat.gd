@@ -112,6 +112,9 @@ func _tailor() -> void:
 
 func _ready() -> void:
 	top_level = true
+	# Its vertices are in the world's frame: the node itself stays at the origin, unturned
+	# (made top level, it would otherwise keep the hero's transform of that moment).
+	global_transform = Transform3D.IDENTITY
 	# Last in the frame: the cloth's thread runs while everything else is processed.
 	process_priority = 100
 	mesh = _array_mesh

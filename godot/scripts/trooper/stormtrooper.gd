@@ -3043,7 +3043,7 @@ func _resolve(hit: Dictionary, time: float) -> void:
 		if effects:
 			effects.bleed(hit.point, spark_direction, hit.normal, { "speed": 2.0 + minf(speed, 8.0) * 0.5, "amount": amount })
 			for entry in caps[joint]:
-				effects.drip(entry.cap, amount)
+				effects.drip(entry.cap, NAN, amount)
 		_flash_part(bodies[CUTS[joint].child], 1.0)
 		if effects:
 			effects.burst(hit.point, { "normal": hit.normal, "power": 0.5 + speed / 10.0 })

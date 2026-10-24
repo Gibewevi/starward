@@ -255,6 +255,11 @@ func update(options: Dictionary = {}) -> void:
 		var grip: Vector3 = globals[index.RightHand] * socket_offset - blade * 0.1
 		_apply_arm(ARMS[1], (action.left as Vector3).lerp(grip, action.grip), weight)
 	_aim_blade(time, action)
+	apply()
+
+
+## The pose worked out (rotations, positions) set on the skeleton.
+func apply() -> void:
 	if skeleton:
 		for k in names.size():
 			skeleton.set_bone_pose_rotation(bone_ids[k], rotations[k])

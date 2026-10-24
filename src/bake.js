@@ -18,6 +18,10 @@ import { createGait, GAIT_JOINTS } from './trooper-gait.js';
 import { Ragdoll } from './ragdoll.js';
 import { createNav } from './nav.js';
 import { createSquadMind, patrolRounds } from './trooper-ai.js';
+import { createScorchMarks, emberTexture } from './scorch-marks.js';
+import { createGrenades } from './grenades.js';
+import { createDebris } from './debris.js';
+import { returnDirection } from './deflect.js';
 
 /**
  * Cooks the game for Godot (docs/MIGRATION_GODOT.md): builds each model with
@@ -641,10 +645,86 @@ async function bakeData() {
   await json('assets/data/motion-reference.json', { steps, states });
 }
 
+// ---- Effects: the burn textures, painted by the game's own code, as PNG ----------------------
+/** A DataTexture's pixels as a PNG, its first row at the bottom (three.js's v runs up, Godot's down). */
+async function png(path, image) {
+  const { data, width, height } = image;
+  const canvas = new OffscreenCanvas(width, height), context = canvas.getContext('2d');
+  const pixels = context.createImageData(width, height);
+  for (let y = 0; y < height; y++) pixels.data.set(data.subarray(y * width * 4, (y + 1) * width * 4), (height - 1 - y) * width * 4);
+  context.putImageData(pixels, 0, 0);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  await save(path, new Uint8Array(await blob.arrayBuffer()));
+}
+/**
+ * The effects' references, for Godot's tests: grenades thrown into the lab
+ * (bouncing off the floor and the crates, rolling, pushed by the Force,
+ * going off), the lab's loose objects strewn and thrown by a blast, and
+ * where the blade sends bolts back.
+ */
+async function bakeFx() {
+  const { meshes } = createScorchMarks(new THREE.Scene());
+  for (const [name, mesh] of Object.entries(meshes)) await png(`assets/fx/scorch-${name}.png`, mesh.material.map.image);
+  await png('assets/fx/embers.png', emberTexture().image);
+  // The lab's boxes as lab.json gives them to Godot (rounded).
+  const scene = new THREE.Scene();
+  const lab = createLab(scene);
+  createArena(scene, { lab });
+  createTransformer(scene, { lab, at: new THREE.Vector3(7.4, 0, -10.675), facing: new THREE.Vector3(0, 0, 1) });
+  for (const box of lab.obstacles) {
+    box.min.fromArray(toArray(box.min));
+    box.max.fromArray(toArray(box.max));
+    box.centre = box.min.clone().add(box.max).multiplyScalar(0.5);
+  }
+  // Grenades: four throws (one into a crate, one dropped), a Force push, then they go off.
+  const grenades = createGrenades(scene, { lab, random: drawsFrom(5), reach: FEEL.grenade.reach });
+  const throws = [
+    { at: 0, from: [2, 1.3, 2], to: [-1, 0, -1], fuse: 2.2 },
+    { at: 10, from: [-2, 1.4, 0.5], to: [-4.9, 0, -0.8], fuse: 2.4 },
+    { at: 25, from: [3, 0.9, -2], fuse: 1.6 },
+    { at: 40, from: [-6, 1.3, 4], to: [-6.5, 0, -2], fuse: 3 },
+  ];
+  const push = { at: 70, from: [-1.5, 0, 1.5], direction: toArray(new THREE.Vector3(1, 0, -1.2).normalize()) };
+  const steps = [];
+  for (let i = 0; i < 260; i++) {
+    for (const t of throws) if (t.at === i) {
+      if (t.to) grenades.throwAt(vector(t.from), vector(t.to), { fuse: t.fuse });
+      else grenades.drop(vector(t.from), { fuse: t.fuse });
+    }
+    if (i === push.at) grenades.push(vector(push.from), vector(push.direction), { range: FEEL.push.range, cone: FEEL.push.cone });
+    const dt = i % 5 === 0 ? 1 / 45 : 1 / 60;
+    const blasts = grenades.update(dt).map(toArray);
+    steps.push({ dt, live: grenades.pool.map(g => (g.live ? toArray(g.position) : null)), blasts });
+  }
+  // Debris: strewn about the lab, then a blast and its fragments.
+  const debris = createDebris(scene, { lab, random: drawsFrom(17) });
+  debris.scatter(30);
+  const strewn = debris.bodies.map(body => ({ name: body.name, position: toArray(body.position), quaternion: body.quaternion.toArray().map(round) }));
+  const blastAt = [-3.8, 0, -1.6];
+  debris.blast(vector(blastAt));
+  debris.fragments(vector(blastAt), 12);
+  const flight = [];
+  for (let i = 0; i < 90; i++) {
+    debris.update(1 / 60);
+    flight.push(debris.bodies.map(body => toArray(body.position)));
+  }
+  // Bolts sent back: near and far, trained or not, perfect, with men about (one of them down).
+  const draws = drawsFrom(29), returns = [];
+  const enemies = [{ point: [3, 1.1, -4], shooter: true, down: false }, { point: [-2, 0.4, -5], shooter: false, down: true }, { point: [1, 1.2, 4], shooter: false, down: false }];
+  for (let k = 0; k < 24; k++) {
+    const at = [Math.sin(k) * 0.4, 1.1, Math.cos(k * 1.3) * 0.4];
+    const incoming = toArray(new THREE.Vector3(1.5 - (k % 5) * 0.7, (k % 3 - 1) * 0.1, -2 + (k % 4)).normalize());
+    const options = { precision: (k % 6) / 6, closeness: ((k * 7) % 11) / 10, perfect: k % 8 === 7 };
+    const result = returnDirection({ at: vector(at), incoming: vector(incoming), ...options, enemies: enemies.map(e => ({ ...e, point: vector(e.point) })), random: draws });
+    returns.push({ at, incoming, ...options, aim: toArray(result.aim), target: result.target ? enemies.findIndex(e => e.point.join() === toArray(result.target.point).join()) : -1 });
+  }
+  await json('assets/data/fx-reference.json', { draws: { grenades: 5, debris: 17, returns: 29 }, throws, push, steps, debris: { strewn, blast: blastAt, flight }, enemies, returns });
+}
+
 // bake.html?only=combat,data cooks only those parts (the models, and the glow table, are left as they are).
 const ONLY = new URLSearchParams(location.search).get('only')?.split(',') ?? null;
 async function run() {
-  for (const [name, label, bake] of [['data', 'données', bakeData], ['hero', 'héros', bakeHero], ['saber', 'sabre', bakeSaber], ['combat', 'combat', bakeCombat], ['lab', 'labo', bakeLab], ['trooper', 'stormtrooper', bakeTrooper], ['squad', 'escouade', bakeSquad]]) {
+  for (const [name, label, bake] of [['data', 'données', bakeData], ['hero', 'héros', bakeHero], ['saber', 'sabre', bakeSaber], ['combat', 'combat', bakeCombat], ['lab', 'labo', bakeLab], ['trooper', 'stormtrooper', bakeTrooper], ['squad', 'escouade', bakeSquad], ['fx', 'effets', bakeFx]]) {
     if (ONLY && !ONLY.includes(name)) continue;
     log(`… ${label}`);
     await bake();
