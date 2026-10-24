@@ -3,11 +3,15 @@ extends Node
 ## the nearest pixel (true pixel art, not a filter — `pixel_size` screen pixels
 ## to a pixel), the HUD at full resolution above it. In the world: the lab, its
 ## light and air (the web version's cold studio light, ACES tone mapping,
-## bloom on what glows, a little fog), the Jedi, the iso camera.
+## bloom on what glows, a little fog), the Jedi, the squad of stormtroopers
+## (Battle), the iso camera.
 ##
 ## A frame of it can be written to a PNG for checking:
 ##   godot --path godot -- --screenshot=<file> [--frames=<n>] [--autopilot=<x>,<y>[,sprint]]
-##     [--press=<seconds>:<action>,…]  (attack, guard, dash, twirl, force_pull, force_push)
+##     [--press=<seconds>:<action>,…]  (attack, guard, dash, twirl, force_pull, force_push;
+##       <seconds>:hold:<action> … <seconds>:release:<action> keeps it down in between)
+##     [--at=<x>,<z>[,<heading>]]  (where the hero starts)
+##     [--clear=<seconds>]  (the whole squad struck down then: the escort comes in)
 ##     [--view=<metres>]  (the view's height, 5 to 12: closer for a look at the hero)
 
 @export var pixel_size := 4
@@ -16,6 +20,7 @@ var viewport: SubViewport
 var world: Node3D
 var level: LabLevel
 var hero: Hero
+var battle: Battle
 var camera: CameraRig
 var strip: OmniLight3D
 var _shot := ""
@@ -24,6 +29,9 @@ var _frames_left := 90
 var _autopilot := ""
 var _presses := ""
 var _view := 0.0
+var _at := ""
+var _clear := INF
+var _states := {}
 var _moves := {}
 var _trail_peak := 0
 
@@ -40,6 +48,10 @@ func _ready() -> void:
 			_view = float(argument.get_slice("=", 1))
 		elif argument.begins_with("--press="):
 			_presses = argument.get_slice("=", 1)
+		elif argument.begins_with("--at="):
+			_at = argument.get_slice("=", 1)
+		elif argument.begins_with("--clear="):
+			_clear = float(argument.get_slice("=", 1))
 	var container := SubViewportContainer.new()
 	container.name = "Pixels"
 	container.stretch = true
@@ -62,18 +74,27 @@ func _ready() -> void:
 	hero.name = "Hero"
 	world.add_child(hero)
 	hero.obstacles = level.obstacles
+	# A check plays by itself: a pad left lying on its trigger must not play along.
+	hero.manual = _shot.is_empty()
 	if not _autopilot.is_empty():
 		var parts := _autopilot.split(",")
 		hero.autopilot = Vector2(float(parts[0]), float(parts[1]))
 		hero.autopilot_sprint = parts.size() > 2
 	for press in _presses.split(",", false):
-		hero.autopilot_presses[float(press.get_slice(":", 0))] = press.get_slice(":", 1)
+		var at := press.find(":")
+		hero.autopilot_presses[float(press.substr(0, at))] = press.substr(at + 1)
 	camera = CameraRig.new()
 	camera.name = "Camera"
 	camera.target = hero
 	world.add_child(camera)
 	camera.current = true
 	hero.camera = camera
+	battle = Battle.new(hero, level, camera)
+	world.add_child(battle)
+	if not _at.is_empty():
+		var parts := _at.split(",")
+		hero.place(float(parts[0]), float(parts[1]), float(parts[2]) if parts.size() > 2 else NAN)
+		camera.focus = hero.position + Vector3(0, 0.6, 0)
 	if _view > 0.0:
 		camera.desired_height = _view
 		camera.view_height = _view
@@ -129,6 +150,9 @@ func _build_light() -> void:
 func _process(_delta: float) -> void:
 	# The studio strip keeps above the hero, a little to the side (a broad strip in the web version, a lamp near him here).
 	strip.position = hero.position + Vector3(-1.4, 3.2, 0.8)
+	if hero.time >= _clear:
+		_clear = INF
+		battle.clear_room()
 	if _shot.is_empty():
 		return
 	_frames += 1
@@ -136,8 +160,15 @@ func _process(_delta: float) -> void:
 	_trail_peak = maxi(_trail_peak, hero.trail.samples.size())
 	if hero.action.name != null:
 		_moves[hero.action.name] = true
-	if _frames >= _frames_left:
+	for trooper: Stormtrooper in battle.troopers:
+		_states[trooper.state()] = true
+	if _frames == _frames_left:
+		print("%d images par seconde" % Engine.get_frames_per_second())
 		print("%.1f s — coups joués : %s ; traînée jusqu’à %d échantillons ; héros en (%.2f ; %.2f)" % [hero.time, ", ".join(_moves.keys()), _trail_peak, hero.motion.x, hero.motion.z])
+		print("escouade : %s ; états vus : %s ; états : %s ; %d tirs ; coupés : %s" % [
+			", ".join(battle.squad.minds.map(func(mind: Dictionary) -> String: return "%s/%s" % [mind.mode, mind.tactic])),
+			", ".join(_states.keys()), ", ".join(battle.troopers.map(func(t: Stormtrooper) -> String: return t.state())), battle.shots_fired,
+			", ".join(battle.troopers.map(func(t: Stormtrooper) -> String: return ",".join(t.severed.keys())).filter(func(text: String) -> bool: return not text.is_empty()))])
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png(_shot)
 		get_tree().quit()

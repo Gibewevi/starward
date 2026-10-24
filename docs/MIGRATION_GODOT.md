@@ -40,9 +40,10 @@ Godot 4.7 : ouvrir `godot/project.godot`. Tests sans fenêtre : `godot --headles
 | `saber.js`, `blade-trail.js` | `saber.glb` + `scripts/saber.gd`, `scripts/blade_trail.gd` | 2 |
 | `coat.js` | `scripts/coat.gd` (tissu simulé, sur un fil de calcul) | 2 |
 | `combat.js`, `shake.js`, `tween.js` (kick), dash et caméra de `main.js` | `assets/data/combat.json` + `scripts/combat_controller.gd`, `scripts/shake.gd`, `scripts/camera_rig.gd`, `scripts/hero.gd` | 2 |
-| `deflect.js`, visée des coups (`findMark`, `lockOn`), arrêts sur image | `scripts/hero.gd` | 3, 4 |
-| `stormtrooper.js`, `trooper-model.js`, `trooper-gait.js`, `ragdoll.js` | `stormtrooper.glb` + `scripts/trooper/*.gd` | 3 |
-| `trooper-ai.js`, `nav.js`, `alerts.js`, `reinforcements.js` | `scripts/ai/*.gd` (AStarGrid2D) | 3 |
+| Visée des coups (`findMark`, `lockOn`), arrêts sur image, Force sur les troopers, empalement | `scripts/hero.gd`, `scripts/battle.gd` | 3 |
+| `deflect.js` | `scripts/hero.gd` | 4 |
+| `stormtrooper.js`, `trooper-model.js`, `trooper-gait.js`, `ragdoll.js` | `stormtrooper.glb`, `assets/data/trooper.json` + `scripts/trooper/stormtrooper.gd`, `ragdoll.gd`, `trooper_gait.gd` | 3 |
+| `trooper-ai.js`, `nav.js`, `alerts.js`, `reinforcements.js`, porte de `arena.js` | `scripts/ai/squad_mind.gd`, `nav.gd` (l’A* du web, pour retrouver les mêmes chemins), `alerts.gd`, `reinforcements.gd`, `scripts/lab_door.gd` | 3 |
 | `blasters.js`, `grenades.js`, `explosions.js`, `impact-effects.js`, `scorch-marks.js`, `saber-scars.js`, `debris.js`, `wounds.js`, `footprints.js` | `scripts/fx/*.gd`, particules GPU | 4 |
 | `transformer.js`, `power.js`, `flashlights.js`, `beam-pass.js`, `stain-light.js` | `scripts/lab/*.gd`, lumières volumétriques | 4 |
 | `hero-ragdoll.js`, mort et relance | `scripts/hero/*.gd` | 4 |
@@ -65,7 +66,7 @@ Godot 4.7 : ouvrir `godot/project.godot`. Tests sans fenêtre : `godot --headles
 
 - [x] Étape 1 — Fondations (voir `godot/README.md`). Le mouvement et l’animation sont identiques au web (tests de parité). Restes : le manteau simulé (étape 2) et un calibrage plus fin des lumières (les intensités three.js et Godot ne se correspondent pas une à une).
 - [x] Étape 2 — Sabre et combat (voir `godot/README.md`). Le contrôleur de combat et l’IK des bras sont identiques au web (tests de parité sur une trace de 1 100 pas : les 22 coups, la garde, les parades, la Force, l’empalement, le sabotage). Sabre, traînée, manteau simulé, dash, moulinet, secousses de caméra en place. Restent pour les étapes suivantes, parce qu’ils ont besoin des stormtroopers ou des effets : la visée et l’élan vers une cible, les arrêts sur image et les secousses d’impact, le renvoi des tirs, les effets de la Force (vague, corps projetés, décor), la traînée lumineuse du dash, le son. Le manteau tourne sur un fil parallèle : en GDScript sa simulation coûte environ 6 ms par image.
-- [ ] Étape 3 — Stormtroopers
+- [x] Étape 3 — Stormtroopers (voir `godot/README.md`). La démarche, le ragdoll seul et la navigation sont identiques au web. Le trooper reprend la même pose debout au millimètre, les mêmes coups, coupes, chutes, relevés et événements ; au sol, le corps est chaotique (Godot diverge de lui-même pour un micromètre), et le test en tient compte. L’escouade pense et agit comme le web pendant 11 s de combat, avant que la simple précision des positions de Godot ne l’en écarte. En jeu : patrouilles, alertes, combat d’escouade, Force, empalement, renforts par la porte ; 140 images/s, environ 85 quand cinq corps tombent à la fois. Restent pour l’étape 4 : les tirs (les troopers tirent à blanc), les grenades, les étincelles, fumées et gouttes rouges (les appels existent, sans effet), le son. La trace web oubliait que le rendu remet à jour les matrices des pièces tombées : la cuisson le fait désormais à chaque pas.
 - [ ] Étape 4 — Tirs, explosions, effets
 - [ ] Étape 5 — Duel
 - [ ] Étape 6 — Stage 2

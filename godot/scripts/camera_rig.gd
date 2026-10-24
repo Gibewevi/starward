@@ -5,7 +5,8 @@ extends Camera3D
 ## brings it closer or further (a view 5 to 12 m high), R recentres.
 ## Game feel, as main.js: blows add trauma (Shake), a kick knocks the view
 ## along a swing or a push and rings out, a punch zooms in a touch, fast, and
-## eases back.
+## eases back. In a fight it leans a little towards the squad (lean_toward), so
+## the shooters stay in frame.
 
 const OFFSET := Vector3(8, 8.2, 10)
 
@@ -14,6 +15,7 @@ var focus := Vector3(0, 0.6, 0)
 var view_height := 8.2
 var desired_height := 8.2
 var trauma := Shake.new()
+var lean := Vector3.ZERO
 var _kick_direction := Vector3.ZERO
 var _kick_amplitude := 0.0
 var _kick_age := INF
@@ -38,6 +40,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			desired_height = clampf(desired_height + 0.6, 5.0, 12.0)
 	if event.is_action_pressed("recentre") and target:
 		focus = target.global_position + Vector3(0, 0.6, 0)
+
+
+## Leans the view towards `toward` (an offset on the floor), easing there over the fight's time.
+func lean_toward(toward: Vector3, dt: float) -> void:
+	lean = lean.lerp(toward, 1.0 - exp(-1.6 * dt))
 
 
 ## A kick along a velocity (the view knocked that way, a little down), unless a stronger one is still ringing.
@@ -72,7 +79,7 @@ func _process(delta: float) -> void:
 		var hero := target as Hero
 		var lead := Vector3(hero.motion.vx, 0, hero.motion.vz) * 0.16 if hero else Vector3.ZERO
 		running = hero.motion.run_blend if hero else 0.0
-		var wanted := target.global_position + lead + Vector3(0, 0.6, 0)
+		var wanted := target.global_position + lead + lean + Vector3(0, 0.6, 0)
 		focus = focus.lerp(wanted, 1.0 - exp(-7.0 * delta))
 	view_height = lerpf(view_height, desired_height + running * 0.24, 1.0 - exp(-6.0 * delta))
 	# Zoom punch: in fast, out slowly.

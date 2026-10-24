@@ -3,12 +3,25 @@ extends SceneTree
 ## fresh instance. A test fails by calling check(false, message) — it is told
 ## through `failures`. Without a window:
 ##   godot --headless --path godot --script res://tests/run_tests.gd
+## [-- --only=<file name part>]
+## The tests run on the first frame, once the tree is up: a test can put
+## nodes in it (tree.root) and read where they are in the world.
 
-func _init() -> void:
+var _done := false
+
+
+func _process(_delta: float) -> bool:
+	if _done:
+		return false
+	_done = true
+	var only := ""
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--only="):
+			only = argument.get_slice("=", 1)
 	var passed := 0
 	var failed := 0
 	var dir := DirAccess.open("res://tests")
-	var files := Array(dir.get_files()).filter(func(f: String) -> bool: return f.begins_with("test_") and f.ends_with(".gd"))
+	var files := Array(dir.get_files()).filter(func(f: String) -> bool: return f.begins_with("test_") and f.ends_with(".gd") and (only.is_empty() or only in f))
 	files.sort()
 	for file in files:
 		var script: GDScript = load("res://tests/" + file)
@@ -36,3 +49,4 @@ func _init() -> void:
 				case.free()
 	print("%d réussis, %d échoués" % [passed, failed])
 	quit(1 if failed else 0)
+	return false
