@@ -16,6 +16,8 @@ var view_height := 8.2
 var desired_height := 8.2
 var trauma := Shake.new()
 var lean := Vector3.ZERO
+## Where the view sits off the hero (the jungle keeps him below centre, its paths leading into the view).
+var stage_offset := Vector3.ZERO
 var _kick_direction := Vector3.ZERO
 var _kick_amplitude := 0.0
 var _kick_age := INF
@@ -79,7 +81,7 @@ func _process(delta: float) -> void:
 		var hero := target as Hero
 		var lead := Vector3(hero.motion.vx, 0, hero.motion.vz) * 0.16 if hero else Vector3.ZERO
 		running = hero.motion.run_blend if hero else 0.0
-		var wanted := target.global_position + lead + lean + Vector3(0, 0.6, 0)
+		var wanted := target.global_position + lead + lean + stage_offset + Vector3(0, 0.6, 0)
 		focus = focus.lerp(wanted, 1.0 - exp(-7.0 * delta))
 	view_height = lerpf(view_height, desired_height + running * 0.24, 1.0 - exp(-6.0 * delta))
 	# Zoom punch: in fast, out slowly.

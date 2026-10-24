@@ -41,12 +41,24 @@ extends Node3D
 ## dark: the troopers' rifle lamps clicking on one by one (Flashlights), the
 ## blade's glow the only light round the hero, the red stains dark but where
 ## a light falls on them (StainLight).
+##
+## Stage 2, the marsh ruins (JungleLevel, in place of the lab): four
+## generators to destroy wherever the hero likes, each in its core; each one
+## blown cuts its zone's light and sounds the alarm, a wave of men coming in
+## down the trail behind the command post. The last blown, it is won. The
+## jungle answers what happens: footsteps in the sand and the water, the blade
+## through the plants, blasts digging craters, the Force through the plants
+## and the water. By night (at random, or as asked), the troopers' rifle lamps
+## are on from the start and they see less far; in the reeds or wading, the
+## hero is harder to see.
 
 ## The screen's right and up on the floor (the iso camera's axes).
 const SCREEN_RIGHT := Vector3(0.780869, 0, -0.624695)
 
 var hero: Hero
-var level: LabLevel
+var level  ## LabLevel or JungleLevel
+## The marsh ruins (stage 2), or null in the lab.
+var jungle: JungleLevel
 var camera: CameraRig
 var feel: Dictionary
 var effects: ImpactEffects
@@ -58,6 +70,12 @@ var marks: ScorchMarks
 var scars: SaberScars
 var prints: Footprints
 var transformer: Transformer
+## Every generator (the lab's one transformer, the jungle's four).
+var transformers: Array[Transformer] = []
+## The jungle's objectives on screen (main.gd's).
+var objectives: Objectives
+## The jungle by night: 1; the lab: 0 until the power is cut.
+var night_base := 0.0
 var glints: AimGlints
 var power: Power
 var flashlights: Flashlights
@@ -70,6 +88,7 @@ var _cascade: Array = []
 var _flash: ColorRect
 var _flash_age := INF
 var _stir_tip := Vector3.ZERO
+var _swing := 0.0
 ## The effects' lights (flashes, bolts, blasts, rifle lamps): hidden while dark, so they cost nothing (a shadowed lamp would draw its shadows).
 var _effect_lights: Array[Light3D] = []
 ## Each walker's soles: how red each one is, and which came down last.
@@ -89,7 +108,7 @@ var squad: SquadMind
 var reinforcements: Reinforcements
 var rounds: Array = []
 var troopers: Array = []
-var course := { "stage": "squad", "clock": 0.0 }
+var course := { "stage": "squad", "clock": 0.0, "wave": 0, "destroyed": 0, "pending": 0 }
 ## What the squad hears this frame: footsteps, the blade, blows, the Force, shots.
 var noises: Array = []
 var shots_fired := 0
@@ -110,11 +129,15 @@ var _stopped := {}
 var _stopped_key := ""
 
 
-func _init(the_hero: Hero, lab: LabLevel, view: CameraRig) -> void:
+func _init(the_hero: Hero, stage: Node3D, view: CameraRig) -> void:
 	name = "Battle"
 	hero = the_hero
-	level = lab
+	level = stage
+	jungle = stage as JungleLevel
 	camera = view
+	if jungle and jungle.night:
+		night_base = 1.0
+	night = night_base
 	# After the hero: his blade and his move this frame are what the squad meets.
 	process_priority = 10
 
@@ -140,11 +163,19 @@ func _ready() -> void:
 	# Scraps of the lab's floor, and what a blast throws out.
 	debris = Debris.new(level.obstacles)
 	add_child(debris)
-	debris.scatter()
+	# Scraps of the lab's floor: none in the jungle.
+	if not jungle:
+		debris.scatter()
 	grenades = Grenades.new(level.obstacles, feel.grenade.reach)
 	add_child(grenades)
-	transformer = Transformer.new(level, level.data.transformer, feel, effects)
-	add_child(transformer)
+	for spec in level.generator_specs():
+		var t := Transformer.new(spec.room, spec.data, feel, effects)
+		t.generator = spec.name
+		t.label = spec.label
+		t.zone = spec.zone
+		add_child(t)
+		transformers.append(t)
+	transformer = transformers[0]
 	flashlights = Flashlights.new(feel, level.obstacles, level.bounds)
 	add_child(flashlights)
 	glints = AimGlints.new()
@@ -171,7 +202,7 @@ func _ready() -> void:
 	alerts = Alerts.new()
 	alerts.camera = camera
 	add_child(alerts)
-	nav = Nav.new(level.obstacles, level.bounds)
+	nav = Nav.new(level.obstacles, level.bounds, 0.4, 0.33, 0.35, jungle.nav_cost if jungle else Callable())
 	for post in level.posts:
 		troopers.append(_make(post.position, post.heading))
 	squad = SquadMind.new(troopers, level.obstacles, nav, alerts, level.posts, Callable(), SCREEN_RIGHT, feel)
@@ -238,17 +269,22 @@ func restart() -> void:
 	_soles.clear()
 	_trooper_steps.clear()
 	debris.clear()
-	debris.scatter()
+	if not jungle:
+		debris.scatter()
+	else:
+		jungle.reset()
 	squad.reset()
 	noises.clear()
-	course = { "stage": "squad", "clock": 0.0 }
+	course = { "stage": "squad", "clock": 0.0, "wave": 0, "destroyed": 0, "pending": 0 }
 	knockdown.stop()
 	death = null
 	wounds.clear()
-	transformer.reset()
+	for t in transformers:
+		t.reset()
+	transformer = transformers[0]
 	flashlights.clear()
 	glints.clear()
-	night = 0.0
+	night = night_base
 	_blackout = null
 	_cascade.clear()
 	_flash_age = INF
@@ -269,7 +305,7 @@ func grenade_at(x: float, z: float) -> void:
 
 ## One of a wave: made in the corridor, marched through the door into the room, then off on his round.
 func _bring_in(index: int) -> void:
-	var door := level.door
+	var door: LabDoor = level.door
 	var heading := atan2(door.out.x, door.out.z)
 	var trooper := _make(door.inside[index % door.inside.size()], heading)
 	trooper.reinforcement = true
@@ -295,7 +331,7 @@ func _bring_in(index: int) -> void:
 
 ## Too many men in the room, dead ones included: the oldest bodies are cleared away.
 func _clear_bodies() -> void:
-	while troopers.size() > feel.reinforce.bodies:
+	while troopers.size() > feel.reinforce.bodies + (12 if jungle else 0):
 		var old: Variant = null
 		for trooper: Stormtrooper in troopers:
 			if trooper.dead and trooper.fallen and not trooper.is_impaled() and trooper != hero.held and not hero.is_skewering(trooper):
@@ -311,7 +347,22 @@ func _clear_bodies() -> void:
 
 
 ## The fight's course: the squad at its posts; all of them down, an escort marches in through the great door.
+## In the jungle: each generator blown calls a wave down the trail, one after the other; the last blown, it is won.
 func _course_step(sim: float) -> void:
+	if jungle:
+		if course.stage == "squad":
+			var waves: Array = feel.course.waves
+			if course.pending > 0 and reinforcements.phase == "idle" and reinforcements.summon(int(waves[mini(course.wave, waves.size() - 1)])):
+				course.pending -= 1
+				course.wave += 1
+			if course.destroyed >= transformers.size():
+				course.clock += sim
+				if course.clock > feel.course.waveAfter:
+					course.stage = "won"
+					course.clock = 0.0
+		elif course.stage == "won":
+			course.clock += sim
+		return
 	if course.stage != "squad" and course.stage != "escort":
 		return
 	# Nobody standing, and nobody still to come through the door.
@@ -333,7 +384,7 @@ func _process(delta: float) -> void:
 	var velocity := Vector3(hero.motion.vx, 0, hero.motion.vz)
 	# The squad: senses, decisions, orders; then the shots leave the muzzles.
 	_death_step(delta, sim)
-	var thoughts := squad.update(sim, at, velocity, hero.motion.saber, noises, night)
+	var thoughts := squad.update(sim, at, velocity, hero.motion.saber, noises, night, jungle.seen(at) if jungle else 1.0)
 	noises.clear()
 	if death != null:
 		thoughts.shots.clear()
@@ -356,7 +407,9 @@ func _process(delta: float) -> void:
 	_cut_room(sim)
 	_strikes(sim, time)
 	# Bolts fly: the blade, the hero, the troopers, then crates and floor.
-	blasters.update(sim, _bolt_meets)
+	for event in blasters.update(sim, _bolt_meets):
+		if jungle and event.type == "impact" and event.point.y < 0.3:
+			jungle.bolt(event.point)
 	for blast in grenades.update(sim):
 		detonate(blast)
 	explosions.update(sim)
@@ -367,6 +420,10 @@ func _process(delta: float) -> void:
 	if level.door:
 		level.door.update(sim, time)
 	_power_step(sim, delta)
+	if jungle:
+		_jungle_step(sim, time)
+	if objectives:
+		objectives.update(delta, transformers, course, camera)
 	alerts.update(delta, func(trooper: Object) -> Variant: return null if trooper.dead or trooper.is_impaled() else trooper.particle("HT"), SCREEN_RIGHT)
 	# In a fight, the view leans a little towards the squad, so the shooters stay in frame.
 	var lean := Vector3.ZERO
@@ -538,7 +595,7 @@ func _held_bolt(bolt: Dictionary) -> String:
 func _bolt_meets(bolt: Dictionary, a: Vector3, b: Vector3) -> String:
 	if bolt.held != null:
 		return _held_bolt(bolt)
-	var wall := level.obstacles.segment_hit(a, b, func(box: Dictionary) -> bool: return box.kind == "rail")
+	var wall: Dictionary = level.obstacles.segment_hit(a, b, func(box: Dictionary) -> bool: return box.kind == "rail")
 	var end: Vector3 = wall.point if not wall.is_empty() else b
 	var d: Dictionary = feel.deflect
 	var blade := hero.saber.segment()
@@ -628,6 +685,8 @@ func _strikes(sim: float, time: float) -> void:
 		# Landings: heard and felt in step with the physics.
 		for item in trooper.take_news():
 			if item.type == "land":
+				if jungle:
+					jungle.landing(item.point, item.speed)
 				camera.trauma.add(minf(0.15, item.speed * 0.02))
 				noise(item.point, clampf(2.0 + item.speed * 1.2, 2.5, 7.0), { "alarm": true, "from": hero.position, "source": trooper })
 			# A grenade leaves his hand (or drops at his feet if he was knocked over).
@@ -655,6 +714,9 @@ func detonate(at: Vector3) -> void:
 	effects.blast(at + Vector3(0, 0.35, 0), { "sparks": 45, "embers": 0, "speed": 24.0 })
 	debris.blast(at)
 	debris.fragments(at, 18 + roundi(randf() * 8.0))
+	# The plants flattened outward, the water thrown up, a crater dug.
+	if jungle:
+		jungle.blast(at, 1.0, blast.radius * 1.15)
 	for trooper: Stormtrooper in troopers:
 		var offset := where_is(trooper) - at
 		offset.y = 0.0
@@ -785,11 +847,18 @@ func _cut_room(sim: float) -> void:
 			effects.sparks(contact.point, (normal - along * 0.6).normalized(), along, { "count": 9 if contact.fresh else 3, "speed": 2.4, "saber": 0.35 })
 		if not contacts.is_empty() and _scar_sparks <= 0.0:
 			_scar_sparks = 0.05
+		# Through the plants: the blade cuts what it meets; its tip through the stream throws it up.
+		if jungle:
+			jungle.cut(_last_base, _last_tip, blade[0], blade[1], blade[1].distance_to(_last_tip) / sim)
 	scars.update(sim)
 
 
 ## A foot coming down: drops under it are trodden in (some taken up); a red sole prints, fainter each step.
 func _footfall(walker: Object, at: Vector3, along: Vector3, side: String, size: Array) -> void:
+	# In the jungle, it presses into the sand or splashes in the stream as well.
+	if jungle:
+		var speed: float = hero.motion.speed if walker == hero else (walker.loco.velocity.length() if walker is Stormtrooper else 1.5)
+		jungle.step(at, along, side, size, speed)
 	var sole: Dictionary = _soles.get(walker, { "L": 0.0, "R": 0.0, "last": "R" })
 	sole.last = side
 	var found := effects.tread(at)
@@ -849,7 +918,8 @@ func _footfalls(sim: float) -> void:
 
 ## main.gd's lights (environment, key, rim, strip): the room's power dims them with the rest.
 func light_room(lights: Dictionary) -> void:
-	power = Power.new(level, feel, lights)
+	if not jungle:
+		power = Power.new(level, feel, lights)
 
 
 ## Each frame: the plunge, the transformer's surge and burst; the power's level
@@ -860,11 +930,16 @@ func _power_step(sim: float, delta: float) -> void:
 	if hero.plunge != null and hero.plunge.entered:
 		blade = hero.saber.segment()
 	hero.plunge_step(sim)
-	var state := transformer.update(sim, blade)
-	if state.burst:
-		_overload()
-	if state.spit and transformer.socket.distance_to(hero.position) < 14.0:
-		camera.trauma.add(0.04)
+	var state := {}
+	for t in transformers:
+		var result := t.update(sim, blade if t == transformer else [])
+		if t == transformer:
+			state = result
+		if result.burst:
+			transformer = t
+			_overload()
+		if result.spit and t.socket.distance_to(hero.position) < 14.0:
+			camera.trauma.add(0.04)
 	if state.progress > 0.0:
 		camera.trauma.at_least(0.12 + 0.3 * state.progress)
 	if power:
@@ -900,6 +975,7 @@ func _power_step(sim: float, delta: float) -> void:
 	var tip: Vector3 = hero.saber.segment()[1]
 	var swing := tip.distance_to(_stir_tip) / sim if sim > 0.0 else 0.0
 	_stir_tip = tip
+	_swing = swing
 	var stirs := [{ "at": hero.position + Vector3(0, 1, 0), "speed": hero.motion.speed }, { "at": tip, "speed": minf(12.0, swing) }]
 	flashlights.update(sim, troopers, hero.position, night, stirs)
 	# A trooper about to fire: a red glint at his muzzle.
@@ -941,7 +1017,16 @@ func _overload() -> void:
 	if transformer.model:
 		effects.smoulder(transformer.model, 25.0)
 	noise(s, 16.0, { "alarm": true, "from": s })
-	_blackout = { "age": 0.0, "cut": false }
+	# The lab's power dies with it; in the jungle, the generator's zone goes dark and the alarm calls men in.
+	if not jungle:
+		_blackout = { "age": 0.0, "cut": false }
+		return
+	jungle.sabotaged(transformer.zone)
+	course.destroyed += 1
+	if course.destroyed < transformers.size():
+		course.pending += 1
+	if objectives:
+		objectives.pop()
 
 
 ## The power dies: lights out, sparks racing through the fittings; the squad loses the hero for a moment; the rifle lamps come on.
@@ -961,3 +1046,39 @@ func _cut_power() -> void:
 	camera.trauma.add(0.2)
 	squad.blackout()
 	flashlights.darkness(troopers)
+
+
+# ---- The jungle -----------------------------------------------------------------------
+
+## Where the ground is at (x, z): a walkway's deck, a crater's floor; the lab's floor is flat.
+func ground_at(x: float, z: float) -> float:
+	return jungle.ground_at(x, z) if jungle else 0.0
+
+
+## How far the dark makes the blade light round it: the jungle is never quite day for it.
+func blade_dark() -> float:
+	return maxf(0.5, night) if jungle else night
+
+
+## Who goes through the plants and the water this frame: the hero, his blade held low, the bodies standing or lying, nearest first.
+func _jungle_actors(swing: float) -> Array:
+	var actors: Array = [{ "x": hero.motion.x, "z": hero.motion.z, "radius": 0.5, "strength": 1.0, "speed": hero.motion.speed }]
+	var tip: Vector3 = hero.saber.segment()[1]
+	if hero.saber.extension > 0.6 and tip.y < 0.9:
+		actors.append({ "x": tip.x, "z": tip.z, "radius": 0.35, "strength": minf(1.5, swing / 6.0), "speed": swing, "wades": tip.y < 0.1 })
+	var others: Array = []
+	for trooper: Stormtrooper in troopers:
+		var at := where_is(trooper)
+		others.append({ "x": at.x, "z": at.z, "radius": 0.7 if trooper.fallen else 0.45, "strength": 0.8 if trooper.fallen else 1.0, "speed": trooper.loco.velocity.length() })
+	var here := Vector2(hero.motion.x, hero.motion.z)
+	others.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return Vector2(a.x, a.z).distance_squared_to(here) < Vector2(b.x, b.z).distance_squared_to(here))
+	return (actors + others).slice(0, 8)
+
+
+func _jungle_step(sim: float, time: float) -> void:
+	var tip: Vector3 = hero.saber.segment()[1]
+	var swing := _swing
+	var stirs := [{ "at": hero.position + Vector3(0, 1, 0), "speed": hero.motion.speed }, { "at": tip, "speed": minf(12.0, swing) }]
+	var lights: Array = []
+	lights.append_array(hero.saber.lights)
+	jungle.update(sim, time, hero.position, _jungle_actors(swing), stirs, lights)

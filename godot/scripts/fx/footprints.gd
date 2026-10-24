@@ -11,6 +11,9 @@ extends Node3D
 ##
 ## stamp(at, along, side, strength, [length, width]) — `along`: heel to toe on
 ## the floor; side "L" or "R"; strength 0 → 1. Then update(dt).
+##
+## Options make other prints of the same sole: `tint`, how long they `linger`
+## ([min, max] s), `name` — the soles pressed into the jungle's sand, dark and lasting.
 
 var feel: Dictionary
 var random: Callable
@@ -21,11 +24,13 @@ var _life := PackedFloat32Array()
 var _strength := PackedFloat32Array()
 var _next := 0
 var _used := 0
+var _linger: Variant = null
 
 
-func _init(feel_data: Dictionary, count: int = 360, draw: Callable = Callable()) -> void:
-	name = "Red footprints"
+func _init(feel_data: Dictionary, count: int = 360, draw: Callable = Callable(), options: Dictionary = {}) -> void:
+	name = options.get("name", "Red footprints")
 	feel = feel_data
+	_linger = options.get("linger")
 	random = draw if draw.is_valid() else func() -> float: return randf()
 	# Flat on the floor, heel at −Z, toe at +Z (the texture runs heel → toe).
 	var plane := PlaneMesh.new()
@@ -33,6 +38,9 @@ func _init(feel_data: Dictionary, count: int = 360, draw: Callable = Callable())
 	_material = ShaderMaterial.new()
 	_material.shader = load("res://shaders/footprints.gdshader")
 	_material.set_shader_parameter("map", sole_texture())
+	if options.has("tint"):
+		var tint: Color = options.tint
+		_material.set_shader_parameter("tint", Vector3(tint.r, tint.g, tint.b))
 	_material.render_priority = 1
 	StainLight.register(_material, feel)
 	_multimesh = MultiMesh.new()
@@ -105,7 +113,7 @@ func stamp(at: Vector3, along: Vector3, side: String, amount: float, size: Array
 	var scale := Vector3(float(size[1]) * jitter * (-1.0 if side == "L" else 1.0), 1, float(size[0]) * jitter)
 	_multimesh.set_instance_transform(i, Transform3D(turn * Basis.from_scale(scale), Vector3(at.x, 0.004, at.z)))
 	_age[i] = 0.0
-	_life[i] = Feel.pick(feel.prints.linger)
+	_life[i] = Feel.pick(_linger if _linger != null else feel.prints.linger)
 	_strength[i] = minf(1.0, amount)
 	_multimesh.set_instance_color(i, Color(1, 1, 1, minf(1.0, 0.35 + _strength[i])))
 	return i

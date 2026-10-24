@@ -1,10 +1,16 @@
 extends Node
 ## The game's frame: the 3D world drawn small and enlarged to the window with
 ## the nearest pixel (true pixel art, not a filter — `pixel_size` screen pixels
-## to a pixel), the HUD at full resolution above it. In the world: the lab, its
-## light and air (the web version's cold studio light, ACES tone mapping,
+## to a pixel), the HUD at full resolution above it. In the world: the stage,
+## its light and air (the web version's cold studio light, ACES tone mapping,
 ## bloom on what glows, a little fog), the Jedi, the squad of stormtroopers
 ## (Battle), the iso camera.
+##
+## Two stages: the lab (stage 1) and the marsh ruins (stage 2, JungleLevel):
+## a wider view in finer pixels, by day or by night (at random, or as asked:
+## --night=1, --night=0), the jungle closing in at the edges of the view. The
+## keys 1 and 2 switch to the one or the other (the game starts again);
+## --stage=jungle starts in the marsh.
 ##
 ## A frame of it can be written to a PNG for checking:
 ##   godot --path godot -- --screenshot=<file> [--frames=<n>] [--autopilot=<x>,<y>[,sprint]]
@@ -16,12 +22,18 @@ extends Node
 ##     [--grenade=<seconds>:<x>:<z>,…]  (a grenade thrown then at that spot, its fuse 1.6 s)
 ##     [--blast=<seconds>:<x>:<z>,…]  (a blast then, right there)
 ##     [--mortal]  (god mode off: a bolt or a blast kills him)
+##     [--stage=jungle] [--night=<0|1>]  (the marsh ruins, by day or by night)
 
 @export var pixel_size := 4
 
+## The stage played (kept when the game starts again on another one): "lab" or "jungle"; and the jungle's night ("": at random).
+static var stage := ""
+static var night_asked := ""
+
 var viewport: SubViewport
 var world: Node3D
-var level: LabLevel
+var level  ## LabLevel or JungleLevel
+var jungle: JungleLevel
 var hero: Hero
 var battle: Battle
 var camera: CameraRig
@@ -68,6 +80,15 @@ func _ready() -> void:
 				_grenades.append([float(parts[0]), float(parts[1]), float(parts[2]), argument.begins_with("--blast=")])
 		elif argument == "--mortal":
 			_mortal = true
+		elif argument.begins_with("--stage=") and stage.is_empty():
+			stage = argument.get_slice("=", 1)
+		elif argument.begins_with("--night=") and night_asked.is_empty():
+			night_asked = argument.get_slice("=", 1)
+	if stage.is_empty():
+		stage = "lab"
+	# The jungle: finer pixels, a wider view.
+	if stage == "jungle":
+		pixel_size = 2
 	var container := SubViewportContainer.new()
 	container.name = "Pixels"
 	container.stretch = true
@@ -83,9 +104,16 @@ func _ready() -> void:
 	world.name = "World"
 	viewport.add_child(world)
 	_build_light()
-	level = LabLevel.new()
-	level.name = "Lab"
-	world.add_child(level)
+	if stage == "jungle":
+		var dark := randf() < 0.5 if night_asked.is_empty() else night_asked != "0"
+		jungle = JungleLevel.new(dark)
+		level = jungle
+		world.add_child(level)
+		_light_jungle(dark)
+	else:
+		level = LabLevel.new()
+		level.name = "Lab"
+		world.add_child(level)
 	hero = Hero.new()
 	hero.name = "Hero"
 	world.add_child(hero)
@@ -111,6 +139,17 @@ func _ready() -> void:
 	battle.light_room({ "environment": environment, "key": key, "rim": rim, "strip": strip })
 	battle.death_screen = DeathScreen.new()
 	add_child(battle.death_screen)
+	if jungle:
+		battle.objectives = Objectives.new(pixel_size)
+		add_child(battle.objectives)
+		var start: Dictionary = jungle.start
+		hero.home = { "x": float(start.x), "z": float(start.z), "heading": float(start.heading) }
+		hero.restart()
+		camera.stage_offset = Vector3(-1.8, 0, -2.3)
+		camera.focus = hero.position + camera.stage_offset + Vector3(0, 0.6, 0)
+		camera.desired_height = 12.0
+		camera.view_height = 12.0
+		_vignette()
 	if not _at.is_empty():
 		var parts := _at.split(",")
 		hero.place(float(parts[0]), float(parts[1]), float(parts[2]) if parts.size() > 2 else NAN)
@@ -118,6 +157,52 @@ func _ready() -> void:
 	if _view > 0.0:
 		camera.desired_height = _view
 		camera.view_height = _view
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# 1, 2: the lab, the marsh ruins (the game starts again on it).
+	if event is InputEventKey and event.pressed and not event.echo and _shot.is_empty():
+		var wanted: String = { KEY_1: "lab", KEY_2: "jungle" }.get(event.physical_keycode, "")
+		if not wanted.is_empty() and wanted != stage:
+			stage = wanted
+			night_asked = ""
+			get_tree().reload_current_scene()
+
+
+## Night under the canopy, from the lab's lighting (jungle.js's jungleLighting): dark, the light where it
+## burns — a cold moon picking out the edges, a dim blue-green sky, earth below; the ruins' amber lamps, the
+## blade and the blasts provide local colour. By day, a damp blue-grey dusk.
+func _light_jungle(dark: bool) -> void:
+	environment.background_color = Color("020406") if dark else Color("061015")
+	environment.fog_light_color = Color("04080b") if dark else Color("0c1c22")
+	environment.fog_density = 0.018 if dark else 0.0105
+	# The web's sky light goes from 1.4 to these; its key from 3.5, its rim from 1.65, its strip from 3.3.
+	environment.ambient_light_color = Color("2b3a58") if dark else Color("668892")
+	environment.ambient_light_energy = 0.55 * (0.42 if dark else 1.15) / 1.4
+	key.light_color = Color("7d95c4") if dark else Color("a9bfdc")
+	key.light_energy = 1.25 * (0.5 if dark else 3.1) / 3.5
+	key.directional_shadow_max_distance = 40.0
+	rim.light_color = Color("6b9693")
+	rim.light_energy = 0.6 * (0.3 if dark else 0.8) / 1.65
+	strip.light_color = Color("9fc2c8")
+	strip.light_energy = 2.6 * (0.2 if dark else 0.7) / 3.3
+
+
+## The jungle closes in at the edges of the view.
+func _vignette() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "Vignette"
+	layer.layer = 1
+	var veil := ColorRect.new()
+	veil.set_anchors_preset(Control.PRESET_FULL_RECT)
+	veil.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var material := ShaderMaterial.new()
+	var shader := Shader.new()
+	shader.code = "shader_type canvas_item;\nuniform float strength = 0.42;\nvoid fragment() {\n\tfloat d = length((UV - 0.5) * vec2(1.15, 1.0));\n\tCOLOR = vec4(0.0, 0.0, 0.0, strength * smoothstep(0.3, 0.8, d));\n}\n"
+	material.shader = shader
+	veil.material = material
+	layer.add_child(veil)
+	add_child(layer)
 
 
 ## The lab's cold light, as lighting.js: a key light casting the shadows, a rim from behind, a blue-violet ambient.

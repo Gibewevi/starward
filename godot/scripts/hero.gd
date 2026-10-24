@@ -38,6 +38,8 @@ var saber: Saber
 var trail: BladeTrail
 var coat: Coat
 var feel: Dictionary = {}
+## Where he starts (and starts again): { x, z, heading }.
+var home := { "x": 0.0, "z": 0.0, "heading": NAN }
 var time := 0.0
 ## This frame's time, once slowed by a hit stop.
 var sim := 0.0
@@ -152,9 +154,9 @@ func place(x: float, z: float, heading: float = NAN) -> void:
 		coat.reset()
 
 
-## Back to the start (a restart).
+## Back to the start (a restart): the middle of the lab, or the stage's own spot.
 func restart() -> void:
-	place(0.0, 0.0)
+	place(home.x, home.z, home.heading)
 
 
 ## A beat of slow motion: nearly frozen for `hold` seconds, then eased back to full speed over `recover`.
@@ -405,7 +407,7 @@ func _process(delta: float) -> void:
 			motion.speed = 0.0
 			battle._blade_ready = false
 	else:
-		position = Vector3(motion.x, 0, motion.z)
+		position = Vector3(motion.x, battle.ground_at(motion.x, motion.z) if battle else 0.0, motion.z)
 		rotation.y = motion.heading + action.spin
 		var sprint_intent: float = maxf(motion.sprint, 1.0 if asked.sprint and input.length() > 0.05 else 0.0) * (1.0 - action.guard)
 		animator.update({ "dt": sim, "time": time, "speed": motion.speed, "run_blend": motion.run_blend, "sprint_intent": sprint_intent, "turn_rate": motion.turn_rate, "forward_accel": motion.forward_accel, "action": action })
@@ -418,7 +420,7 @@ func _process(delta: float) -> void:
 		combat.flourish()
 		_noise(position, 3.5, { "from": position })
 	# In the dark the blade lights more of the room round him.
-	var dark: float = battle.night if battle else 0.0
+	var dark: float = battle.blade_dark() if battle else 0.0
 	for index in saber.lights.size():
 		saber.lights[index].light_energy *= 1.0 + 0.8 * dark
 		saber.lights[index].omni_range = [3.2, 2.6][index] + 2.2 * dark
@@ -678,6 +680,8 @@ func _unleash(kind: String) -> void:
 			trooper.force_push(throw)
 		if battle:
 			battle.effects.wave(left_hand, facing, { "kind": "push", "length": push.range * 0.8 })
+			if battle.jungle:
+				battle.jungle.force("push", here, facing, push.range, push.cone)
 			# Grenades are swept away; the scraps on the floor too.
 			battle.grenades.push(here, facing, push.range, push.cone)
 			battle.debris.blast(here - facing * 0.6, push.range * 0.7, 0.45)
@@ -699,6 +703,8 @@ func _unleash(kind: String) -> void:
 			trooper.force_pull(here + toward.normalized() * minf(pull.stop, distance))
 		if battle:
 			battle.effects.wave(left_hand, toward, { "kind": "pull", "length": distance })
+			if battle.jungle:
+				battle.jungle.force("pull", here, toward, pull.range, pull.cone)
 		_noise(here, 8.5, { "alarm": true, "from": here })
 		if camera:
 			camera.shove(-toward, feel.camera.kick)
@@ -867,9 +873,13 @@ func _plunge_input(dt: float, attack_held: bool) -> void:
 			combat.loose()
 		return
 	# (The blade off after a moment standing still: it lights as he draws it back.)
-	if _attack_pressed and not _down and plunge == null and battle.death == null and not combat.busy() and t.reachable(Vector3(motion.x, 0, motion.z)):
-		_attack_pressed = false
-		_start_plunge()
+	if _attack_pressed and not _down and plunge == null and battle.death == null and not combat.busy():
+		for candidate in battle.transformers:
+			if candidate.reachable(Vector3(motion.x, 0, motion.z)):
+				battle.transformer = candidate
+				_attack_pressed = false
+				_start_plunge()
+				return
 
 
 ## Each frame (after the squad): the quick step before the window, the blade going in.

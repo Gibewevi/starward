@@ -4,7 +4,7 @@ Le jeu en cours de migration vers Godot 4.7. Le plan complet, les conventions et
 
 ## Jouer
 
-Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`).
+Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`). Le jeu part dans le labo (stage 1) ; **2** passe aux ruines du marais (stage 2), **1** revient au labo (la partie recommence). `godot --path godot -- --stage=jungle` part directement dans le marais, de jour ou de nuit au hasard (`--night=1` ou `--night=0` pour choisir).
 
 - **ZQSD / WASD** (selon la position des touches, le clavier AZERTY comme QWERTY) ou **flèches** : marcher. **Maj** : sprinter.
 - **Manette** : stick gauche, l’allure suit son inclinaison (marche lente, marche, course, sprint).
@@ -12,7 +12,7 @@ Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`).
 - **K** (**RB**, **LB** ou **A**) : la garde ; un appui pare.
 - **Espace** (**Y**) : le déplacement éclair. **E** (**R3**) : faire tournoyer la lame.
 - **U** / **I** (**LT** / **RT**) : attirer / repousser avec la Force ; **U maintenu** tient le trooper attiré en l’air devant le héros ; **U et J maintenus** l’empalent.
-- **J** devant le transformateur, **maintenu** : y planter la lame (la salle est ensuite plongée dans le noir).
+- **J** devant le transformateur (ou un générateur du marais), **maintenu** : y planter la lame (la salle est ensuite plongée dans le noir ; dans le marais, la zone du générateur).
 - **T** (**L3**) : tout recommencer (l’escouade à ses postes, le héros au départ).
 - **G** : mode invincible ou non (invincible par défaut ; en attendant le menu des réglages). Mort : **Entrée** (**Start**), **J**, **K** ou **Espace** pour recommencer.
 - **Molette** : rapprocher ou éloigner la caméra ; **R** : recentrer.
@@ -51,6 +51,23 @@ Ouvrir `godot/project.godot` dans Godot 4.7, puis F5 (ou `godot --path godot`).
 
 Pas encore porté : les flèches au bord de l’écran vers les menaces hors champ, l’invite « DÉTRUIRE » près du transformateur (avec l’interface, étape 7), le duel, le son (étapes 5 à 7 du plan).
 
+## Ce qui est porté (stage 2, les ruines du marais)
+
+Porté avant le duel (étape 5), à la demande.
+
+- **La carte** (`jungle/jungle_level.gd`, port de `src/jungle.js` et `src/jungle-map.js`) : une jungle inondée aux ruines anciennes, semi-ouverte. Depuis l’aire d’atterrissage, on va où l’on veut — par les passerelles, par le cœur des ruines, ou en pataugeant dans les roseaux — vers quatre générateurs à détruire. Les ruines, passerelles, speeder, cage, antenne, rochers, arbres, lierre et générateurs sont cuits depuis le web (`jungle.glb`) ; le sol peint, le placage des ruines et la profondeur de l’eau aussi (`assets/jungle/`) ; les plantes, les pierres, les lampes et toutes les données de la carte dans `jungle.json`. Le placage des ruines est posé dans l’espace du monde (2 m par carreau), comme le web.
+- **Les plantes** (`jungle/vegetation.gd`, `shaders/plants.gdshader`) : herbes, roseaux, fougères et grandes feuilles (plus de 13 000), ondulant au vent, écartées par qui passe, coupées par la lame à la hauteur où elle passe (des bouts de feuille volent), balayées par la Force, soufflées puis arrachées par une explosion.
+- **L’eau** (`jungle/jungle_water.gd`, `shaders/water_step.glsl`, `shaders/jungle_water.gdshader`) : une vraie simulation de vagues sur une grille de 400 × 400 cases, calculée sur la carte graphique. Chaque pas, chaque corps qui patauge ou tombe, chaque tir, chaque explosion y fait des ronds qui se croisent et rebondissent sur les berges ; l’eau poussée contre une berge déborde en nappe ; la Force la chasse ou l’attire ; une explosion y creuse un trou qui se referme en gerbe, ou ouvre sur la berge un cratère que le courant remplit. Reflets de la lune et des lampes, écume, nénuphars qui suivent les vagues, gouttes.
+- **Le sol** (`shaders/jungle_ground.gdshader`) : la boue peinte, son relief, les cratères que creusent les explosions (rebouchés à la relance), le lit du marais teinté sous l’eau.
+- **L’air** (`jungle/jungle_air.gd`) : les rayons de lune dans la brume (le calcul des faisceaux des lampes de fusil), la poussière qu’ils révèlent et que le passage du héros fait tourbillonner, les lucioles ; de nuit, la poussière devant les lampes des ruines.
+- **Les ruines vivent** : bandes lumineuses, diodes qui clignotent, lanternes, balises ; huit vraies lumières prêtées aux lampes les plus proches ; les cascades. Les empreintes restent dans le sable (pas sur les planches ni les dalles) ; dans l’eau, les pas éclaboussent.
+- **Le déroulé** (`battle.gd`, `jungle/objectives.gd`) : quatre générateurs à saboter dans l’ordre qu’on veut. Chacun détruit éteint sa zone et sonne l’alarme : une vague de renforts arrive par la piste derrière le poste de commandement. Le dernier détruit, « VICTOIRE ». À l’écran : le compte des générateurs et un repère sur chacun (au bord de l’écran s’il est hors champ).
+- **De nuit** (une partie sur deux, au hasard) : les troopers ont leur lampe de fusil allumée dès le départ et voient moins loin ; dans les roseaux ou en pataugeant, le héros est moins visible. La vue est plus large et les pixels plus fins que dans le labo ; la jungle assombrit les bords de l’écran.
+
+Environ 55 à 60 images/s en se promenant, 40 en plein combat de nuit avec une vingtaine de troopers (le web en a autant : ce sont eux qui coûtent).
+
+Non porté : le reflet du sol mouillé (absent du labo aussi pour l’instant).
+
 ## Cuisson des modèles
 
 Les modèles et les données viennent du code web, sans retouche à la main :
@@ -60,7 +77,7 @@ node scripts/bake-server.mjs
 npm run dev
 ```
 
-puis ouvrir `http://127.0.0.1:5173/bake.html` (`bake.html?only=combat,data` ne cuit que ces parties : `data`, `hero`, `saber`, `combat`, `lab`, `trooper`, `squad`, `fx`). Les fichiers arrivent dans `godot/assets/baked/` (`.glb`), `godot/assets/data/` (`.json`) et `godot/assets/fx/` (les textures de brûlure, peintes par le code du web). La planche de l’explosion est copiée telle quelle depuis `public/fx/`. Godot les réimporte à l’ouverture du projet.
+puis ouvrir `http://127.0.0.1:5173/bake.html` (`bake.html?only=combat,data` ne cuit que ces parties : `data`, `hero`, `saber`, `combat`, `lab`, `trooper`, `squad`, `fx`, `jungle`). Les fichiers arrivent dans `godot/assets/baked/` (`.glb`), `godot/assets/data/` (`.json`) et `godot/assets/fx/` (les textures de brûlure, peintes par le code du web). La planche de l’explosion est copiée telle quelle depuis `public/fx/`. Godot les réimporte à l’ouverture du projet.
 
 ## Tests
 
@@ -70,13 +87,13 @@ Sans fenêtre, depuis la racine du dépôt :
 godot --headless --path godot --script res://tests/run_tests.gd
 ```
 
-Les tests de parité rejouent des traces enregistrées par la version web (`motion-reference.json`, `animator-reference.json`, `combat-reference.json`, `arms-reference.json`, `gait-reference.json`, `ragdoll-reference.json`, `trooper-reference.json`, `nav-reference.json`, `squad-reference.json`, `fx-reference.json`) et doivent retrouver les mêmes valeurs : position, cap, vitesses, rotation de chaque os, hanches, phase de la foulée ; pour le combat, les mêmes coups aux mêmes instants avec les mêmes poses, puis les mêmes bras et la même lame. `-- --only=<nom>` ne lance que les fichiers dont le nom le contient.
+Les tests de parité rejouent des traces enregistrées par la version web (`motion-reference.json`, `animator-reference.json`, `combat-reference.json`, `arms-reference.json`, `gait-reference.json`, `ragdoll-reference.json`, `trooper-reference.json`, `nav-reference.json`, `squad-reference.json`, `fx-reference.json`) ; `test_jungle.gd` vérifie le marais (carte entière, eau et passerelles, cratère, plantes coupées, discrétion dans les roseaux) et doivent retrouver les mêmes valeurs : position, cap, vitesses, rotation de chaque os, hanches, phase de la foulée ; pour le combat, les mêmes coups aux mêmes instants avec les mêmes poses, puis les mêmes bras et la même lame. `-- --only=<nom>` ne lance que les fichiers dont le nom le contient.
 
 Pour les troopers : la démarche, le ragdoll seul et la navigation retombent exactement sur le web. Un corps jeté au sol est chaotique (Godot contre lui-même : un micromètre d’écart au départ donne des centimètres, voire des mètres, à l’arrivée). Le test du trooper exige donc la même pose debout au millimètre, les mêmes coups, coupes et événements, les mêmes états aux mêmes instants jusqu’à ce que ce chaos s’installe, puis le même ordre d’états. L’escouade, dont Godot tient les positions en simple précision, doit penser et agir exactement comme le web pendant au moins 10 secondes de combat (11 aujourd’hui).
 
 Pour les effets : les grenades (rebonds, caisses, roulis, poussée de la Force, explosions) suivent le web au centième de millimètre ; les débris sont posés aux mêmes endroits et projetés de même pendant le premier quart de seconde (ensuite, une boîte qui culbute est chaotique) ; les tirs renvoyés partent dans la même direction, vers le même ennemi.
 
-Une image du jeu peut être écrite pour vérification : `godot --path godot -- --screenshot=capture.png`, avec au besoin `--frames=<n>`, `--view=<hauteur>` (caméra plus proche), `--at=<x>,<z>[,<cap>]` (où part le héros), `--clear=<secondes>` (toute l’escouade abattue à cet instant : l’escorte arrive) `--grenade=<secondes>:<x>:<z>` (une grenade lancée à ce moment vers ce point), `--blast=<secondes>:<x>:<z>` (une explosion), `--mortal` (mode invincible coupé) et des appuis programmés, par exemple `--press=0.3:attack,0.5:attack,1.9:force_push` (`3.4:hold:force_pull` … `6:release:force_pull` pour maintenir ; `retry` pour recommencer après la mort). La console indique alors les coups joués, l’état du héros et de l’escouade, les grenades, débris, brûlures et entailles, les images par seconde et le temps de calcul. Pendant une vérification, le clavier et les manettes sont ignorés.
+Une image du jeu peut être écrite pour vérification : `godot --path godot -- --screenshot=capture.png`, avec au besoin `--frames=<n>`, `--view=<hauteur>` (caméra plus proche), `--at=<x>,<z>[,<cap>]` (où part le héros), `--clear=<secondes>` (toute l’escouade abattue à cet instant : l’escorte arrive) `--grenade=<secondes>:<x>:<z>` (une grenade lancée à ce moment vers ce point), `--blast=<secondes>:<x>:<z>` (une explosion), `--mortal` (mode invincible coupé), `--stage=jungle` et `--night=<0|1>` et des appuis programmés, par exemple `--press=0.3:attack,0.5:attack,1.9:force_push` (`3.4:hold:force_pull` … `6:release:force_pull` pour maintenir ; `retry` pour recommencer après la mort). La console indique alors les coups joués, l’état du héros et de l’escouade, les grenades, débris, brûlures et entailles, les images par seconde et le temps de calcul. Pendant une vérification, le clavier et les manettes sont ignorés.
 
 ## Organisation
 
@@ -95,7 +112,8 @@ Une image du jeu peut être écrite pour vérification : `godot --path godot -- 
 - `scripts/ai/` : l’esprit de l’escouade, la navigation, les alertes, les renforts.
 - `scripts/fx/` : les tirs, les grenades, les explosions, les effets d’impact, les débris, les brûlures, les entailles, les empreintes, la lumière des taches, les lueurs de visée.
 - `scripts/hero/` : le héros renversé, ses blessures, l’écran de mort.
-- `scripts/lab/` : le transformateur, le courant de la salle, les lampes des fusils.
+- `scripts/lab/` : le transformateur (et les générateurs du marais), le courant de la salle, les lampes des fusils.
+- `scripts/jungle/` : les ruines du marais, leurs plantes, leur eau, leur air, l’affichage des objectifs.
 - `scripts/battle.gd` : l’escouade dans la scène, les coups du héros sur elle, les tirs, les explosions, la mort, le sabotage, le déroulé du combat.
 - `scripts/camera_rig.gd` : la caméra isométrique, ses secousses et ses à-coups.
 - `shaders/` : l’éclairage des personnages (partagé par le corps et le manteau), la traînée additive, les points lumineux et les gouttes, l’explosion et son reflet, les anneaux de souffle, les faisceaux et la poussière des lampes, la lumière des taches.

@@ -22,6 +22,8 @@ import { createScorchMarks, emberTexture } from './scorch-marks.js';
 import { createGrenades } from './grenades.js';
 import { createDebris } from './debris.js';
 import { returnDirection } from './deflect.js';
+import { createJungle } from './jungle.js';
+import { MAP as JUNGLE_MAP, WALKWAYS, DECK, ISLANDS, GATE, START, POSTS as JUNGLE_POSTS, FALLS, SHAFTS, slabs, waterDepth } from './jungle-map.js';
 
 /**
  * Cooks the game for Godot (docs/MIGRATION_GODOT.md): builds each model with
@@ -721,16 +723,140 @@ async function bakeFx() {
   await json('assets/data/fx-reference.json', { draws: { grenades: 5, debris: 17, returns: 29 }, throws, push, steps, debris: { strewn, blast: blastAt, flight }, enemies, returns });
 }
 
+// ---- Stage 2, the marsh ruins: what stands still as a model; the rest as data -----------------------
+/** A canvas as a PNG (its rows as they are: the jungle's run along +z, as Godot reads them). */
+async function canvasPng(path, canvas) {
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  await save(path, new Uint8Array(await blob.arrayBuffer()));
+}
+const seededFrom = seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const r3 = value => Math.round(value * 1e3) / 1e3;
+/**
+ * The jungle (createJungle, by day): the ruins, walkways, speeder, cage, dish,
+ * rocks, trees, ivy and the generators go into jungle.glb; the ground's paint
+ * and the ruins' plating as PNG (Godot lays them as the web does: the ground
+ * by its own shader, the plating in world space); the plants, the stones, the
+ * lily pads, the lamps, the water's depth and all the map's data into
+ * jungle.json (the depth as jungle-depth.bin, a float a cell).
+ */
+async function bakeJungle() {
+  const scene = new THREE.Scene();
+  const jungle = createJungle(scene, { random: seededFrom(11) });
+  const generators = jungle.buildGenerators(null);
+  const group = scene.getObjectByName('Jungle');
+  // The ground, its paint, the ruins' plating.
+  const ground = group.getObjectByName('Jungle ground');
+  for (const [key, name] of [['map', 'ground'], ['roughnessMap', 'ground-roughness'], ['bumpMap', 'ground-bump']]) await canvasPng(`assets/jungle/${name}.png`, ground.material[key].image);
+  const ruins = group.getObjectByName('Ruins');
+  await canvasPng('assets/jungle/plating.png', ruins.material.map.image);
+  await canvasPng('assets/jungle/plating-roughness.png', ruins.material.roughnessMap.image);
+  // The stones and the plants: as data (a blast clears them, a blade cuts them).
+  const stones = group.getObjectByName('Stones'), matrix = new THREE.Matrix4(), colour = new THREE.Color();
+  const position = new THREE.Vector3(), rotation = new THREE.Quaternion(), scale = new THREE.Vector3();
+  const stoneList = [];
+  for (let i = 0; i < stones.count; i++) {
+    stones.getMatrixAt(i, matrix);
+    matrix.decompose(position, rotation, scale);
+    stones.getColorAt(i, colour);
+    stoneList.push([...position.toArray(), ...rotation.toArray(), ...scale.toArray(), ...colour.toArray()].map(value => Math.round(value * 1e4) / 1e4));
+  }
+  const stoneShape = stones.geometry.attributes.position;
+  const plants = {};
+  for (const mesh of scene.getObjectByName('Jungle plants').children) {
+    if (!mesh.isInstancedMesh || !mesh.name.startsWith('Jungle ')) continue;
+    const kind = mesh.name.slice(7), geometry = mesh.geometry;
+    plants[kind] ??= {
+      shape: {
+        positions: Array.from(geometry.attributes.position.array, r3), normals: Array.from(geometry.attributes.normal.array, r3),
+        colors: Array.from(geometry.attributes.color.array, r3), bends: Array.from(geometry.attributes.aBend.array, r3), indices: Array.from(geometry.index.array),
+      },
+      plants: [],
+    };
+    const phase = geometry.attributes.aPhase.array;
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getMatrixAt(i, matrix);
+      matrix.decompose(position, rotation, scale);
+      mesh.getColorAt(i, colour);
+      const yaw = 2 * Math.atan2(rotation.y, rotation.w);
+      plants[kind].plants.push([position.x, position.z, yaw, scale.x, scale.y, colour.r, colour.g, colour.b, phase[i]].map(r3));
+    }
+  }
+  // The lily pads are placed on the water's first update.
+  jungle.water.update(1e-4, { time: 0 });
+  const pads = [];
+  const padMesh = scene.getObjectByName('Lily pads');
+  for (let i = 0; i < padMesh.count; i++) {
+    padMesh.getMatrixAt(i, matrix);
+    matrix.decompose(position, rotation, scale);
+    pads.push([position.x, position.z, 2 * Math.atan2(rotation.y, rotation.w), scale.x].map(r3));
+  }
+  // Out of the model: what Godot makes itself (ground, stones, waterfalls, the lent lights).
+  for (const name of ['Jungle ground', 'Stones']) group.remove(group.getObjectByName(name));
+  for (const object of [...group.children]) if (object.isLight || object.isSprite || object.name === 'Waterfall') group.remove(object);
+  // Each zone's glowing materials by a name of their own, for Godot to cut a zone's light.
+  group.traverse(object => {
+    if (object.isMesh && object.userData.zone && object.material.isMeshBasicMaterial) object.material.name = `${object.material.name} (${object.userData.zone})`;
+  });
+  const level = new THREE.Group();
+  level.name = 'Jungle';
+  level.add(group);
+  const machines = new THREE.Group();
+  machines.name = 'Generators';
+  generators.forEach(generator => {
+    const holder = new THREE.Group();
+    holder.name = `Generator ${generator.name}`;
+    holder.add(generator.group);
+    machines.add(holder);
+  });
+  level.add(machines);
+  await glb('assets/baked/jungle.glb', level);
+  // The water's depth, a float a cell (0.12 m), rows along +z.
+  const CELL = 0.12, W = Math.ceil((JUNGLE_MAP.maxX - JUNGLE_MAP.minX) / CELL), H = Math.ceil((JUNGLE_MAP.maxZ - JUNGLE_MAP.minZ) / CELL);
+  const depth = new Float32Array(W * H);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) depth[j * W + i] = Math.max(0, Math.min(1, waterDepth(JUNGLE_MAP.minX + (i + 0.5) * CELL, JUNGLE_MAP.minZ + (j + 0.5) * CELL)));
+  await save('assets/jungle/depth.bin', new Uint8Array(depth.buffer));
+  // Where the old slabs are (no print in them), a quarter metre a cell.
+  const SLAB = 0.25, SW = Math.ceil((JUNGLE_MAP.maxX - JUNGLE_MAP.minX) / SLAB), SH = Math.ceil((JUNGLE_MAP.maxZ - JUNGLE_MAP.minZ) / SLAB);
+  let slabCells = '';
+  for (let j = 0; j < SH; j++) for (let i = 0; i < SW; i++) slabCells += slabs(JUNGLE_MAP.minX + (i + 0.5) * SLAB, JUNGLE_MAP.minZ + (j + 0.5) * SLAB) ? '1' : '0';
+  // The boxes rounded as Godot gets them.
+  const obstacles = jungle.lab.obstacles;
+  const door = jungle.arena.door;
+  await json('assets/data/jungle.json', {
+    bounds: JUNGLE_MAP,
+    obstacles: obstacles.map(box => ({ kind: box.kind, min: toArray(box.min), max: toArray(box.max) })),
+    gate: { ...GATE, out: toArray(GATE.out), shut: obstacles.indexOf(door.shut), centre: toArray(door.centre), along: toArray(door.along), inside: door.inside.map(toArray), width: door.width },
+    start: START,
+    posts: JUNGLE_POSTS.map(post => ({ position: toArray(post.position), heading: round(post.heading), ...(post.route ? { route: post.route.map(toArray) } : {}) })),
+    generators: generators.map(g => ({ name: g.name, label: g.label, zone: g.zone, socket: toArray(g.socket), approach: toArray(g.approach), facing: toArray(g.facing) })),
+    lamps: jungle.lamps.map(lamp => ({ position: toArray(lamp.position), color: lamp.color.toArray().map(round), base: lamp.base ?? lamp.intensity, zone: lamp.zone })),
+    islands: ISLANDS,
+    walkways: WALKWAYS.map(walk => ({ a: toArray(walk.a), b: toArray(walk.b), width: walk.width })),
+    deck: DECK,
+    falls: FALLS.map(fall => ({ at: toArray(fall.at), facing: toArray(fall.facing), width: fall.width, height: fall.height })),
+    shafts: SHAFTS,
+    water: { cell: CELL, columns: W, rows: H, level: jungle.water.level },
+    slabs: { cell: SLAB, columns: SW, rows: SH, cells: slabCells },
+    pads,
+    stones: { shape: { positions: Array.from(stoneShape.array, r3), normals: Array.from(stones.geometry.attributes.normal.array, r3) }, list: stoneList },
+    plants,
+  });
+}
+
 // bake.html?only=combat,data cooks only those parts (the models, and the glow table, are left as they are).
 const ONLY = new URLSearchParams(location.search).get('only')?.split(',') ?? null;
 async function run() {
-  for (const [name, label, bake] of [['data', 'données', bakeData], ['hero', 'héros', bakeHero], ['saber', 'sabre', bakeSaber], ['combat', 'combat', bakeCombat], ['lab', 'labo', bakeLab], ['trooper', 'stormtrooper', bakeTrooper], ['squad', 'escouade', bakeSquad], ['fx', 'effets', bakeFx]]) {
+  for (const [name, label, bake] of [['data', 'données', bakeData], ['hero', 'héros', bakeHero], ['saber', 'sabre', bakeSaber], ['combat', 'combat', bakeCombat], ['lab', 'labo', bakeLab], ['trooper', 'stormtrooper', bakeTrooper], ['squad', 'escouade', bakeSquad], ['fx', 'effets', bakeFx], ['jungle', 'jungle', bakeJungle]]) {
     if (ONLY && !ONLY.includes(name)) continue;
     log(`… ${label}`);
     await bake();
   }
-  // What glows brighter than white in each model, for Godot to give back (scripts/glow.gd).
+  // What glows brighter than white in each model, for Godot to give back (scripts/glow.gd); a part baked alone updates its own.
   if (!ONLY) await json('assets/data/glow.json', glowing);
+  else if (Object.keys(glowing).length) {
+    const known = await fetch('/godot/assets/data/glow.json').then(response => (response.ok ? response.json() : {}));
+    await json('assets/data/glow.json', { ...known, ...glowing });
+  }
   log('Terminé.');
   document.title = 'Cuisson terminée';
 }

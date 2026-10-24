@@ -28,6 +28,10 @@ var approach := Vector3.ZERO
 var tops: Array[Vector3] = []
 var model: Node3D
 var state := "ready"
+## In the jungle: which generator, its name on screen, the zone it powers.
+var generator := ""
+var label := ""
+var zone := ""
 var _slot: StandardMaterial3D
 var _slot_base := Color(0.55, 0.8, 1.5)
 var _lamps: Array[StandardMaterial3D] = []
@@ -60,7 +64,8 @@ func _init(room: Node, data: Dictionary, feel_data: Dictionary, fx: ImpactEffect
 	var at := socket - across * 0.12 - Vector3.UP * 0.98 - facing * (DEPTH / 2.0 - 0.05)
 	for x in [-0.38, 0.0, 0.38]:
 		tops.append(at + across * x + Vector3.UP * 1.88 - facing * 0.15)
-	model = room.find_child("Transformer", true, false)
+	# (Godot names a second node of the same name "Transformer2": the jungle has four.)
+	model = room.find_child("Transformer*", true, false)
 	if model:
 		for mesh: MeshInstance3D in model.find_children("*", "MeshInstance3D", true, false):
 			var material := mesh.mesh.surface_get_material(0) as StandardMaterial3D

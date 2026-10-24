@@ -12,6 +12,7 @@ var bounds: Dictionary = {}
 var data: Dictionary = {}
 var door: LabDoor
 var posts: Array = []
+var room: Node3D
 
 ## How the baked lamps' intensities (three.js, physical units) map to Godot's light energy.
 const LIGHT_SCALE := 0.35
@@ -23,7 +24,7 @@ func _ready() -> void:
 	obstacles = Obstacles.new(data.get("obstacles", []))
 	bounds = data.get("bounds", {})
 	var scene: PackedScene = load("res://assets/baked/lab.glb")
-	var room := scene.instantiate()
+	room = scene.instantiate()
 	add_child(room)
 	Glow.restore(room, "lab.glb")
 	for light in room.find_children("*", "Light3D", true, false):
@@ -36,3 +37,8 @@ func _ready() -> void:
 		if post.has("route"):
 			entry.route = post.route.map(func(point: Array) -> Vector3: return Obstacles._vector(point))
 		posts.append(entry)
+
+
+## The transformer: its data (socket, approach, facing) and the node its model hangs under.
+func generator_specs() -> Array:
+	return [{ "data": data.transformer, "room": room, "name": "lab", "label": "", "zone": "" }]
