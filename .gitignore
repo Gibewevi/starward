@@ -18,3 +18,5 @@ artifacts/radio-qwen-clone-staging/
 # Mantaflow noise cache written by scripts/explosion-blender.py
 waveletNoiseTile.bin
 __pycache__/
+# The Godot export (godot/export_presets.cfg)
+build/

@@ -68,6 +68,16 @@ Environ 55 à 60 images/s en se promenant, 40 en plein combat de nuit avec une v
 
 Non porté : le reflet du sol mouillé (absent du labo aussi pour l’instant).
 
+## Exécutable Windows
+
+Avec les modèles d’export de Godot 4.7.2 installés (Éditeur → Gérer les modèles d’export), depuis la racine du dépôt :
+
+```
+godot --headless --path godot --export-release "Windows Desktop" ../build/STARWARD/STARWARD.exe
+```
+
+Un seul fichier, `build/STARWARD/STARWARD.exe` (les données sont dedans). Le préréglage (`godot/export_presets.cfg`) y joint les fichiers que le jeu lit lui-même (`assets/data/*.json`, l’explosion, la profondeur de l’eau) et laisse les tests et les traces de référence.
+
 ## Cuisson des modèles
 
 Les modèles et les données viennent du code web, sans retouche à la main :
